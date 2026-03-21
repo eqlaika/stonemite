@@ -5,6 +5,7 @@ mod eq_characters;
 mod eq_windows;
 mod overlay;
 mod settings_dialog;
+mod telemetry;
 mod tray;
 mod updater;
 
@@ -45,7 +46,10 @@ fn main() {
     };
 
     // Load config (creates default if missing).
-    let _config = config::Config::load();
+    let config = config::Config::load();
+
+    // Send anonymous telemetry ping (fire-and-forget background thread).
+    telemetry::send_app_start(&config);
 
     // Initialize overlay (creates the overlay window, hidden until EQ windows are detected).
     overlay::init();

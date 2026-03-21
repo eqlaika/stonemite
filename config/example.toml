@@ -12,3 +12,6 @@ pip_edge = "right"
 
 # Custom PiP strip size in pixels (omit for auto-size, double-click edge to reset)
 # pip_strip_width = 200
+
+# Anonymous usage telemetry (set to false to disable)
+# telemetry = true
