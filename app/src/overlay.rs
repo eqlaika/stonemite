@@ -63,12 +63,12 @@ const IDM_HIDE_OVERLAY: u32 = 7100;
 
 /// Distinct background colors for per-number labels (COLORREF = 0x00BBGGRR).
 const LABEL_COLORS: &[u32] = &[
-    0x00993300, // dark blue
-    0x00006600, // dark green
-    0x00000099, // dark red
-    0x00996600, // dark teal
-    0x00660099, // dark purple
-    0x00009999, // dark yellow
+    0x00F6A893, // soft blue     (rgb #93A8F6)
+    0x0098D6A3, // mint green    (rgb #A3D698)
+    0x009393F4, // soft rose     (rgb #F49393)
+    0x0080CEF5, // warm peach    (rgb #F5CE80)
+    0x00F4A8C8, // soft lavender (rgb #C8A8F4)
+    0x00D4E898, // pale cyan     (rgb #98E8D4)
 ];
 
 /// Return the lowest positive integer not already used by any tracked window.
@@ -846,7 +846,7 @@ unsafe fn paint_label(hwnd: HWND, text: &str, bg_color: u32) {
         0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI"),
     );
     let old_font = SelectObject(hdc, font);
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
+    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x0048372D));
     let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
 
     let mut rc = RECT::default();
@@ -876,7 +876,7 @@ unsafe fn paint_overlay(hwnd: HWND) {
         0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI"),
     );
     let old_font = SelectObject(hdc, font);
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
+    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x0048372D));
     let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
 
     // Determine drag state for visual feedback.
