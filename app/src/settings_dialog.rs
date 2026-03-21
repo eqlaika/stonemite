@@ -159,6 +159,7 @@ struct SettingsApp {
     hide_hotkey: String,
     capturing_hotkey: bool,
     edge_index: usize,
+    trusik: bool,
     logo: Option<egui::TextureHandle>,
     avatar: Option<egui::TextureHandle>,
 }
@@ -176,6 +177,7 @@ impl SettingsApp {
             hide_hotkey: cfg.hide_hotkey.clone(),
             capturing_hotkey: false,
             edge_index,
+            trusik: cfg.trusik,
             logo: None,
             avatar: None,
         }
@@ -333,12 +335,20 @@ impl SettingsApp {
         });
     }
 
-    fn broadcasting_tab(&self, ui: &mut egui::Ui) {
+    fn broadcasting_tab(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
-        ui.colored_label(
-            ui.visuals().weak_text_color(),
-            "Broadcasting settings coming soon.",
-        );
+
+        ui.checkbox(&mut self.trusik, "Enable key broadcasting features (requires restart)");
+
+        ui.add_space(4.0);
+        ui.separator();
+        ui.add_space(4.0);
+
+        ui.add_enabled_ui(self.trusik, |ui| {
+            section(ui, "Character detection", |ui| {
+                ui.label("Auto-detect character names");
+            });
+        });
     }
 
     fn about_tab(&mut self, ui: &mut egui::Ui) {
@@ -428,12 +438,24 @@ impl SettingsApp {
             pip_strip_width: existing.pip_strip_width,
             pip_positions: existing.pip_positions,
             snap_grid: existing.snap_grid,
+            trusik: self.trusik,
             telemetry: existing.telemetry,
             telemetry_id: existing.telemetry_id,
         };
         if let Err(e) = cfg.save() {
             eprintln!("Failed to save config: {e}");
         }
+
+        // Deploy or remove trusik DLL immediately on save.
+        let eq_dir = cfg.eq_directory();
+        if cfg.trusik {
+            if let Err(e) = crate::trusik_deploy::deploy(&eq_dir) {
+                eprintln!("trusik deploy failed: {e}");
+            }
+        } else {
+            let _ = crate::trusik_deploy::remove(&eq_dir);
+        }
+
         notify_tray();
     }
 }
