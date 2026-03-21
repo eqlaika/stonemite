@@ -1,5 +1,9 @@
 # Stonemite
 
+<p align="center">
+  <img src="app/assets/app.png" width="128" alt="Stonemite">
+</p>
+
 EverQuest multiboxing PiP overlay tool for Windows.
 
 Stonemite puts picture-in-picture thumbnails of your other EQ windows on top of your active game window, with click-to-swap, drag-to-reorder, hover highlighting, and character name labels.
