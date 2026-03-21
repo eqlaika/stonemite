@@ -7,6 +7,8 @@ mod overlay;
 mod settings_dialog;
 mod telemetry;
 mod tray;
+mod trusik_deploy;
+mod trusik_shm;
 mod updater;
 
 fn main() {
@@ -40,6 +42,16 @@ fn main() {
 
     // Load config (creates default if missing).
     let config = config::Config::load();
+
+    // Deploy or remove trusik DLL based on config.
+    let eq_dir = config.eq_directory();
+    if config.trusik {
+        if let Err(e) = trusik_deploy::deploy(&eq_dir) {
+            eprintln!("trusik deploy failed: {e}");
+        }
+    } else {
+        let _ = trusik_deploy::remove(&eq_dir);
+    }
 
     // Send anonymous telemetry ping (fire-and-forget background thread).
     telemetry::send_app_start(&config);

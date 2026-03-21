@@ -24,7 +24,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use crate::{config, eq_characters, eq_windows};
+use crate::{config, eq_characters, eq_windows, trusik_shm};
 use crate::eq_windows::EqWindow;
 
 // ---------------------------------------------------------------------------
@@ -182,6 +182,8 @@ struct OverlayState {
     /// Current strip dimensions (for strip resize).
     strip_width: i32,
     strip_height: i32,
+    /// Whether trusik character detection is enabled.
+    trusik_enabled: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -523,6 +525,7 @@ unsafe fn init_inner() -> HWND {
         drop_target: None,
         strip_width: 0,
         strip_height: 0,
+        trusik_enabled: cfg.trusik,
     });
 
     label_hwnd
@@ -548,6 +551,10 @@ unsafe fn poll_inner() {
             if let Some(ow) = s.eq_windows.iter_mut().find(|w| w.pid == nw.pid) {
                 ow.hwnd = nw.hwnd;
             }
+        }
+        // Poll trusik shared memory for character names.
+        if s.trusik_enabled {
+            trusik_poll_characters(s);
         }
         return;
     }
@@ -618,8 +625,30 @@ unsafe fn poll_inner() {
         }
     }
 
+    // Poll trusik shared memory for character names.
+    if s.trusik_enabled {
+        trusik_poll_characters(s);
+    }
+
     rebuild_thumbnails(s);
     update_visibility(s);
+}
+
+/// Check trusik shared memory for each EQ window that doesn't have a character yet.
+fn trusik_poll_characters(s: &mut OverlayState) {
+    let mut changed = false;
+    for ew in &mut s.eq_windows {
+        if ew.character.is_none() {
+            if let Some((name, server)) = trusik_shm::read_character(ew.pid) {
+                ew.character = Some(name);
+                ew.server = Some(server);
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        unsafe { rebuild_thumbnails(s) };
+    }
 }
 
 // ---------------------------------------------------------------------------

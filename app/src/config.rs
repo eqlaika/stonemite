@@ -51,6 +51,9 @@ pub struct Config {
     /// Snap grid size in pixels. 0 = no grid snap. Default: 16.
     #[serde(default = "default_snap_grid")]
     pub snap_grid: u32,
+    /// Enable trusik DLL proxy for character detection. Requires restart.
+    #[serde(default)]
+    pub trusik: bool,
     /// Enable anonymous usage telemetry. Default: true.
     #[serde(default = "default_telemetry")]
     pub telemetry: bool,
@@ -80,6 +83,7 @@ impl Default for Config {
             pip_strip_width: None,
             pip_positions: Vec::new(),
             snap_grid: default_snap_grid(),
+            trusik: false,
             telemetry: true,
             telemetry_id: None,
         }
