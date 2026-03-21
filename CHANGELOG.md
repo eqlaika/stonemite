@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.1
+
+- Right-click context menu on active window label
+- Per-monitor DPI scaling for multi-monitor setups
+- Pastel color palette for character labels
+- Anonymous opt-out usage telemetry (disable in config or during install)
+
 ## v0.1.0
 
 Initial release.
