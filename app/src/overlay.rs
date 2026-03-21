@@ -132,7 +132,7 @@ struct OverlayState {
     monitor_rect: RECT,
     strip_width: i32,
     event_hook: HWINEVENTHOOK,
-    context_menu_thumb_index: Option<usize>,
+    context_menu_target_pid: Option<u32>,
     context_menu_candidates: Vec<eq_characters::CharCandidate>,
     /// Floating label window for the active (foreground) EQ window.
     active_label_hwnd: HWND,
@@ -286,7 +286,7 @@ unsafe fn init_inner() -> HWND {
         monitor_rect: RECT::default(),
         strip_width: 0,
         event_hook: hook,
-        context_menu_thumb_index: None,
+        context_menu_target_pid: None,
         context_menu_candidates: Vec::new(),
         active_label_hwnd: label_hwnd,
         active_label_text: String::new(),
@@ -411,7 +411,7 @@ fn format_label(w: &EqWindow) -> String {
     format!("{}: {}", w.number, name)
 }
 
-unsafe fn show_char_menu(s: &mut OverlayState, thumb_idx: usize, screen_pt: POINT) {
+unsafe fn show_char_menu(s: &mut OverlayState, target_pid: u32, screen_pt: POINT) {
     let cfg = config::Config::load();
     let eq_dir = cfg.eq_directory();
     let candidates = eq_characters::find_active_characters(&eq_dir, Duration::from_secs(86400));
@@ -510,7 +510,7 @@ unsafe fn show_char_menu(s: &mut OverlayState, thumb_idx: usize, screen_pt: POIN
     let _ = AppendMenuW(hmenu, MF_STRING, IDM_HIDE_OVERLAY as usize,
         windows::core::PCWSTR(hide_wide.as_ptr()));
 
-    s.context_menu_thumb_index = Some(thumb_idx);
+    s.context_menu_target_pid = Some(target_pid);
     s.context_menu_candidates = candidates;
 
     let _ = SetForegroundWindow(s.overlay_hwnd);
@@ -522,14 +522,12 @@ unsafe fn show_char_menu(s: &mut OverlayState, thumb_idx: usize, screen_pt: POIN
 
 unsafe fn handle_char_assign(s: &mut OverlayState, cmd_id: u32) {
     let char_idx = (cmd_id - IDM_CHAR_BASE) as usize;
-    let Some(thumb_idx) = s.context_menu_thumb_index.take() else { return };
+    let Some(target_pid) = s.context_menu_target_pid.take() else { return };
     let candidates = std::mem::take(&mut s.context_menu_candidates);
 
     let Some(candidate) = candidates.get(char_idx) else { return };
-    let Some(entry) = s.thumbnails.get(thumb_idx) else { return };
 
-    let pid = entry.pid;
-    if let Some(w) = s.eq_windows.iter_mut().find(|w| w.pid == pid) {
+    if let Some(w) = s.eq_windows.iter_mut().find(|w| w.pid == target_pid) {
         w.character = Some(candidate.character.clone());
         w.server = Some(candidate.server.clone());
     }
@@ -538,11 +536,8 @@ unsafe fn handle_char_assign(s: &mut OverlayState, cmd_id: u32) {
 }
 
 unsafe fn handle_number_assign(s: &mut OverlayState, new_number: usize) {
-    let Some(thumb_idx) = s.context_menu_thumb_index.take() else { return };
+    let Some(target_pid) = s.context_menu_target_pid.take() else { return };
     let _ = std::mem::take(&mut s.context_menu_candidates);
-    let Some(entry) = s.thumbnails.get(thumb_idx) else { return };
-
-    let target_pid = entry.pid;
 
     // If another window already has this number, swap numbers.
     let old_number = s.eq_windows.iter().find(|w| w.pid == target_pid).map(|w| w.number).unwrap_or(0);
@@ -980,7 +975,21 @@ unsafe extern "system" fn label_wnd_proc(
             let _ = SetLayeredWindowAttributes(hwnd, None, 255, LWA_ALPHA);
             LRESULT(0)
         }
-        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP => {
+        WM_RBUTTONUP => {
+            // Right-click on the main window label opens context menu.
+            if let Some(s) = state().as_mut() {
+                if let Some(active_pid) = s.active_pid {
+                    let mut pt = POINT {
+                        x: (lparam.0 & 0xFFFF) as i16 as i32,
+                        y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+                    };
+                    let _ = ClientToScreen(hwnd, &mut pt);
+                    show_char_menu(s, active_pid, pt);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN => {
             let mut pt = POINT {
                 x: (lparam.0 & 0xFFFF) as i16 as i32,
                 y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
@@ -1212,9 +1221,12 @@ unsafe extern "system" fn overlay_wnd_proc(
                 y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
             };
             if let Some(idx) = hit_test(s, pt) {
-                let mut screen_pt = pt;
-                let _ = ClientToScreen(hwnd, &mut screen_pt);
-                show_char_menu(s, idx, screen_pt);
+                if let Some(entry) = s.thumbnails.get(idx) {
+                    let pid = entry.pid;
+                    let mut screen_pt = pt;
+                    let _ = ClientToScreen(hwnd, &mut screen_pt);
+                    show_char_menu(s, pid, screen_pt);
+                }
             }
             LRESULT(0)
         }
