@@ -11,7 +11,11 @@ pub fn send_app_start(config: &Config) {
     let Some(id) = config.telemetry_id.clone() else {
         return;
     };
-    let version = crate::updater::current_version().to_string();
+    let version = if cfg!(debug_assertions) {
+        format!("{}-dev", env!("GIT_SHA"))
+    } else {
+        crate::updater::current_version().to_string()
+    };
     let os_version = os_version_string();
 
     std::thread::spawn(move || {
