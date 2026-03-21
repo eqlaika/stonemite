@@ -352,7 +352,14 @@ unsafe fn save_settings(hwnd: HWND) {
     };
 
     let existing = Config::load();
-    let cfg = Config { eq_dir, hide_hotkey, pip_edge, pip_strip_width: existing.pip_strip_width };
+    let cfg = Config {
+        eq_dir,
+        hide_hotkey,
+        pip_edge,
+        pip_strip_width: existing.pip_strip_width,
+        telemetry: existing.telemetry,
+        telemetry_id: existing.telemetry_id,
+    };
     if let Err(e) = cfg.save() {
         eprintln!("Failed to save config: {e}");
     }

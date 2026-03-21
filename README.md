@@ -61,6 +61,16 @@ The app checks for updates against [eqlaika/stonemite](https://github.com/eqlaik
 
 Config lives at `%APPDATA%\Stonemite\config.toml`. See [config/example.toml](config/example.toml) for options.
 
+## Telemetry
+
+Stonemite sends a single anonymous ping on each launch to help me understand if anyone is using the app. The payload contains only:
+
+- A random anonymous ID (UUID, not tied to your identity)
+- App version
+- Windows version
+
+No personal information, EQ character names, or config details are collected. Telemetry can be disabled by setting `telemetry = false` in `%APPDATA%\Stonemite\config.toml`, or by checking "Disable anonymous usage telemetry" during installation.
+
 ## Disclaimer
 
 Stonemite does not inject into, modify, or interact with the EverQuest process in any way. It uses standard Windows DWM thumbnail APIs to display copies of your game windows — the same mechanism Windows uses for taskbar previews and Alt-Tab. This is significantly less invasive than ISBoxer, which injects into every game process via Inner Space and is widely used without issue.

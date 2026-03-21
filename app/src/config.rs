@@ -34,10 +34,20 @@ pub struct Config {
     /// Custom PiP strip width in pixels. None = auto-size.
     #[serde(default)]
     pub pip_strip_width: Option<u32>,
+    /// Enable anonymous usage telemetry. Default: true.
+    #[serde(default = "default_telemetry")]
+    pub telemetry: bool,
+    /// Anonymous user identifier (auto-generated UUID).
+    #[serde(default)]
+    pub telemetry_id: Option<String>,
 }
 
 fn default_hide_hotkey() -> String {
     "F9".to_string()
+}
+
+fn default_telemetry() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -47,6 +57,8 @@ impl Default for Config {
             hide_hotkey: default_hide_hotkey(),
             pip_edge: PipEdge::default(),
             pip_strip_width: None,
+            telemetry: true,
+            telemetry_id: None,
         }
     }
 }
@@ -63,22 +75,27 @@ impl Config {
     }
 
     /// Load config from disk. Creates default config file if it doesn't exist.
+    /// Auto-generates a telemetry_id if missing and telemetry is enabled.
     pub fn load() -> Self {
         let Some(path) = Self::path() else {
             return Self::default();
         };
-        if path.exists() {
+        let mut config = if path.exists() {
             match std::fs::read_to_string(&path) {
                 Ok(contents) => toml::from_str(&contents).unwrap_or_default(),
                 Err(_) => Self::default(),
             }
         } else {
-            let config = Self::default();
-            if let Err(e) = config.save() {
-                eprintln!("Failed to create default config: {e}");
-            }
-            config
+            Self::default()
+        };
+        // Generate a stable anonymous ID on first run.
+        if config.telemetry && config.telemetry_id.is_none() {
+            config.telemetry_id = Some(uuid::Uuid::new_v4().to_string());
         }
+        if let Err(e) = config.save() {
+            eprintln!("Failed to save config: {e}");
+        }
+        config
     }
 
     /// Save config to disk, creating the directory if needed.
