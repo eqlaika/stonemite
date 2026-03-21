@@ -1,0 +1,14 @@
+# Stonemite configuration
+# Stored at %APPDATA%\Stonemite\config.toml
+
+# Path to the EverQuest installation directory.
+eq_dir = "C:\\Users\\Public\\Daybreak Game Company\\Installed Games\\EverQuest"
+
+# Key to toggle PiP overlay visibility (F1-F12, Pause, ScrollLock, Insert, Delete, Home, End, PageUp, PageDown).
+hide_hotkey = "F9"
+
+# Screen edge for PiP strip: right, left, top, bottom
+pip_edge = "right"
+
+# Custom PiP strip size in pixels (omit for auto-size, double-click edge to reset)
+# pip_strip_width = 200

@@ -1,0 +1,5 @@
+/target
+/dist
+tools/*/target/
+.claude/
+PLAN.md
