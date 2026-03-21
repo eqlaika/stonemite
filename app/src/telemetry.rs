@@ -12,7 +12,7 @@ pub fn send_app_start(config: &Config) {
         return;
     };
     let version = if cfg!(debug_assertions) {
-        format!("{}-dev", env!("GIT_SHA"))
+        "dev".to_string()
     } else {
         crate::updater::current_version().to_string()
     };

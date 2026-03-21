@@ -1,15 +1,4 @@
 fn main() {
-    // Expose git short SHA as GIT_SHA env var at compile time.
-    let sha = std::process::Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .unwrap_or_default();
-    println!("cargo:rustc-env=GIT_SHA={}", sha.trim());
-    println!("cargo:rerun-if-changed=../.git/HEAD");
-    println!("cargo:rerun-if-changed=../.git/refs");
-
     // Re-run build script when icon assets change.
     println!("cargo:rerun-if-changed=assets/app.ico");
     println!("cargo:rerun-if-changed=assets/tray.ico");
