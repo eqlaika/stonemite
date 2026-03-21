@@ -4,8 +4,8 @@ use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateFontW, GetDC, GetDeviceCaps, GetStockObject, SetBkMode, COLOR_WINDOW,
-    DEFAULT_CHARSET, FW_BOLD, FW_NORMAL, HBRUSH, HFONT, LOGPIXELSY, ReleaseDC, TRANSPARENT,
-    WHITE_BRUSH,
+    DEFAULT_CHARSET, FW_BOLD, FW_NORMAL, HBRUSH, HFONT, LOGPIXELSY, ReleaseDC,
+    TRANSPARENT, WHITE_BRUSH,
 };
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX,
@@ -77,7 +77,7 @@ unsafe fn create_dialog() -> HWND {
     };
     RegisterClassW(&wc);
 
-    let dpi = get_dpi_scale();
+    let dpi = get_dpi_scale(HWND::default());
     let w = scale(480, dpi);
     let h = scale(400, dpi);
 
@@ -101,11 +101,16 @@ unsafe fn create_dialog() -> HWND {
     .expect("Failed to create settings dialog")
 }
 
-unsafe fn get_dpi_scale() -> f64 {
+unsafe fn get_dpi_scale(hwnd: HWND) -> f64 {
+    use windows::Win32::UI::HiDpi::GetDpiForWindow;
+    let dpi = GetDpiForWindow(hwnd);
+    if dpi > 0 {
+        return dpi as f64 / 96.0;
+    }
     let dc = GetDC(HWND::default());
-    let dpi = GetDeviceCaps(dc, LOGPIXELSY);
+    let val = GetDeviceCaps(dc, LOGPIXELSY);
     let _ = ReleaseDC(HWND::default(), dc);
-    dpi as f64 / 96.0
+    val as f64 / 96.0
 }
 
 fn scale(val: i32, dpi: f64) -> i32 {
@@ -117,7 +122,7 @@ fn to_wide(s: &str) -> Vec<u16> {
 }
 
 unsafe fn populate_controls(hwnd: HWND) {
-    let dpi = get_dpi_scale();
+    let dpi = get_dpi_scale(hwnd);
 
     let margin = scale(20, dpi);
     let label_h = scale(18, dpi);

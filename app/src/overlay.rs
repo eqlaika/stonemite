@@ -80,12 +80,18 @@ fn next_available_number(eq_windows: &[EqWindow]) -> usize {
     n
 }
 
-unsafe fn get_dpi_scale() -> f64 {
+unsafe fn get_dpi_scale(hwnd: HWND) -> f64 {
+    use windows::Win32::UI::HiDpi::GetDpiForWindow;
+    let dpi = GetDpiForWindow(hwnd);
+    if dpi > 0 {
+        return dpi as f64 / 96.0;
+    }
+    // Fallback for windows that haven't been shown yet.
     use windows::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, ReleaseDC, LOGPIXELSY};
     let dc = GetDC(HWND::default());
-    let dpi = GetDeviceCaps(dc, LOGPIXELSY);
+    let val = GetDeviceCaps(dc, LOGPIXELSY);
     let _ = ReleaseDC(HWND::default(), dc);
-    dpi as f64 / 96.0
+    val as f64 / 96.0
 }
 
 fn dpi(val: i32, scale: f64) -> i32 {
@@ -294,7 +300,7 @@ unsafe fn init_inner() -> HWND {
         drag: None,
         drop_target: None,
         hidden_by_user: false,
-        dpi_scale: get_dpi_scale(),
+        dpi_scale: get_dpi_scale(hwnd),
         pip_edge: cfg.pip_edge,
         resize_drag: None,
         custom_strip_width: cfg.pip_strip_width.map(|v| v as i32),
@@ -616,6 +622,7 @@ unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
 
     let reference = s.eq_windows.first().map(|w| w.hwnd);
     s.monitor_rect = eq_windows::get_monitor_work_area(reference);
+    s.dpi_scale = get_dpi_scale(s.overlay_hwnd);
 
     let d = s.dpi_scale;
     let gap = dpi(THUMB_GAP, d);
@@ -1244,6 +1251,14 @@ unsafe extern "system" fn overlay_wnd_proc(
                 } else if cmd_id >= IDM_CHAR_BASE && cmd_id < IDM_CHAR_BASE + 100 {
                     handle_char_assign(s, cmd_id);
                 }
+            }
+            LRESULT(0)
+        }
+        WM_DPICHANGED => {
+            if let Some(s) = state().as_mut() {
+                s.dpi_scale = get_dpi_scale(hwnd);
+                rebuild_thumbnails(s);
+                update_visibility(s);
             }
             LRESULT(0)
         }
