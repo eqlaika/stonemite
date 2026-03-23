@@ -1824,7 +1824,7 @@ unsafe extern "system" fn pip_wnd_proc(
             LRESULT(0)
         }
 
-        WM_DPICHANGED => {
+        WM_DPICHANGED | WM_DISPLAYCHANGE => {
             if let Some(s) = state().as_mut() {
                 s.dpi_scale = get_dpi_scale(hwnd);
                 rebuild_thumbnails(s);

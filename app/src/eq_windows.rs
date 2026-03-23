@@ -86,7 +86,21 @@ pub fn get_monitor_work_area(reference_hwnd: Option<HWND>) -> RECT {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
-        let _ = GetMonitorInfoW(monitor, &mut info);
-        info.rcWork
+        if GetMonitorInfoW(monitor, &mut info).as_bool()
+            && info.rcWork.right > info.rcWork.left
+            && info.rcWork.bottom > info.rcWork.top
+        {
+            return info.rcWork;
+        }
+        // Fallback: primary monitor via SystemMetrics.
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
+        };
+        RECT {
+            left: 0,
+            top: 0,
+            right: GetSystemMetrics(SM_CXSCREEN),
+            bottom: GetSystemMetrics(SM_CYSCREEN),
+        }
     }
 }
