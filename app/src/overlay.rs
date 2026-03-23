@@ -1041,9 +1041,9 @@ unsafe fn show_char_menu(s: &mut OverlayState, target_pid: u32, screen_pt: POINT
 
     // Edit/Lock layout toggle.
     let edit_label = if s.edit_mode {
-        "Lock Layout\0"
+        "Lock layout\0"
     } else {
-        "Edit Layout\0"
+        "Edit layout\0"
     };
     let edit_wide: Vec<u16> = edit_label.encode_utf16().collect();
     let _ = AppendMenuW(hmenu, MF_STRING, IDM_EDIT_MODE as usize,

@@ -238,7 +238,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let _ = AppendMenuW(menu, MF_STRING | check_flag, ID_SHOW_OVERLAY as usize,
         windows::core::PCWSTR(overlay_wide.as_ptr()));
 
-    let edit_label = if overlay::is_edit_mode() { "Lock Layout\0" } else { "Edit Layout\0" };
+    let edit_label = if overlay::is_edit_mode() { "Lock layout\0" } else { "Edit layout\0" };
     let edit_wide: Vec<u16> = edit_label.encode_utf16().collect();
     let _ = AppendMenuW(menu, MF_STRING, ID_EDIT_MODE as usize,
         windows::core::PCWSTR(edit_wide.as_ptr()));

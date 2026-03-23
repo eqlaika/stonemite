@@ -54,6 +54,10 @@ Update `CHANGELOG.md` before each release. `just release` extracts only the curr
 - `overlay.rs` — PiP overlay window with DWM thumbnails (up to 5), hover highlighting, click-to-swap, drag-to-reorder, character labels
 - `build.rs` — embeds app icon as Windows resource
 
+## Style
+
+- UI text uses sentence case: capitalize only the first word and proper nouns (e.g. "Edit layout", "Hide overlay hotkey", "PiP edge"). Applies to menu items, dialog labels, buttons, and descriptions.
+
 ## Key docs
 
 - `config/example.toml` — example configuration
