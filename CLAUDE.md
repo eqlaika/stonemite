@@ -39,7 +39,7 @@ just installer       # build release + Inno Setup installer only
 
 - `installer.iss` — Inno Setup script (installs to Program Files, Start Menu shortcut, optional autostart)
 
-Update `CHANGELOG.md` before each release. The changelog is used as GitHub release notes (via `--notes-file CHANGELOG.md`), and shown to users in the update dialog.
+Update `CHANGELOG.md` before each release. `just release` extracts only the current version's section into `dist/release-notes.md` for the GitHub release. The changelog is also shown to users in the update dialog.
 
 ## Architecture
 

@@ -42,14 +42,16 @@ release new_version: (bump new_version) build-release
     @Copy-Item target/release/stonemite.exe dist/
     @python -c "import zipfile; z=zipfile.ZipFile('dist/{{zip_name}}','w',zipfile.ZIP_STORED); z.write('dist/stonemite.exe','stonemite.exe'); z.close()"
     @$iscc = (Get-Command "ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source) ; if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }; & $iscc /DAppVersion="{{new_version}}" installer.iss
+    @$notes = @(); $capture = $false; foreach ($line in (Get-Content CHANGELOG.md)) { if ($line -match '^## v{{new_version}}') { $capture = $true; continue } elseif ($capture -and $line -match '^## ') { break } elseif ($capture) { $notes += $line } }; ($notes -join "`n").Trim() | Set-Content dist/release-notes.md -NoNewline
     @Write-Host "`nRelease v{{new_version}} packaged:"
     @Write-Host "  dist/{{zip_name}}"
     @Write-Host "  dist/stonemite-{{new_version}}-setup.exe"
+    @Write-Host "  dist/release-notes.md"
     @Write-Host "Next steps:"
     @Write-Host "  1. git add -A && git commit -m 'Release v{{new_version}}'"
     @Write-Host "  2. git tag v{{new_version}}"
     @Write-Host "  3. git push && git push --tags"
-    @Write-Host "  4. Upload both dist files to the GitHub release"
+    @Write-Host "  4. gh release create v{{new_version}} dist/{{zip_name}} dist/stonemite-{{new_version}}-setup.exe --title 'v{{new_version}}' --notes-file dist/release-notes.md"
 
 # Clean build artifacts and dist
 clean:
