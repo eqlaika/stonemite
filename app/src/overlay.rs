@@ -161,6 +161,8 @@ struct OverlayState {
     hidden_by_user: bool,
     context_menu_target_pid: Option<u32>,
     context_menu_candidates: Vec<eq_characters::CharCandidate>,
+    /// True while a context menu is open (suppresses visibility changes).
+    context_menu_open: bool,
     /// Edit mode: PiPs can be freely moved/resized.
     edit_mode: bool,
     /// Snap grid size in pixels (0 = disabled).
@@ -510,6 +512,7 @@ unsafe fn init_inner() -> HWND {
         hidden_by_user: false,
         context_menu_target_pid: None,
         context_menu_candidates: Vec::new(),
+        context_menu_open: false,
         edit_mode: false,
         snap_grid: cfg.snap_grid as i32,
         has_custom_positions: has_custom,
@@ -883,7 +886,7 @@ unsafe fn update_visibility(s: &mut OverlayState) {
     let has_pip = !s.pip_order.is_empty();
     let fg = GetForegroundWindow();
 
-    if has_pip && is_eq_or_ours(fg, s) {
+    if has_pip && (s.context_menu_open || is_eq_or_ours(fg, s)) {
         for pw in &s.pip_windows {
             let _ = ShowWindow(pw.hwnd, SW_SHOWNOACTIVATE);
         }
@@ -1063,10 +1066,16 @@ unsafe fn show_char_menu(s: &mut OverlayState, target_pid: u32, screen_pt: POINT
 
     s.context_menu_target_pid = Some(target_pid);
     s.context_menu_candidates = candidates;
+    s.context_menu_open = true;
 
     let _ = SetForegroundWindow(owner_hwnd);
     let _ = TrackPopupMenu(hmenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON,
         screen_pt.x, screen_pt.y, 0, owner_hwnd, None);
+
+    if let Some(s) = state().as_mut() {
+        s.context_menu_open = false;
+        update_visibility(s);
+    }
     let _ = DestroyMenu(hmenu);
     let _ = PostMessageW(owner_hwnd, WM_NULL, WPARAM(0), LPARAM(0));
 }
