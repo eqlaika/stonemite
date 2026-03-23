@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.0
+
+- Free PiP placement: move and resize individual PiPs anywhere on screen
+- Edit Layout mode with 8-directional resize and 16:9 aspect enforcement
+- Snap-to-grid, snap-to-monitor-edges, and snap-to-other-PiPs (hold Shift to bypass)
+- Per-PiP windows (each PiP is its own top-level window with a DWM thumbnail)
+- Tray menu: Edit/Lock Layout toggle, Reset to auto layout
+- Strip auto-layout preserved as default; free placement is opt-in via Edit Layout
+- Custom positions and snap grid size saved to config
+
 ## v0.1.1
 
 - Right-click context menu on active window label
