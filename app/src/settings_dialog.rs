@@ -145,7 +145,7 @@ unsafe fn populate_controls(hwnd: HWND) {
 
     // --- Section: EQ Directory ---
     let lbl = create_child(
-        hwnd, w!("STATIC"), w!("EverQuest Directory"),
+        hwnd, w!("STATIC"), w!("EverQuest directory"),
         WS_CHILD | WS_VISIBLE, margin, y, cw - 2 * margin, label_h,
     );
     set_font(lbl, bold_font);
@@ -180,7 +180,7 @@ unsafe fn populate_controls(hwnd: HWND) {
 
     // --- Section: Hotkey ---
     let lbl2 = create_child(
-        hwnd, w!("STATIC"), w!("Hide Overlay Hotkey"),
+        hwnd, w!("STATIC"), w!("Hide overlay hotkey"),
         WS_CHILD | WS_VISIBLE, margin, y, cw - 2 * margin, label_h,
     );
     set_font(lbl2, bold_font);
@@ -219,7 +219,7 @@ unsafe fn populate_controls(hwnd: HWND) {
 
     // --- Section: PiP Edge ---
     let lbl3 = create_child(
-        hwnd, w!("STATIC"), w!("PiP Edge"),
+        hwnd, w!("STATIC"), w!("PiP edge"),
         WS_CHILD | WS_VISIBLE, margin, y, cw - 2 * margin, label_h,
     );
     set_font(lbl3, bold_font);
