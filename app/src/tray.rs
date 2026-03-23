@@ -73,6 +73,7 @@ const ID_EXIT: u16 = 1001;
 const ID_SETTINGS: u16 = 1002;
 const ID_SHOW_OVERLAY: u16 = 1003;
 const ID_CHECK_UPDATE: u16 = 1004;
+const ID_EDIT_MODE: u16 = 1005;
 
 /// Hotkey ID for hide-overlay toggle.
 const HOTKEY_HIDE_OVERLAY: i32 = 1;
@@ -197,6 +198,7 @@ unsafe extern "system" fn wnd_proc(
             let id = (wparam.0 & 0xFFFF) as u16;
             match id {
                 ID_SHOW_OVERLAY => overlay::toggle_hidden(),
+                ID_EDIT_MODE => overlay::toggle_edit_mode(),
                 ID_LAUNCH_EQ => launch_eq(),
                 ID_SETTINGS => settings_dialog::show(),
                 ID_CHECK_UPDATE => do_update_check(hwnd),
@@ -235,6 +237,11 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let check_flag = if overlay::is_visible() { MF_CHECKED } else { MF_UNCHECKED };
     let _ = AppendMenuW(menu, MF_STRING | check_flag, ID_SHOW_OVERLAY as usize,
         windows::core::PCWSTR(overlay_wide.as_ptr()));
+
+    let edit_label = if overlay::is_edit_mode() { "Lock Layout\0" } else { "Edit Layout\0" };
+    let edit_wide: Vec<u16> = edit_label.encode_utf16().collect();
+    let _ = AppendMenuW(menu, MF_STRING, ID_EDIT_MODE as usize,
+        windows::core::PCWSTR(edit_wide.as_ptr()));
 
     let _ = AppendMenuW(menu, MF_STRING, ID_LAUNCH_EQ as usize, w!("Launch EQ"));
     let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS as usize, w!("Settings..."));
