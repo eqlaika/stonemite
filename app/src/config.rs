@@ -20,6 +20,17 @@ impl Default for PipEdge {
     }
 }
 
+/// Per-pip custom position and size.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipPosition {
+    /// Index in pip_order.
+    pub slot: usize,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Top-level configuration persisted to %APPDATA%\Stonemite\config.toml.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -34,6 +45,12 @@ pub struct Config {
     /// Custom PiP strip width in pixels. None = auto-size.
     #[serde(default)]
     pub pip_strip_width: Option<u32>,
+    /// Per-pip custom positions. Empty = auto strip layout.
+    #[serde(default)]
+    pub pip_positions: Vec<PipPosition>,
+    /// Snap grid size in pixels. 0 = no grid snap. Default: 16.
+    #[serde(default = "default_snap_grid")]
+    pub snap_grid: u32,
     /// Enable anonymous usage telemetry. Default: true.
     #[serde(default = "default_telemetry")]
     pub telemetry: bool,
@@ -44,6 +61,10 @@ pub struct Config {
 
 fn default_hide_hotkey() -> String {
     "F9".to_string()
+}
+
+fn default_snap_grid() -> u32 {
+    16
 }
 
 fn default_telemetry() -> bool {
@@ -57,6 +78,8 @@ impl Default for Config {
             hide_hotkey: default_hide_hotkey(),
             pip_edge: PipEdge::default(),
             pip_strip_width: None,
+            pip_positions: Vec::new(),
+            snap_grid: default_snap_grid(),
             telemetry: true,
             telemetry_id: None,
         }

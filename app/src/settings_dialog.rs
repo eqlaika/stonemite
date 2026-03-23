@@ -357,6 +357,8 @@ unsafe fn save_settings(hwnd: HWND) {
         hide_hotkey,
         pip_edge,
         pip_strip_width: existing.pip_strip_width,
+        pip_positions: existing.pip_positions,
+        snap_grid: existing.snap_grid,
         telemetry: existing.telemetry,
         telemetry_id: existing.telemetry_id,
     };
