@@ -53,6 +53,14 @@ release new_version: (bump new_version) build-release
     @Write-Host "  3. git push && git push --tags"
     @Write-Host "  4. gh release create v{{new_version}} dist/{{zip_name}} dist/stonemite-{{new_version}}-setup.exe --title 'v{{new_version}}' --notes-file dist/release-notes.md"
 
+# Quit a running instance
+quit:
+    @try { Stop-Process -Name stonemite -ErrorAction Stop } catch { }; exit 0
+
+# Build debug, quitting any running instance first
+run: quit build
+    @Start-Process target/debug/stonemite.exe
+
 # Clean build artifacts and dist
 clean:
     cargo clean
