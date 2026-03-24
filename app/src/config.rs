@@ -140,35 +140,76 @@ impl Config {
         PathBuf::from(&self.eq_dir)
     }
 
-    /// Parse the hide_hotkey config string into a Windows virtual-key code.
-    pub fn hide_hotkey_vk(&self) -> Option<u32> {
-        parse_vk_name(&self.hide_hotkey)
+    /// Parse the hide_hotkey config string into (modifiers, virtual-key code).
+    /// Supports combos like "Ctrl+Shift+F9".
+    pub fn hide_hotkey_vk(&self) -> Option<(u32, u32)> {
+        parse_hotkey_combo(&self.hide_hotkey)
     }
 }
 
 /// Map a key name (case-insensitive) to a Windows virtual-key code.
 fn parse_vk_name(name: &str) -> Option<u32> {
     match name.trim().to_uppercase().as_str() {
-        "F1" => Some(0x70),
-        "F2" => Some(0x71),
-        "F3" => Some(0x72),
-        "F4" => Some(0x73),
-        "F5" => Some(0x74),
-        "F6" => Some(0x75),
-        "F7" => Some(0x76),
-        "F8" => Some(0x77),
-        "F9" => Some(0x78),
-        "F10" => Some(0x79),
-        "F11" => Some(0x7A),
-        "F12" => Some(0x7B),
-        "PAUSE" => Some(0x13),
-        "SCROLLLOCK" | "SCROLL_LOCK" => Some(0x91),
+        // Function keys
+        "F1" => Some(0x70),  "F2" => Some(0x71),  "F3" => Some(0x72),  "F4" => Some(0x73),
+        "F5" => Some(0x74),  "F6" => Some(0x75),  "F7" => Some(0x76),  "F8" => Some(0x77),
+        "F9" => Some(0x78),  "F10" => Some(0x79), "F11" => Some(0x7A), "F12" => Some(0x7B),
+        // Navigation
         "INSERT" => Some(0x2D),
         "DELETE" => Some(0x2E),
         "HOME" => Some(0x24),
         "END" => Some(0x23),
         "PAGEUP" | "PAGE_UP" => Some(0x21),
         "PAGEDOWN" | "PAGE_DOWN" => Some(0x22),
+        // Toggle keys
+        "PAUSE" => Some(0x13),
+        "SCROLLLOCK" | "SCROLL_LOCK" => Some(0x91),
+        // Letters
+        "A" => Some(0x41), "B" => Some(0x42), "C" => Some(0x43), "D" => Some(0x44),
+        "E" => Some(0x45), "F" => Some(0x46), "G" => Some(0x47), "H" => Some(0x48),
+        "I" => Some(0x49), "J" => Some(0x4A), "K" => Some(0x4B), "L" => Some(0x4C),
+        "M" => Some(0x4D), "N" => Some(0x4E), "O" => Some(0x4F), "P" => Some(0x50),
+        "Q" => Some(0x51), "R" => Some(0x52), "S" => Some(0x53), "T" => Some(0x54),
+        "U" => Some(0x55), "V" => Some(0x56), "W" => Some(0x57), "X" => Some(0x58),
+        "Y" => Some(0x59), "Z" => Some(0x5A),
+        // Digits
+        "0" => Some(0x30), "1" => Some(0x31), "2" => Some(0x32), "3" => Some(0x33),
+        "4" => Some(0x34), "5" => Some(0x35), "6" => Some(0x36), "7" => Some(0x37),
+        "8" => Some(0x38), "9" => Some(0x39),
+        // Other
+        "SPACE" => Some(0x20),
+        "TAB" => Some(0x09),
+        "MINUS" => Some(0xBD),
+        "PLUS" => Some(0xBB),
+        "EQUALS" => Some(0xBB),
+        "BACKTICK" => Some(0xC0),
+        "OPENBRACKET" => Some(0xDB),
+        "CLOSEBRACKET" => Some(0xDD),
+        "BACKSLASH" => Some(0xDC),
+        "SEMICOLON" => Some(0xBA),
+        "QUOTE" => Some(0xDE),
+        "COMMA" => Some(0xBC),
+        "PERIOD" => Some(0xBE),
+        "SLASH" => Some(0xBF),
         _ => None,
     }
+}
+
+/// Parse a hotkey combo string like "Ctrl+Shift+F9" into (MOD flags, VK code).
+/// MOD flags: 0x1 = Alt, 0x2 = Ctrl, 0x4 = Shift.
+fn parse_hotkey_combo(combo: &str) -> Option<(u32, u32)> {
+    let mut mods = 0u32;
+    let mut key_part = None;
+
+    for part in combo.split('+') {
+        match part.trim().to_uppercase().as_str() {
+            "CTRL" | "CONTROL" => mods |= 0x2,
+            "ALT" => mods |= 0x1,
+            "SHIFT" => mods |= 0x4,
+            _ => key_part = Some(part.trim().to_string()),
+        }
+    }
+
+    let vk = parse_vk_name(key_part.as_deref().unwrap_or(""))?;
+    Some((mods, vk))
 }

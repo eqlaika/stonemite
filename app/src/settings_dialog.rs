@@ -13,11 +13,6 @@ use crate::config::{Config, PipEdge};
 /// Custom message posted to the tray window after settings are saved.
 pub const WM_SETTINGS_CHANGED: u32 = WM_USER + 100;
 
-const HOTKEY_OPTIONS: &[&str] = &[
-    "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
-    "Pause", "ScrollLock", "Insert", "Delete", "Home", "End", "PageUp", "PageDown",
-];
-
 const PIP_EDGE_OPTIONS: &[(&str, PipEdge)] = &[
     ("Right", PipEdge::Right),
     ("Left", PipEdge::Left),
@@ -161,7 +156,8 @@ fn configure_style(ctx: &egui::Context) {
 struct SettingsApp {
     tab: Tab,
     eq_dir: String,
-    hotkey_index: usize,
+    hide_hotkey: String,
+    capturing_hotkey: bool,
     edge_index: usize,
     logo: Option<egui::TextureHandle>,
     avatar: Option<egui::TextureHandle>,
@@ -169,11 +165,6 @@ struct SettingsApp {
 
 impl SettingsApp {
     fn from_config(cfg: &Config) -> Self {
-        let hotkey_index = HOTKEY_OPTIONS
-            .iter()
-            .position(|k| k.eq_ignore_ascii_case(cfg.hide_hotkey.trim()))
-            .unwrap_or(8);
-
         let edge_index = PIP_EDGE_OPTIONS
             .iter()
             .position(|(_, e)| *e == cfg.pip_edge)
@@ -182,7 +173,8 @@ impl SettingsApp {
         Self {
             tab: Tab::General,
             eq_dir: cfg.eq_dir.clone(),
-            hotkey_index,
+            hide_hotkey: cfg.hide_hotkey.clone(),
+            capturing_hotkey: false,
             edge_index,
             logo: None,
             avatar: None,
@@ -263,24 +255,82 @@ impl SettingsApp {
                 });
         });
 
-        section(ui, "Hide overlay hotkey", |ui| {
-            ui.label("Toggle PiP overlay visibility while EQ is focused");
-            egui::ComboBox::from_id_salt("hotkey")
-                .selected_text(HOTKEY_OPTIONS[self.hotkey_index])
-                .show_ui(ui, |ui| {
-                    for (i, key) in HOTKEY_OPTIONS.iter().enumerate() {
-                        ui.selectable_value(&mut self.hotkey_index, i, *key);
-                    }
-                });
-        });
     }
 
-    fn hotkeys_tab(&self, ui: &mut egui::Ui) {
+    fn hotkeys_tab(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
-        ui.colored_label(
-            ui.visuals().weak_text_color(),
-            "Hotkey configuration coming soon.",
-        );
+
+        section(ui, "Hide overlay", |ui| {
+            ui.label("Toggle PiP overlay visibility while EQ is focused");
+            ui.horizontal(|ui| {
+                if self.capturing_hotkey {
+                    // Show currently held modifiers as the user builds the combo.
+                    let mods = ui.input(|i| i.modifiers);
+                    let mut parts = Vec::new();
+                    if mods.ctrl { parts.push("Ctrl"); }
+                    if mods.alt { parts.push("Alt"); }
+                    if mods.shift { parts.push("Shift"); }
+
+                    let label = if parts.is_empty() {
+                        "Press a key combo...".to_string()
+                    } else {
+                        format!("{}+...", parts.join("+"))
+                    };
+
+                    let btn = egui::Button::new(
+                        egui::RichText::new(&label).italics(),
+                    );
+                    let resp = ui.add(btn);
+
+                    // Check for a non-modifier key press to complete the combo.
+                    let pressed = ui.input(|i| {
+                        i.events.iter().find_map(|e| {
+                            if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
+                                if *key == egui::Key::Escape {
+                                    return Some(None); // Cancel capture
+                                }
+                                egui_key_to_config_name(key).map(|name| {
+                                    let mut combo = Vec::new();
+                                    if modifiers.ctrl { combo.push("Ctrl"); }
+                                    if modifiers.alt { combo.push("Alt"); }
+                                    if modifiers.shift { combo.push("Shift"); }
+                                    combo.push(name);
+                                    Some(combo.join("+"))
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                    });
+
+                    match pressed {
+                        Some(Some(combo)) => {
+                            self.hide_hotkey = combo;
+                            self.capturing_hotkey = false;
+                        }
+                        Some(None) => {
+                            self.capturing_hotkey = false;
+                        }
+                        None => {
+                            resp.request_focus();
+                        }
+                    }
+                } else {
+                    let label = if self.hide_hotkey.is_empty() {
+                        "None".to_string()
+                    } else {
+                        self.hide_hotkey.clone()
+                    };
+                    if ui.button(&label).clicked() {
+                        self.capturing_hotkey = true;
+                    }
+                    ui.colored_label(
+                        ui.visuals().weak_text_color(),
+                        "Click to change",
+                    );
+                }
+            });
+        });
     }
 
     fn broadcasting_tab(&self, ui: &mut egui::Ui) {
@@ -373,7 +423,7 @@ impl SettingsApp {
         let existing = Config::load();
         let cfg = Config {
             eq_dir: self.eq_dir.clone(),
-            hide_hotkey: HOTKEY_OPTIONS[self.hotkey_index].to_string(),
+            hide_hotkey: self.hide_hotkey.clone(),
             pip_edge: PIP_EDGE_OPTIONS[self.edge_index].1,
             pip_strip_width: existing.pip_strip_width,
             pip_positions: existing.pip_positions,
@@ -385,6 +435,47 @@ impl SettingsApp {
             eprintln!("Failed to save config: {e}");
         }
         notify_tray();
+    }
+}
+
+/// Map an egui Key to the config key name used by `config::parse_vk_name`.
+fn egui_key_to_config_name(key: &egui::Key) -> Option<&'static str> {
+    use egui::Key::*;
+    match key {
+        F1 => Some("F1"),   F2 => Some("F2"),   F3 => Some("F3"),   F4 => Some("F4"),
+        F5 => Some("F5"),   F6 => Some("F6"),   F7 => Some("F7"),   F8 => Some("F8"),
+        F9 => Some("F9"),   F10 => Some("F10"), F11 => Some("F11"), F12 => Some("F12"),
+        Insert => Some("Insert"),
+        Delete => Some("Delete"),
+        Home => Some("Home"),
+        End => Some("End"),
+        PageUp => Some("PageUp"),
+        PageDown => Some("PageDown"),
+        A => Some("A"), B => Some("B"), C => Some("C"), D => Some("D"),
+        E => Some("E"), F => Some("F"), G => Some("G"), H => Some("H"),
+        I => Some("I"), J => Some("J"), K => Some("K"), L => Some("L"),
+        M => Some("M"), N => Some("N"), O => Some("O"), P => Some("P"),
+        Q => Some("Q"), R => Some("R"), S => Some("S"), T => Some("T"),
+        U => Some("U"), V => Some("V"), W => Some("W"), X => Some("X"),
+        Y => Some("Y"), Z => Some("Z"),
+        Num0 => Some("0"), Num1 => Some("1"), Num2 => Some("2"), Num3 => Some("3"),
+        Num4 => Some("4"), Num5 => Some("5"), Num6 => Some("6"), Num7 => Some("7"),
+        Num8 => Some("8"), Num9 => Some("9"),
+        Space => Some("Space"),
+        Tab => Some("Tab"),
+        Minus => Some("Minus"),
+        Plus => Some("Plus"),
+        Equals => Some("Equals"),
+        Backtick => Some("Backtick"),
+        OpenBracket => Some("OpenBracket"),
+        CloseBracket => Some("CloseBracket"),
+        Backslash => Some("Backslash"),
+        Semicolon => Some("Semicolon"),
+        Quote => Some("Quote"),
+        Comma => Some("Comma"),
+        Period => Some("Period"),
+        Slash => Some("Slash"),
+        _ => None,
     }
 }
 
