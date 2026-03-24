@@ -1,438 +1,465 @@
-use std::cell::UnsafeCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    CreateFontW, GetDC, GetDeviceCaps, GetStockObject, SetBkMode, COLOR_WINDOW,
-    DEFAULT_CHARSET, FW_BOLD, FW_NORMAL, HBRUSH, HFONT, LOGPIXELSY, ReleaseDC,
-    TRANSPARENT, WHITE_BRUSH,
+use windows::Win32::Foundation::{LPARAM, WPARAM};
+use windows::Win32::UI::WindowsAndMessaging::{
+    FindWindowW, PostMessageW, SetForegroundWindow, WM_USER,
 };
-use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX,
-};
-use windows::Win32::UI::Shell::{
-    SHBrowseForFolderW, SHGetPathFromIDListW, BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS,
-    BROWSEINFOW,
-};
-use windows::Win32::UI::WindowsAndMessaging::*;
 
-use crate::config::Config;
+use eframe::egui;
 
-/// SS_ETCHEDHORZ — horizontal etched line (static control style).
-const SS_ETCHEDHORZ: u32 = 0x0010;
+use crate::config::{Config, PipEdge};
 
-// Control IDs.
-const IDC_EQ_DIR_EDIT: i32 = 100;
-const IDC_EQ_DIR_BROWSE: i32 = 101;
-const IDC_HOTKEY_COMBO: i32 = 102;
-const IDC_SAVE: i32 = 103;
-const IDC_CANCEL: i32 = 104;
-const IDC_PIP_EDGE_COMBO: i32 = 105;
+/// Custom message posted to the tray window after settings are saved.
+pub const WM_SETTINGS_CHANGED: u32 = WM_USER + 100;
 
 const HOTKEY_OPTIONS: &[&str] = &[
     "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
     "Pause", "ScrollLock", "Insert", "Delete", "Home", "End", "PageUp", "PageDown",
 ];
 
-const PIP_EDGE_OPTIONS: &[&str] = &["Right", "Left", "Top", "Bottom"];
+const PIP_EDGE_OPTIONS: &[(&str, PipEdge)] = &[
+    ("Right", PipEdge::Right),
+    ("Left", PipEdge::Left),
+    ("Top", PipEdge::Top),
+    ("Bottom", PipEdge::Bottom),
+];
 
-/// Custom message posted to the tray window after settings are saved.
-pub const WM_SETTINGS_CHANGED: u32 = WM_USER + 100;
+static SETTINGS_OPEN: AtomicBool = AtomicBool::new(false);
 
-struct DialogCell(UnsafeCell<Option<HWND>>);
-unsafe impl Sync for DialogCell {}
-static DIALOG_HWND: DialogCell = DialogCell(UnsafeCell::new(None));
+/// Guard that resets SETTINGS_OPEN on drop, no matter how the thread exits.
+struct OpenGuard;
+impl Drop for OpenGuard {
+    fn drop(&mut self) {
+        SETTINGS_OPEN.store(false, Ordering::SeqCst);
+    }
+}
 
-/// Show the settings dialog. If already open, brings it to the foreground.
+/// Show the settings window. If already open, brings it to the foreground.
 pub fn show() {
-    unsafe {
-        let existing = &mut *DIALOG_HWND.0.get();
-        if let Some(hwnd) = *existing {
-            if IsWindow(hwnd).as_bool() {
+    if SETTINGS_OPEN
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        unsafe {
+            if let Ok(hwnd) = FindWindowW(None, w!("Stonemite Settings")) {
                 let _ = SetForegroundWindow(hwnd);
-                return;
             }
         }
-
-        let _ = InitCommonControlsEx(&INITCOMMONCONTROLSEX {
-            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_STANDARD_CLASSES,
-        });
-
-        let hwnd = create_dialog();
-        *existing = Some(hwnd);
-        let _ = ShowWindow(hwnd, SW_SHOW);
-        let _ = SetForegroundWindow(hwnd);
-    }
-}
-
-unsafe fn create_dialog() -> HWND {
-    let class_name = w!("StonemiteSettingsClass");
-    let wc = WNDCLASSW {
-        lpfnWndProc: Some(dialog_proc),
-        lpszClassName: class_name.into(),
-        hbrBackground: HBRUSH((COLOR_WINDOW.0 as isize + 1) as *mut _),
-        hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-        ..Default::default()
-    };
-    RegisterClassW(&wc);
-
-    let dpi = get_dpi_scale(HWND::default());
-    let w = scale(480, dpi);
-    let h = scale(400, dpi);
-
-    let sx = GetSystemMetrics(SM_CXSCREEN);
-    let sy = GetSystemMetrics(SM_CYSCREEN);
-
-    CreateWindowExW(
-        WS_EX_DLGMODALFRAME,
-        class_name,
-        w!("Stonemite Settings"),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-        (sx - w) / 2,
-        (sy - h) / 2,
-        w,
-        h,
-        None,
-        None,
-        None,
-        None,
-    )
-    .expect("Failed to create settings dialog")
-}
-
-unsafe fn get_dpi_scale(hwnd: HWND) -> f64 {
-    use windows::Win32::UI::HiDpi::GetDpiForWindow;
-    let dpi = GetDpiForWindow(hwnd);
-    if dpi > 0 {
-        return dpi as f64 / 96.0;
-    }
-    let dc = GetDC(HWND::default());
-    let val = GetDeviceCaps(dc, LOGPIXELSY);
-    let _ = ReleaseDC(HWND::default(), dc);
-    val as f64 / 96.0
-}
-
-fn scale(val: i32, dpi: f64) -> i32 {
-    (val as f64 * dpi).round() as i32
-}
-
-fn to_wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-unsafe fn populate_controls(hwnd: HWND) {
-    let dpi = get_dpi_scale(hwnd);
-
-    let margin = scale(20, dpi);
-    let label_h = scale(18, dpi);
-    let ctrl_h = scale(26, dpi);
-    let btn_w = scale(90, dpi);
-    let btn_h = scale(32, dpi);
-    let browse_w = scale(36, dpi);
-    let row_gap = scale(6, dpi);
-    let section_gap = scale(18, dpi);
-
-
-    let mut rc = RECT::default();
-    let _ = GetClientRect(hwnd, &mut rc);
-    let cw = rc.right - rc.left;
-    let ch = rc.bottom - rc.top;
-
-    let font = create_font(dpi, false);
-    let bold_font = create_font(dpi, true);
-    let mut y = margin;
-
-    // --- Section: EQ Directory ---
-    let lbl = create_child(
-        hwnd, w!("STATIC"), w!("EverQuest directory"),
-        WS_CHILD | WS_VISIBLE, margin, y, cw - 2 * margin, label_h,
-    );
-    set_font(lbl, bold_font);
-    y += label_h + row_gap;
-
-    let edit_w = cw - 2 * margin - browse_w - scale(8, dpi);
-    let edit = create_child(
-        hwnd, w!("EDIT"), w!(""),
-        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
-        margin, y, edit_w, ctrl_h,
-    );
-    SetWindowLongPtrW(edit, GWLP_ID, IDC_EQ_DIR_EDIT as isize);
-    set_font(edit, font);
-
-    let browse = create_child(
-        hwnd, w!("BUTTON"), w!("..."),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32),
-        margin + edit_w + scale(8, dpi), y, browse_w, ctrl_h,
-    );
-    SetWindowLongPtrW(browse, GWLP_ID, IDC_EQ_DIR_BROWSE as isize);
-    set_font(browse, font);
-
-    y += ctrl_h + section_gap;
-
-    // --- Separator ---
-    let _ = create_child(
-        hwnd, w!("STATIC"), w!(""),
-        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(SS_ETCHEDHORZ),
-        margin, y, cw - 2 * margin, scale(2, dpi),
-    );
-    y += scale(2, dpi) + section_gap;
-
-    // --- Section: Hotkey ---
-    let lbl2 = create_child(
-        hwnd, w!("STATIC"), w!("Hide overlay hotkey"),
-        WS_CHILD | WS_VISIBLE, margin, y, cw - 2 * margin, label_h,
-    );
-    set_font(lbl2, bold_font);
-    y += label_h + row_gap;
-
-    let desc = create_child(
-        hwnd, w!("STATIC"), w!("Press this key to toggle PiP overlay visibility while EQ is focused"),
-        WS_CHILD | WS_VISIBLE, margin, y, cw - 2 * margin, label_h,
-    );
-    set_font(desc, font);
-    y += label_h + row_gap;
-
-    let combo = create_child(
-        hwnd, w!("COMBOBOX"), w!(""),
-        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP
-            | WINDOW_STYLE(CBS_DROPDOWNLIST as u32 | CBS_HASSTRINGS as u32),
-        margin, y, scale(160, dpi), ctrl_h * 10,
-    );
-    SetWindowLongPtrW(combo, GWLP_ID, IDC_HOTKEY_COMBO as isize);
-    set_font(combo, font);
-
-    for key in HOTKEY_OPTIONS {
-        let wide = to_wide(key);
-        SendMessageW(combo, CB_ADDSTRING, WPARAM(0), LPARAM(wide.as_ptr() as isize));
-    }
-
-    y += ctrl_h + section_gap;
-
-    // --- Separator ---
-    let _ = create_child(
-        hwnd, w!("STATIC"), w!(""),
-        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(SS_ETCHEDHORZ),
-        margin, y, cw - 2 * margin, scale(2, dpi),
-    );
-    y += scale(2, dpi) + section_gap;
-
-    // --- Section: PiP Edge ---
-    let lbl3 = create_child(
-        hwnd, w!("STATIC"), w!("PiP edge"),
-        WS_CHILD | WS_VISIBLE, margin, y, cw - 2 * margin, label_h,
-    );
-    set_font(lbl3, bold_font);
-    y += label_h + row_gap;
-
-    let desc2 = create_child(
-        hwnd, w!("STATIC"), w!("Screen edge where PiP thumbnails are anchored"),
-        WS_CHILD | WS_VISIBLE, margin, y, cw - 2 * margin, label_h,
-    );
-    set_font(desc2, font);
-    y += label_h + row_gap;
-
-    let edge_combo = create_child(
-        hwnd, w!("COMBOBOX"), w!(""),
-        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP
-            | WINDOW_STYLE(CBS_DROPDOWNLIST as u32 | CBS_HASSTRINGS as u32),
-        margin, y, scale(160, dpi), ctrl_h * 10,
-    );
-    SetWindowLongPtrW(edge_combo, GWLP_ID, IDC_PIP_EDGE_COMBO as isize);
-    set_font(edge_combo, font);
-
-    for opt in PIP_EDGE_OPTIONS {
-        let wide = to_wide(opt);
-        SendMessageW(edge_combo, CB_ADDSTRING, WPARAM(0), LPARAM(wide.as_ptr() as isize));
-    }
-
-    // --- Bottom button bar with separator ---
-    let btn_y = ch - margin - btn_h;
-    let sep_y = btn_y - section_gap;
-    let _ = create_child(
-        hwnd, w!("STATIC"), w!(""),
-        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(SS_ETCHEDHORZ),
-        margin, sep_y, cw - 2 * margin, scale(2, dpi),
-    );
-
-    let cancel = create_child(
-        hwnd, w!("BUTTON"), w!("Cancel"),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32),
-        cw - margin - btn_w, btn_y, btn_w, btn_h,
-    );
-    SetWindowLongPtrW(cancel, GWLP_ID, IDC_CANCEL as isize);
-    set_font(cancel, font);
-
-    let save = create_child(
-        hwnd, w!("BUTTON"), w!("Save"),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON as u32),
-        cw - margin - btn_w - scale(10, dpi) - btn_w, btn_y, btn_w, btn_h,
-    );
-    SetWindowLongPtrW(save, GWLP_ID, IDC_SAVE as isize);
-    set_font(save, font);
-
-    // Load current config values into controls.
-    let cfg = Config::load();
-    let eq_dir_wide = to_wide(&cfg.eq_dir);
-    let _ = SetWindowTextW(edit, windows::core::PCWSTR(eq_dir_wide.as_ptr()));
-
-    let hotkey_upper = cfg.hide_hotkey.trim().to_uppercase();
-    for (i, key) in HOTKEY_OPTIONS.iter().enumerate() {
-        if key.to_uppercase() == hotkey_upper {
-            SendMessageW(combo, CB_SETCURSEL, WPARAM(i), LPARAM(0));
-            break;
-        }
-    }
-
-    let edge_idx = match cfg.pip_edge {
-        crate::config::PipEdge::Right => 0,
-        crate::config::PipEdge::Left => 1,
-        crate::config::PipEdge::Top => 2,
-        crate::config::PipEdge::Bottom => 3,
-    };
-    SendMessageW(edge_combo, CB_SETCURSEL, WPARAM(edge_idx), LPARAM(0));
-}
-
-unsafe fn create_child(
-    parent: HWND,
-    class: windows::core::PCWSTR,
-    text: windows::core::PCWSTR,
-    style: WINDOW_STYLE,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-) -> HWND {
-    CreateWindowExW(Default::default(), class, text, style, x, y, w, h, parent, None, None, None)
-        .expect("Failed to create control")
-}
-
-unsafe fn create_font(dpi: f64, bold: bool) -> HFONT {
-    CreateFontW(
-        -scale(14, dpi),
-        0, 0, 0,
-        if bold { FW_BOLD.0 } else { FW_NORMAL.0 } as i32,
-        0, 0, 0,
-        DEFAULT_CHARSET.0 as u32,
-        0, 0, 0, 0,
-        w!("Segoe UI"),
-    )
-}
-
-unsafe fn set_font(hwnd: HWND, font: HFONT) {
-    SendMessageW(hwnd, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
-}
-
-unsafe fn get_ctrl(hwnd: HWND, id: i32) -> HWND {
-    GetDlgItem(hwnd, id).expect("Control not found")
-}
-
-unsafe fn save_settings(hwnd: HWND) {
-    let eq_dir_edit = get_ctrl(hwnd, IDC_EQ_DIR_EDIT);
-    let combo = get_ctrl(hwnd, IDC_HOTKEY_COMBO);
-    let edge_combo = get_ctrl(hwnd, IDC_PIP_EDGE_COMBO);
-
-    let mut buf = [0u16; 1024];
-    let len = GetWindowTextW(eq_dir_edit, &mut buf) as usize;
-    let eq_dir = String::from_utf16_lossy(&buf[..len]);
-
-    let sel = SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as usize;
-    let hide_hotkey = if sel < HOTKEY_OPTIONS.len() {
-        HOTKEY_OPTIONS[sel].to_string()
-    } else {
-        "F9".to_string()
-    };
-
-    let edge_sel = SendMessageW(edge_combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as usize;
-    let pip_edge = match edge_sel {
-        1 => crate::config::PipEdge::Left,
-        2 => crate::config::PipEdge::Top,
-        3 => crate::config::PipEdge::Bottom,
-        _ => crate::config::PipEdge::Right,
-    };
-
-    let existing = Config::load();
-    let cfg = Config {
-        eq_dir,
-        hide_hotkey,
-        pip_edge,
-        pip_strip_width: existing.pip_strip_width,
-        pip_positions: existing.pip_positions,
-        snap_grid: existing.snap_grid,
-        telemetry: existing.telemetry,
-        telemetry_id: existing.telemetry_id,
-    };
-    if let Err(e) = cfg.save() {
-        eprintln!("Failed to save config: {e}");
-    }
-}
-
-unsafe fn browse_folder(hwnd: HWND) {
-    let title = to_wide("Select EverQuest directory");
-    let bi = BROWSEINFOW {
-        hwndOwner: hwnd,
-        lpszTitle: windows::core::PCWSTR(title.as_ptr()),
-        ulFlags: BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE,
-        ..Default::default()
-    };
-    let pidl = SHBrowseForFolderW(&bi);
-    if pidl.is_null() {
         return;
     }
-    let mut path = [0u16; 260];
-    if SHGetPathFromIDListW(pidl, &mut path).as_bool() {
-        let edit = get_ctrl(hwnd, IDC_EQ_DIR_EDIT);
-        let _ = SetWindowTextW(edit, windows::core::PCWSTR(path.as_ptr()));
-    }
-    windows::Win32::System::Com::CoTaskMemFree(Some(pidl as *const _));
+
+    std::thread::spawn(|| {
+        let _guard = OpenGuard;
+        run_settings_window();
+    });
 }
 
-unsafe extern "system" fn dialog_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    match msg {
-        WM_CREATE => {
-            populate_controls(hwnd);
-            LRESULT(0)
-        }
-        WM_CTLCOLORSTATIC => {
-            let hdc = windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut _);
-            SetBkMode(hdc, TRANSPARENT);
-            return LRESULT(GetStockObject(WHITE_BRUSH).0 as isize);
-        }
-        WM_COMMAND => {
-            let id = (wparam.0 & 0xFFFF) as i32;
-            match id {
-                IDC_SAVE => {
-                    save_settings(hwnd);
-                    if let Ok(tray) =
-                        FindWindowW(w!("StonemiteTrayClass"), w!("Stonemite"))
-                    {
-                        let _ = PostMessageW(tray, WM_SETTINGS_CHANGED, WPARAM(0), LPARAM(0));
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Tab {
+    General,
+    Hotkeys,
+    Broadcasting,
+    About,
+}
+
+fn run_settings_window() {
+    let cfg = Config::load();
+
+    let hotkey_index = HOTKEY_OPTIONS
+        .iter()
+        .position(|k| k.eq_ignore_ascii_case(cfg.hide_hotkey.trim()))
+        .unwrap_or(8);
+
+    let edge_index = PIP_EDGE_OPTIONS
+        .iter()
+        .position(|(_, e)| *e == cfg.pip_edge)
+        .unwrap_or(0);
+
+    let app = SettingsApp {
+        tab: Tab::General,
+        eq_dir: cfg.eq_dir.clone(),
+        hotkey_index,
+        edge_index,
+        logo: None,
+        avatar: None,
+    };
+
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("Stonemite Settings")
+            .with_inner_size([480.0, 400.0])
+            .with_resizable(false)
+            .with_maximize_button(false)
+            .with_icon(load_app_icon()),
+        run_and_return: true,
+        event_loop_builder: Some(Box::new(|builder| {
+            use winit::platform::windows::EventLoopBuilderExtWindows;
+            builder.with_any_thread(true);
+        })),
+        ..Default::default()
+    };
+
+    let _ = eframe::run_native(
+        "Stonemite Settings",
+        options,
+        Box::new(|cc| {
+            configure_fonts(&cc.egui_ctx);
+            Ok(Box::new(app))
+        }),
+    );
+}
+
+fn configure_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    let font_data = load_system_font();
+    if let Some(data) = font_data {
+        fonts.font_data.insert(
+            "system".to_owned(),
+            egui::FontData::from_owned(data).into(),
+        );
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "system".to_owned());
+    }
+    ctx.set_fonts(fonts);
+}
+
+fn configure_style(ctx: &egui::Context) {
+    let mut style = (*ctx.style()).clone();
+
+    // Match native Windows control text size (egui handles DPI scaling).
+    style.text_styles.insert(
+        egui::TextStyle::Body,
+        egui::FontId::proportional(12.0),
+    );
+    style.text_styles.insert(
+        egui::TextStyle::Button,
+        egui::FontId::proportional(12.0),
+    );
+    style.text_styles.insert(
+        egui::TextStyle::Heading,
+        egui::FontId::proportional(12.0),
+    );
+
+    // Spacing to match native dialogs.
+    style.spacing.item_spacing = egui::vec2(6.0, 5.0);
+    style.spacing.button_padding = egui::vec2(16.0, 4.0);
+    style.spacing.combo_width = 120.0;
+
+    // Windows 11-ish widget colors — nearly rectangular like native buttons.
+    let r = egui::CornerRadius::same(2);
+    let border = egui::Color32::from_gray(190);
+    let light_fill = egui::Color32::from_gray(251);
+    let hover_fill = egui::Color32::from_gray(243);
+    let active_fill = egui::Color32::from_gray(235);
+    let text = egui::Color32::from_gray(30);
+
+    // Inactive buttons/combos: light fill, subtle border.
+    style.visuals.widgets.inactive.corner_radius = r;
+    style.visuals.widgets.inactive.bg_fill = light_fill;
+    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, border);
+    style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text);
+
+    // Hovered: slightly darker fill.
+    style.visuals.widgets.hovered.corner_radius = r;
+    style.visuals.widgets.hovered.bg_fill = hover_fill;
+    style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(160));
+    style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, text);
+
+    // Active/pressed: darker still.
+    style.visuals.widgets.active.corner_radius = r;
+    style.visuals.widgets.active.bg_fill = active_fill;
+    style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(140));
+    style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, text);
+
+    // Non-interactive (labels, separators).
+    style.visuals.widgets.noninteractive.corner_radius = r;
+    style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, text);
+
+    // Text input fields: white background, border.
+    style.visuals.extreme_bg_color = egui::Color32::WHITE;
+
+    // Selection highlight (combo items, text selection).
+    style.visuals.selection.bg_fill = egui::Color32::from_rgb(204, 224, 255);
+    style.visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 95, 184));
+
+    ctx.set_style(style);
+}
+
+struct SettingsApp {
+    tab: Tab,
+    eq_dir: String,
+    hotkey_index: usize,
+    edge_index: usize,
+    logo: Option<egui::TextureHandle>,
+    avatar: Option<egui::TextureHandle>,
+}
+
+impl eframe::App for SettingsApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        configure_style(ctx);
+
+        egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.tab, Tab::General, "General");
+                ui.selectable_value(&mut self.tab, Tab::Hotkeys, "Hotkeys");
+                ui.selectable_value(&mut self.tab, Tab::Broadcasting, "Broadcasting");
+                ui.selectable_value(&mut self.tab, Tab::About, "About");
+            });
+            ui.add_space(2.0);
+        });
+
+        egui::TopBottomPanel::bottom("buttons")
+            .min_height(40.0)
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Cancel").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
-                    let _ = DestroyWindow(hwnd);
-                }
-                IDC_CANCEL => {
-                    let _ = DestroyWindow(hwnd);
-                }
-                IDC_EQ_DIR_BROWSE => {
-                    browse_folder(hwnd);
-                }
-                _ => {}
+                    if ui.button("  Save  ").clicked() {
+                        self.save_config();
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+            });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            match self.tab {
+                Tab::General => self.general_tab(ui),
+                Tab::Hotkeys => self.hotkeys_tab(ui),
+                Tab::Broadcasting => self.broadcasting_tab(ui),
+                Tab::About => self.about_tab(ui),
             }
-            LRESULT(0)
+        });
+    }
+}
+
+impl SettingsApp {
+    fn general_tab(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+
+        section(ui, "EverQuest directory", |ui| {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.eq_dir)
+                        .desired_width(ui.available_width() - 88.0),
+                );
+                if ui.button("Browse...").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_directory(&self.eq_dir)
+                        .pick_folder()
+                    {
+                        self.eq_dir = path.display().to_string();
+                    }
+                }
+            });
+        });
+
+        section(ui, "PiP edge", |ui| {
+            ui.label("Screen edge where PiP thumbnails are anchored");
+            egui::ComboBox::from_id_salt("pip_edge")
+                .selected_text(PIP_EDGE_OPTIONS[self.edge_index].0)
+                .show_ui(ui, |ui| {
+                    for (i, (label, _)) in PIP_EDGE_OPTIONS.iter().enumerate() {
+                        ui.selectable_value(&mut self.edge_index, i, *label);
+                    }
+                });
+        });
+
+        section(ui, "Hide overlay hotkey", |ui| {
+            ui.label("Toggle PiP overlay visibility while EQ is focused");
+            egui::ComboBox::from_id_salt("hotkey")
+                .selected_text(HOTKEY_OPTIONS[self.hotkey_index])
+                .show_ui(ui, |ui| {
+                    for (i, key) in HOTKEY_OPTIONS.iter().enumerate() {
+                        ui.selectable_value(&mut self.hotkey_index, i, *key);
+                    }
+                });
+        });
+    }
+
+    fn hotkeys_tab(&self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+        ui.colored_label(
+            ui.visuals().weak_text_color(),
+            "Hotkey configuration coming soon.",
+        );
+    }
+
+    fn broadcasting_tab(&self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+        ui.colored_label(
+            ui.visuals().weak_text_color(),
+            "Broadcasting settings coming soon.",
+        );
+    }
+
+    fn about_tab(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+
+        let logo = self.logo.get_or_insert_with(|| {
+            let png_data = include_bytes!("../assets/app.png");
+            let img = image::load_from_memory(png_data).expect("Failed to load logo");
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                [w as usize, h as usize],
+                &rgba.into_raw(),
+            );
+            ui.ctx().load_texture("logo", color_image, egui::TextureOptions::LINEAR)
+        });
+
+        let logo_size = egui::vec2(48.0, 48.0);
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.strong(format!("Stonemite v{}", env!("CARGO_PKG_VERSION")));
+                ui.add_space(2.0);
+                ui.label("EverQuest multiboxing PiP overlay tool");
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                ui.image(egui::load::SizedTexture::new(logo.id(), logo_size));
+            });
+        });
+
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(4.0);
+
+        let avatar = self.avatar.get_or_insert_with(|| {
+            let png_data = include_bytes!("../assets/author.png");
+            let img = image::load_from_memory(png_data).expect("Failed to load avatar");
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                [w as usize, h as usize],
+                &rgba.into_raw(),
+            );
+            ui.ctx().load_texture("avatar", color_image, egui::TextureOptions::LINEAR)
+        });
+
+        let avatar_size = egui::vec2(48.0, 48.0);
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label("Author: Laika");
+                ui.horizontal(|ui| {
+                    ui.label("GitHub:");
+                    ui.hyperlink("https://github.com/eqlaika/stonemite");
+                });
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                let (rect, _) = ui.allocate_exact_size(avatar_size, egui::Sense::hover());
+                let rounding = egui::CornerRadius::same(6);
+                ui.painter().add(egui::epaint::RectShape::filled(
+                    rect,
+                    rounding,
+                    egui::Color32::WHITE,
+                ).with_texture(
+                    avatar.id(),
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                ));
+            });
+        });
+
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(4.0);
+
+        ui.strong("Contact");
+        ui.label("In-game: /tell Xegony.Laika");
+        ui.horizontal(|ui| {
+            ui.label("Email:");
+            ui.hyperlink_to("laika@laikasoft.co", "mailto:laika@laikasoft.co");
+        });
+    }
+
+    fn save_config(&self) {
+        let existing = Config::load();
+        let cfg = Config {
+            eq_dir: self.eq_dir.clone(),
+            hide_hotkey: HOTKEY_OPTIONS[self.hotkey_index].to_string(),
+            pip_edge: PIP_EDGE_OPTIONS[self.edge_index].1,
+            pip_strip_width: existing.pip_strip_width,
+            pip_positions: existing.pip_positions,
+            snap_grid: existing.snap_grid,
+            telemetry: existing.telemetry,
+            telemetry_id: existing.telemetry_id,
+        };
+        if let Err(e) = cfg.save() {
+            eprintln!("Failed to save config: {e}");
         }
-        WM_CLOSE => {
-            let _ = DestroyWindow(hwnd);
-            LRESULT(0)
+        notify_tray();
+    }
+}
+
+/// Draw a labeled section with a bold heading and indented content.
+fn section(ui: &mut egui::Ui, heading: &str, content: impl FnOnce(&mut egui::Ui)) {
+    ui.strong(heading);
+    ui.indent(heading, |ui| {
+        content(ui);
+    });
+    ui.add_space(6.0);
+}
+
+/// Load the app icon from the embedded ICO file for the window titlebar.
+fn load_app_icon() -> egui::IconData {
+    let ico_data = include_bytes!("../assets/app.ico");
+    // Parse ICO: find the largest image entry.
+    let count = u16::from_le_bytes([ico_data[4], ico_data[5]]) as usize;
+    let mut best = (0usize, 0u32); // (entry index, size)
+    for i in 0..count {
+        let off = 6 + i * 16;
+        let w = if ico_data[off] == 0 { 256 } else { ico_data[off] as u32 };
+        if w > best.1 {
+            best = (i, w);
         }
-        WM_DESTROY => {
-            *DIALOG_HWND.0.get() = None;
-            LRESULT(0)
+    }
+    let entry_off = 6 + best.0 * 16;
+    let data_size = u32::from_le_bytes([
+        ico_data[entry_off + 8], ico_data[entry_off + 9],
+        ico_data[entry_off + 10], ico_data[entry_off + 11],
+    ]) as usize;
+    let data_offset = u32::from_le_bytes([
+        ico_data[entry_off + 12], ico_data[entry_off + 13],
+        ico_data[entry_off + 14], ico_data[entry_off + 15],
+    ]) as usize;
+    let png_data = &ico_data[data_offset..data_offset + data_size];
+
+    // ICO entries with size >= 256 are typically PNG-encoded.
+    if let Ok(img) = image::load_from_memory(png_data) {
+        let rgba = img.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        return egui::IconData {
+            rgba: rgba.into_raw(),
+            width: w,
+            height: h,
+        };
+    }
+    // Fallback: transparent 1x1.
+    egui::IconData { rgba: vec![0; 4], width: 1, height: 1 }
+}
+
+/// Load the Windows system UI font (Segoe UI Variable on Win11, Segoe UI fallback).
+fn load_system_font() -> Option<Vec<u8>> {
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".to_string());
+    let fonts_dir = std::path::Path::new(&windir).join("Fonts");
+    // Segoe UI Variable (Win11), Segoe UI (Win10/8), Tahoma (Win7/XP fallback).
+    for filename in ["SegUIVar.ttf", "segoeui.ttf", "tahoma.ttf"] {
+        if let Ok(data) = std::fs::read(fonts_dir.join(filename)) {
+            return Some(data);
         }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+    None
+}
+
+fn notify_tray() {
+    unsafe {
+        if let Ok(tray) = FindWindowW(w!("StonemiteTrayClass"), w!("Stonemite")) {
+            let _ = PostMessageW(tray, WM_SETTINGS_CHANGED, WPARAM(0), LPARAM(0));
+        }
     }
 }
