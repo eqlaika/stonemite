@@ -1884,6 +1884,11 @@ unsafe extern "system" fn label_wnd_proc(
     hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_SETCURSOR => {
+            let cursor = LoadCursorW(None, IDC_ARROW).unwrap_or_default();
+            SetCursor(cursor);
+            return LRESULT(1);
+        }
         WM_PAINT => {
             let (text, color) = state()
                 .as_ref()
@@ -1899,7 +1904,7 @@ unsafe extern "system" fn label_wnd_proc(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            let _ = SetLayeredWindowAttributes(hwnd, None, 25, LWA_ALPHA);
+            let _ = SetLayeredWindowAttributes(hwnd, None, 128, LWA_ALPHA);
             let mut tme = TRACKMOUSEEVENT {
                 cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
                 dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0,
@@ -1935,7 +1940,10 @@ unsafe extern "system" fn label_wnd_proc(
                 y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
             };
             let _ = ClientToScreen(hwnd, &mut pt);
+            // Hide label so WindowFromPoint finds the window underneath.
+            let _ = ShowWindow(hwnd, SW_HIDE);
             let below = WindowFromPoint(pt);
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             if !below.is_invalid() && below != hwnd {
                 let _ = PostMessageW(below, msg, wparam, LPARAM(
                     (pt.x as i16 as u16 as isize) | ((pt.y as i16 as u16 as isize) << 16)
