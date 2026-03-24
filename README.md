@@ -44,22 +44,22 @@ The app checks for updates against [eqlaika/stonemite](https://github.com/eqlaik
 
 ## Stonemite vs ISBoxer
 
-[ISBoxer](https://isboxer.com/) has been the go-to multiboxing tool for years. It's also a bloated, overengineered relic built on top of Inner Space — a game injection framework from 2004. Here's how Stonemite compares:
+[ISBoxer](https://isboxer.com/) has been the go-to multiboxing tool for years. It's powerful, but it comes with a subscription, a lengthy setup process, and a lot of complexity most players don't need. Stonemite is a focused alternative:
 
 | | Stonemite | ISBoxer |
 |---|---|---|
-| **Price** | Free, open source | ~$50/year subscription for PiP windows |
-| **Setup** | Run the installer, done | Endless wizard pages, Inner Space install, character slots, window layout configs |
-| **PiP overlays** | Native DWM thumbnails, click-to-swap, drag-to-reorder | Video FX regions piped through a game injection layer |
-| **Character labels** | Auto-detected from EQ log files | Manual per-character setup |
-| **Input broadcasting** | Not included | Full key/mouse broadcasting and round-robin |
+| **Price** | Free, open source | ~$50/year subscription |
+| **Setup** | Run the installer, done | Inner Space install, wizard pages, character slots, window layout configs |
+| **PiP overlays** | Native DWM thumbnails, click-to-swap, drag-to-reorder | Video FX regions routed through Inner Space |
+| **Character labels** | Auto-detected | Manual per-character setup |
+| **Input broadcasting** | Coming soon | Full key/mouse broadcasting and round-robin |
 | **Window management** | Auto-detects EQ windows, z-order stacking | Window layouts with snapping and resizing |
-| **Resource usage** | ~5 MB single exe, no injection | Inner Space + ISBoxer addon, injects into every game process |
+| **Resource usage** | ~5 MB single exe | Inner Space + ISBoxer addon |
 | **Updates** | One-click from system tray | Manual download through Inner Space |
 
-**When to use Stonemite:** You want a PiP overlay that just works — no injection, no subscription, no 45-minute setup wizard. Launch it and go.
+**When to use Stonemite:** You want a PiP overlay that just works — no subscription, no 45-minute setup wizard. Launch it and go.
 
-**When to use ISBoxer:** You need input broadcasting or you enjoy configuring software more than playing EverQuest.
+**When to use ISBoxer:** You need advanced input broadcasting features today, or you're already comfortable with the Inner Space ecosystem.
 
 ## Configuration
 
@@ -77,9 +77,9 @@ No personal information, EQ character names, or config details are collected. Te
 
 ## Disclaimer
 
-Stonemite does not inject into, modify, or interact with the EverQuest process in any way. It uses standard Windows DWM thumbnail APIs to display copies of your game windows — the same mechanism Windows uses for taskbar previews and Alt-Tab. This is significantly less invasive than ISBoxer, which injects into every game process via Inner Space and is widely used without issue.
+Stonemite uses standard Windows DWM thumbnail APIs to display copies of your game windows — the same mechanism Windows uses for taskbar previews and Alt-Tab. The optional character detection feature uses a lightweight DLL proxy to read log file names and identify which character is on each window.
 
-That said, use Stonemite at your own risk. The author is not responsible for any account actions including suspensions, bans, or other consequences resulting from its use.
+Use Stonemite at your own risk. The author is not responsible for any account actions including suspensions, bans, or other consequences resulting from its use.
 
 ## License
 
