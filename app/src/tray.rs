@@ -169,8 +169,8 @@ unsafe extern "system" fn wnd_proc(
             let _ = SetTimer(hwnd, TIMER_POLL_EQ, POLL_INTERVAL_MS, None);
             // Register global hotkey for hiding overlay.
             let cfg = config::Config::load();
-            if let Some(vk) = cfg.hide_hotkey_vk() {
-                let _ = RegisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY, HOT_KEY_MODIFIERS(0), vk);
+            if let Some((mods, vk)) = cfg.hide_hotkey_vk() {
+                let _ = RegisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY, HOT_KEY_MODIFIERS(mods), vk);
             }
             LRESULT(0)
         }
@@ -211,8 +211,8 @@ unsafe extern "system" fn wnd_proc(
             // Re-register hotkey with new config.
             let _ = UnregisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY);
             let cfg = config::Config::load();
-            if let Some(vk) = cfg.hide_hotkey_vk() {
-                let _ = RegisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY, HOT_KEY_MODIFIERS(0), vk);
+            if let Some((mods, vk)) = cfg.hide_hotkey_vk() {
+                let _ = RegisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY, HOT_KEY_MODIFIERS(mods), vk);
             }
             // Reload overlay config (pip_edge, etc.) and rebuild layout.
             overlay::force_rebuild();
