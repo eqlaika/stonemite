@@ -44,7 +44,7 @@ const MAX_STRIP_WIDTH_FRACTION: f64 = 0.25;
 const MIN_STRIP_WIDTH_FRACTION: f64 = 0.05;
 
 /// Width of the resize grab zone along the interior edge (logical pixels).
-const RESIZE_HANDLE_WIDTH: i32 = 6;
+const RESIZE_HANDLE_WIDTH: i32 = 12;
 
 /// Thumbnail opacity (0-255). ~80% = 204.
 const THUMB_OPACITY_NORMAL: u8 = 204;
@@ -1550,11 +1550,35 @@ unsafe extern "system" fn pip_wnd_proc(
                 };
                 if Some(new_size) != s.custom_strip_width {
                     s.custom_strip_width = Some(new_size);
-                    rebuild_thumbnails(s);
-                    // Show windows after rebuild during resize.
-                    for pw in &s.pip_windows {
-                        let _ = ShowWindow(pw.hwnd, SW_SHOWNOACTIVATE);
+                    let (rects, sw, sh) = compute_positions(s);
+                    s.strip_width = sw;
+                    s.strip_height = sh;
+                    let d = s.dpi_scale;
+                    let border = dpi(BORDER_WIDTH, d);
+                    let label_h = dpi(LABEL_HEIGHT, d);
+                    for (i, pw) in s.pip_windows.iter().enumerate() {
+                        if let Some(rect) = rects.get(i) {
+                            let cw = rect.right - rect.left;
+                            let ch = rect.bottom - rect.top;
+                            let _ = SetWindowPos(pw.hwnd, HWND::default(),
+                                rect.left, rect.top, cw, ch,
+                                SWP_NOZORDER | SWP_NOACTIVATE);
+                            let thumb_rect = RECT {
+                                left: border,
+                                top: border + label_h,
+                                right: cw - border,
+                                bottom: ch - border,
+                            };
+                            let props = DWM_THUMBNAIL_PROPERTIES {
+                                dwFlags: DWM_TNP_RECTDESTINATION,
+                                rcDestination: thumb_rect,
+                                ..Default::default()
+                            };
+                            let _ = DwmUpdateThumbnailProperties(pw.thumb, &props);
+                            let _ = InvalidateRect(pw.hwnd, None, true);
+                        }
                     }
+                    update_active_label(s);
                 }
                 return LRESULT(0);
             }
