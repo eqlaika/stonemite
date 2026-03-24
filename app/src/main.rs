@@ -10,6 +10,13 @@ mod tray;
 mod updater;
 
 fn main() {
+    // `--settings` flag: run the settings dialog as a standalone window and exit.
+    // The tray app spawns us with this flag so eframe gets a clean main thread.
+    if std::env::args().any(|a| a == "--settings") {
+        settings_dialog::run_standalone();
+        return;
+    }
+
     // Ensure only one instance is running via a named mutex.
     let _mutex = unsafe {
         extern "system" {
