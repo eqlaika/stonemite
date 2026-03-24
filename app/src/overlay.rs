@@ -784,6 +784,7 @@ unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
 
     for (i, &pid) in s.pip_order.iter().enumerate() {
         let Some(eq_win) = s.eq_windows.iter().find(|w| w.pid == pid) else { continue };
+        if !IsWindow(eq_win.hwnd).as_bool() { continue; }
         let Some(rect) = rects.get(i) else { continue };
 
         let cw = rect.right - rect.left;
