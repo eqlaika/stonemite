@@ -11,6 +11,8 @@ Requires [just](https://github.com/casey/just) task runner.
 ```
 just build           # debug build
 just build-release   # release build
+just run             # quit running instance, build, and launch
+just quit            # quit a running instance
 just version         # print current version
 just clean           # remove build artifacts and dist/
 ```
@@ -23,8 +25,6 @@ cargo build --release -p stonemite
 ```
 
 Target: `x86_64-pc-windows-msvc`
-
-To quit a running instance: `cargo run -p stonemite -- --quit`
 
 ## Release
 

@@ -10,20 +10,6 @@ mod tray;
 mod updater;
 
 fn main() {
-    // --quit: find the running instance's message window and ask it to exit.
-    if std::env::args().any(|a| a == "--quit") {
-        unsafe {
-            use windows::core::w;
-            use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_CLOSE};
-            use windows::Win32::Foundation::WPARAM;
-            use windows::Win32::Foundation::LPARAM;
-            if let Ok(hwnd) = FindWindowW(w!("StonemiteTrayClass"), w!("Stonemite")) {
-                let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
-            }
-        }
-        return;
-    }
-
     // Ensure only one instance is running via a named mutex.
     let _mutex = unsafe {
         extern "system" {
