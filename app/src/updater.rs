@@ -6,6 +6,38 @@ pub enum UpdateResult {
     Error(String),
 }
 
+#[allow(dead_code)]
+pub enum CheckResult {
+    UpToDate,
+    Available { version: String },
+    Error(String),
+}
+
+/// Check whether a newer release exists on GitHub without downloading it.
+pub fn check_for_update() -> CheckResult {
+    let releases = self_update::backends::github::ReleaseList::configure()
+        .repo_owner("eqlaika")
+        .repo_name("stonemite")
+        .build()
+        .and_then(|list| list.fetch());
+
+    match releases {
+        Ok(rs) => {
+            if let Some(latest) = rs.into_iter().next() {
+                let ver = latest.version.trim_start_matches('v').to_string();
+                if ver == cargo_crate_version!() {
+                    CheckResult::UpToDate
+                } else {
+                    CheckResult::Available { version: ver }
+                }
+            } else {
+                CheckResult::UpToDate
+            }
+        }
+        Err(e) => CheckResult::Error(e.to_string()),
+    }
+}
+
 /// Check for a new release on GitHub and apply it if available.
 /// Returns the new version and release notes on success.
 pub fn check_and_update() -> UpdateResult {

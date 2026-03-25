@@ -84,6 +84,15 @@ pub struct Config {
     /// Toast notification duration in seconds. None = default (2.0).
     #[serde(default)]
     pub toast_duration: Option<f32>,
+    /// Automatically check for updates on launch. Default: true.
+    #[serde(default = "default_auto_update")]
+    pub auto_update_check: bool,
+    /// Days between automatic update checks. Default: 7.
+    #[serde(default = "default_update_interval")]
+    pub update_check_interval_days: u32,
+    /// ISO 8601 timestamp of last automatic update check.
+    #[serde(default)]
+    pub last_update_check: Option<String>,
     /// Enable anonymous usage telemetry. Default: true.
     #[serde(default = "default_telemetry")]
     pub telemetry: bool,
@@ -116,6 +125,14 @@ fn default_toast_enabled() -> bool {
     true
 }
 
+fn default_auto_update() -> bool {
+    true
+}
+
+fn default_update_interval() -> u32 {
+    7
+}
+
 fn default_telemetry() -> bool {
     true
 }
@@ -140,6 +157,9 @@ impl Default for Config {
             toast_enabled: default_toast_enabled(),
             toast_height: None,
             toast_duration: None,
+            auto_update_check: default_auto_update(),
+            update_check_interval_days: default_update_interval(),
+            last_update_check: None,
             telemetry: true,
             telemetry_id: None,
         }
