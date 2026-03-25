@@ -590,7 +590,7 @@ impl SettingsApp {
             ui.vertical(|ui| {
                 ui.strong(format!("Stonemite v{}", env!("CARGO_PKG_VERSION")));
                 ui.add_space(2.0);
-                ui.label("EverQuest multiboxing PiP overlay tool");
+                ui.label("EverQuest multiboxing tool");
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
                 ui.image(egui::load::SizedTexture::new(logo.id(), logo_size));
