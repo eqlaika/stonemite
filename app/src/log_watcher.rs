@@ -211,6 +211,32 @@ fn class_abbreviation(name: &str) -> Option<&'static str> {
 }
 
 // ---------------------------------------------------------------------------
+// Pet claim parsing
+// ---------------------------------------------------------------------------
+
+/// A parsed pet ownership claim: "Petname says, 'My leader is Owner.'"
+pub struct PetClaim<'a> {
+    pub pet: &'a str,
+    pub owner: &'a str,
+}
+
+impl<'a> PetClaim<'a> {
+    pub fn parse(body: &'a str) -> Option<Self> {
+        let mid = body.find(" says, 'My leader is ")?;
+        let pet = &body[..mid];
+        if pet.is_empty() || pet.contains(' ') {
+            return None;
+        }
+        let rest = &body[mid + " says, 'My leader is ".len()..];
+        let owner = rest.strip_suffix(".'")?.trim();
+        if owner.is_empty() || owner.contains(' ') {
+            return None;
+        }
+        Some(Self { pet, owner })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Log tailer — file tracking and /who state machine
 // ---------------------------------------------------------------------------
 
@@ -218,6 +244,17 @@ pub struct ClassUpdate {
     pub character: String,
     pub server: String,
     pub class_abbrev: &'static str,
+}
+
+pub struct PetUpdate {
+    pub pet: String,
+    pub owner: String,
+    pub server: String,
+}
+
+pub struct LogPollResult {
+    pub class_updates: Vec<ClassUpdate>,
+    pub pet_updates: Vec<PetUpdate>,
 }
 
 #[derive(Default)]
@@ -247,9 +284,10 @@ impl LogTailer {
         &mut self,
         eq_dir: &Path,
         active_chars: &[(String, String)],
-    ) -> Vec<ClassUpdate> {
+    ) -> LogPollResult {
         let logs_dir = eq_dir.join("Logs");
-        let mut updates = Vec::new();
+        let mut class_updates = Vec::new();
+        let mut pet_updates = Vec::new();
 
         // Build set of expected log paths.
         let mut expected: HashMap<PathBuf, &str> = HashMap::new();
@@ -305,44 +343,63 @@ impl LogTailer {
             let text = String::from_utf8_lossy(&buf);
             for line in text.lines() {
                 let Some(log_line) = LogLine::parse(line) else { continue };
-                process_who_line(log_line.body, &mut file_state.who_state, server, &mut updates);
+                process_log_line(
+                    log_line.body,
+                    &mut file_state.who_state,
+                    server,
+                    &mut class_updates,
+                    &mut pet_updates,
+                );
             }
         }
 
-        updates
+        LogPollResult {
+            class_updates,
+            pet_updates,
+        }
     }
 }
 
-fn process_who_line(
+fn process_log_line(
     body: &str,
-    state: &mut WhoParseState,
+    who_state: &mut WhoParseState,
     server: &str,
-    updates: &mut Vec<ClassUpdate>,
+    class_updates: &mut Vec<ClassUpdate>,
+    pet_updates: &mut Vec<PetUpdate>,
 ) {
+    // Pet claim detection runs on every line, independent of /who state.
+    if let Some(claim) = PetClaim::parse(body) {
+        pet_updates.push(PetUpdate {
+            pet: claim.pet.to_string(),
+            owner: claim.owner.to_string(),
+            server: server.to_string(),
+        });
+    }
+
     if body.starts_with("OFFLINE MODE") {
         return;
     }
 
-    match state {
+    match who_state {
         WhoParseState::Idle => {
             if body.contains("Players in EverQuest:") {
-                *state = WhoParseState::InBlock;
+                *who_state = WhoParseState::InBlock;
             }
         }
         WhoParseState::InBlock => {
             if (body.contains("There is") || body.contains("There are"))
                 && body.contains("player")
             {
-                *state = WhoParseState::Idle;
+                *who_state = WhoParseState::Idle;
                 return;
             }
             if body.contains("who request was cut short") {
-                *state = WhoParseState::Idle;
+                *who_state = WhoParseState::Idle;
                 return;
             }
             if let Some(entry) = WhoEntry::parse(body) {
                 if let Some(abbrev) = entry.class_abbreviation() {
-                    updates.push(ClassUpdate {
+                    class_updates.push(ClassUpdate {
                         character: entry.character.to_string(),
                         server: server.to_string(),
                         class_abbrev: abbrev,
