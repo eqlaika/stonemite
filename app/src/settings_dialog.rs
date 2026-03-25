@@ -80,6 +80,7 @@ pub fn run_standalone() {
 enum Tab {
     General,
     PiP,
+    Hotkeys,
     Broadcasting,
     About,
 }
@@ -165,6 +166,8 @@ struct SettingsApp {
     capturing_hotkey: bool,
     broadcast_hotkey: String,
     capturing_broadcast_hotkey: bool,
+    swap_hotkeys: [String; 6],
+    capturing_swap_hotkey: Option<usize>,
     filter_mode_index: usize,
     filter_keys_text: String,
     edge_index: usize,
@@ -186,6 +189,14 @@ impl SettingsApp {
             .position(|(_, v)| *v == cfg.broadcast_filter_mode)
             .unwrap_or(0);
 
+        let mut swap_hotkeys = [
+            "Ctrl+F1".to_string(), "Ctrl+F2".to_string(), "Ctrl+F3".to_string(),
+            "Ctrl+F4".to_string(), "Ctrl+F5".to_string(), "Ctrl+F6".to_string(),
+        ];
+        for (i, s) in cfg.swap_hotkeys.iter().enumerate().take(6) {
+            swap_hotkeys[i] = s.clone();
+        }
+
         Self {
             tab: Tab::General,
             eq_dir: cfg.eq_dir.clone(),
@@ -193,6 +204,8 @@ impl SettingsApp {
             capturing_hotkey: false,
             broadcast_hotkey: cfg.broadcast_hotkey.clone(),
             capturing_broadcast_hotkey: false,
+            swap_hotkeys,
+            capturing_swap_hotkey: None,
             filter_mode_index,
             filter_keys_text: cfg.broadcast_filter_keys.join(", "),
             edge_index,
@@ -213,6 +226,7 @@ impl eframe::App for SettingsApp {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.tab, Tab::General, "General");
                 ui.selectable_value(&mut self.tab, Tab::PiP, "PiP");
+                ui.selectable_value(&mut self.tab, Tab::Hotkeys, "Hotkeys");
                 ui.selectable_value(&mut self.tab, Tab::Broadcasting, "Broadcasting");
                 ui.selectable_value(&mut self.tab, Tab::About, "About");
             });
@@ -238,6 +252,7 @@ impl eframe::App for SettingsApp {
             match self.tab {
                 Tab::General => self.general_tab(ui),
                 Tab::PiP => self.pip_tab(ui),
+                Tab::Hotkeys => self.hotkeys_tab(ui),
                 Tab::Broadcasting => self.broadcasting_tab(ui),
                 Tab::About => self.about_tab(ui),
             }
@@ -370,6 +385,82 @@ impl SettingsApp {
                     );
                 }
             });
+        });
+    }
+
+    fn hotkeys_tab(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+
+        section(ui, "Swap to window", |ui| {
+            for slot in 0..6 {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Window {}:", slot + 1));
+                    if self.capturing_swap_hotkey == Some(slot) {
+                        let mods = ui.input(|i| i.modifiers);
+                        let mut parts = Vec::new();
+                        if mods.ctrl { parts.push("Ctrl"); }
+                        if mods.alt { parts.push("Alt"); }
+                        if mods.shift { parts.push("Shift"); }
+
+                        let label = if parts.is_empty() {
+                            "Press a key combo...".to_string()
+                        } else {
+                            format!("{}+...", parts.join("+"))
+                        };
+
+                        let btn = egui::Button::new(
+                            egui::RichText::new(&label).italics(),
+                        );
+                        let resp = ui.add(btn);
+
+                        let pressed = ui.input(|i| {
+                            i.events.iter().find_map(|e| {
+                                if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
+                                    if *key == egui::Key::Escape {
+                                        return Some(None);
+                                    }
+                                    egui_key_to_config_name(key).map(|name| {
+                                        let mut combo = Vec::new();
+                                        if modifiers.ctrl { combo.push("Ctrl"); }
+                                        if modifiers.alt { combo.push("Alt"); }
+                                        if modifiers.shift { combo.push("Shift"); }
+                                        combo.push(name);
+                                        Some(combo.join("+"))
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                        });
+
+                        match pressed {
+                            Some(Some(combo)) => {
+                                self.swap_hotkeys[slot] = combo;
+                                self.capturing_swap_hotkey = None;
+                            }
+                            Some(None) => {
+                                self.capturing_swap_hotkey = None;
+                            }
+                            None => {
+                                resp.request_focus();
+                            }
+                        }
+                    } else {
+                        let label = if self.swap_hotkeys[slot].is_empty() {
+                            "None".to_string()
+                        } else {
+                            self.swap_hotkeys[slot].clone()
+                        };
+                        if ui.button(&label).clicked() {
+                            self.capturing_swap_hotkey = Some(slot);
+                        }
+                        ui.colored_label(
+                            ui.visuals().weak_text_color(),
+                            "Click to change",
+                        );
+                    }
+                });
+            }
         });
     }
 
@@ -563,6 +654,7 @@ impl SettingsApp {
             pip_positions: existing.pip_positions,
             snap_grid: existing.snap_grid,
             trusik: existing.trusik,
+            swap_hotkeys: self.swap_hotkeys.to_vec(),
             broadcast_hotkey: self.broadcast_hotkey.clone(),
             broadcast_filter_mode: FILTER_MODE_OPTIONS[self.filter_mode_index].1.to_string(),
             broadcast_filter_keys: filter_keys,

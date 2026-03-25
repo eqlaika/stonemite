@@ -69,6 +69,9 @@ pub struct Config {
     /// Key names to filter (e.g. "Enter", "Escape").
     #[serde(default)]
     pub broadcast_filter_keys: Vec<String>,
+    /// Hotkeys for swapping to specific window slots (1–6). Default: Ctrl+F1..Ctrl+F6.
+    #[serde(default = "default_swap_hotkeys")]
+    pub swap_hotkeys: Vec<String>,
     /// Enable anonymous usage telemetry. Default: true.
     #[serde(default = "default_telemetry")]
     pub telemetry: bool,
@@ -93,6 +96,10 @@ fn default_broadcast_filter_mode() -> String {
     "blacklist".to_string()
 }
 
+fn default_swap_hotkeys() -> Vec<String> {
+    (1..=6).map(|i| format!("Ctrl+F{i}")).collect()
+}
+
 fn default_telemetry() -> bool {
     true
 }
@@ -109,6 +116,7 @@ impl Default for Config {
             pip_label_height: None,
             pip_label_opacity: None,
             trusik: false,
+            swap_hotkeys: default_swap_hotkeys(),
             broadcast_hotkey: default_broadcast_hotkey(),
             broadcast_filter_mode: default_broadcast_filter_mode(),
             broadcast_filter_keys: Vec::new(),
@@ -181,6 +189,13 @@ impl Config {
     /// Parse the broadcast_hotkey config string into (modifiers, virtual-key code).
     pub fn broadcast_hotkey_vk(&self) -> Option<(u32, u32)> {
         parse_hotkey_combo(&self.broadcast_hotkey)
+    }
+
+    /// Parse swap hotkey at the given index (0-based) into (modifiers, virtual-key code).
+    pub fn swap_hotkey_vk(&self, index: usize) -> Option<(u32, u32)> {
+        self.swap_hotkeys
+            .get(index)
+            .and_then(|s| parse_hotkey_combo(s))
     }
 }
 

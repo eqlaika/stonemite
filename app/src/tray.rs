@@ -81,6 +81,9 @@ const ID_BROADCAST_TOGGLE: u16 = 1006;
 const HOTKEY_HIDE_OVERLAY: i32 = 1;
 /// Hotkey ID for broadcast toggle.
 const HOTKEY_BROADCAST_TOGGLE: i32 = 2;
+/// Hotkey IDs for swap-to-window (slots 1–6). IDs 10–15.
+const HOTKEY_SWAP_BASE: i32 = 10;
+const MAX_SWAP_HOTKEYS: usize = 6;
 
 /// Timer ID for polling EQ windows.
 const TIMER_POLL_EQ: usize = 1;
@@ -181,6 +184,11 @@ unsafe extern "system" fn wnd_proc(
                     let _ = RegisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE, HOT_KEY_MODIFIERS(mods), vk);
                 }
             }
+            for i in 0..MAX_SWAP_HOTKEYS {
+                if let Some((mods, vk)) = cfg.swap_hotkey_vk(i) {
+                    let _ = RegisterHotKey(hwnd, HOTKEY_SWAP_BASE + i as i32, HOT_KEY_MODIFIERS(mods), vk);
+                }
+            }
             LRESULT(0)
         }
         WM_TIMER => {
@@ -198,11 +206,15 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_HOTKEY => {
-            if wparam.0 as i32 == HOTKEY_HIDE_OVERLAY && overlay::is_eq_active() {
+            let id = wparam.0 as i32;
+            if id == HOTKEY_HIDE_OVERLAY && overlay::is_eq_active() {
                 overlay::toggle_hidden();
-            } else if wparam.0 as i32 == HOTKEY_BROADCAST_TOGGLE {
+            } else if id == HOTKEY_BROADCAST_TOGGLE {
                 broadcast::toggle();
                 overlay::refresh_broadcast_label();
+            } else if id >= HOTKEY_SWAP_BASE && id < HOTKEY_SWAP_BASE + MAX_SWAP_HOTKEYS as i32 {
+                let slot = (id - HOTKEY_SWAP_BASE) as usize + 1; // 1-based window number
+                overlay::swap_to_number(slot);
             }
             LRESULT(0)
         }
@@ -227,6 +239,9 @@ unsafe extern "system" fn wnd_proc(
             // Re-register hotkeys with new config.
             let _ = UnregisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY);
             let _ = UnregisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE);
+            for i in 0..MAX_SWAP_HOTKEYS {
+                let _ = UnregisterHotKey(hwnd, HOTKEY_SWAP_BASE + i as i32);
+            }
             let cfg = config::Config::load();
             if let Some((mods, vk)) = cfg.hide_hotkey_vk() {
                 let _ = RegisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY, HOT_KEY_MODIFIERS(mods), vk);
@@ -234,6 +249,11 @@ unsafe extern "system" fn wnd_proc(
             if cfg.trusik {
                 if let Some((mods, vk)) = cfg.broadcast_hotkey_vk() {
                     let _ = RegisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE, HOT_KEY_MODIFIERS(mods), vk);
+                }
+            }
+            for i in 0..MAX_SWAP_HOTKEYS {
+                if let Some((mods, vk)) = cfg.swap_hotkey_vk(i) {
+                    let _ = RegisterHotKey(hwnd, HOTKEY_SWAP_BASE + i as i32, HOT_KEY_MODIFIERS(mods), vk);
                 }
             }
             broadcast::on_settings_changed();
@@ -244,6 +264,9 @@ unsafe extern "system" fn wnd_proc(
         WM_DESTROY => {
             let _ = UnregisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY);
             let _ = UnregisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE);
+            for i in 0..MAX_SWAP_HOTKEYS {
+                let _ = UnregisterHotKey(hwnd, HOTKEY_SWAP_BASE + i as i32);
+            }
             let _ = KillTimer(hwnd, TIMER_POLL_EQ);
             PostQuitMessage(0);
             LRESULT(0)

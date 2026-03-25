@@ -1194,6 +1194,24 @@ unsafe extern "system" fn foreground_event_proc(
 // Swap
 // ---------------------------------------------------------------------------
 
+/// Swap to the window with the given stable number (1-based).
+/// Called from hotkey handlers.
+pub unsafe fn swap_to_number(number: usize) {
+    let Some(s) = state().as_ref() else { return };
+    // If the window with this number is already active, do nothing.
+    if let Some(active_pid) = s.active_pid {
+        if s.eq_windows.iter().any(|w| w.pid == active_pid && w.number == number) {
+            return;
+        }
+    }
+    // Find the pip_index for the window with this number.
+    let target_pid = s.eq_windows.iter().find(|w| w.number == number).map(|w| w.pid);
+    let Some(target) = target_pid else { return };
+    let Some(pip_index) = s.pip_order.iter().position(|&p| p == target) else { return };
+    let _ = s;
+    swap_to(pip_index);
+}
+
 unsafe fn swap_to(pip_index: usize) {
     let Some(s) = state().as_mut() else { return };
 
