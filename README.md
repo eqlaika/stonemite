@@ -6,6 +6,8 @@
 
 EverQuest multiboxing tool for Windows.
 
+> **Note:** Stonemite works best with EQ's borderless fullscreen mode, added in the March 2026 patch.
+
 Stonemite makes multiboxing EQ easy — PiP overlays with click-to-swap, swap hotkeys, key broadcasting, automatic character detection, and a drag-and-drop layout editor. No subscription, no setup wizard.
 
 ## Install
