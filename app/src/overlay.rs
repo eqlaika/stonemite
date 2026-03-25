@@ -186,8 +186,6 @@ struct PipResizeDragState {
 }
 
 struct StripResizeDragState {
-    #[allow(dead_code)]
-    pip_index: usize,
     start_pt: POINT,
     start_size: i32,
 }
@@ -1349,64 +1347,69 @@ unsafe fn show_char_menu(s: &mut OverlayState, target_pid: u32, screen_pt: POINT
     let eq_dir = cfg.eq_directory();
     let candidates = eq_characters::find_active_characters(&eq_dir, Duration::from_secs(86400));
 
-    let hmenu = CreatePopupMenu().unwrap();
+    let Ok(hmenu) = CreatePopupMenu() else { return };
 
     // Character assignment submenu, grouped by server.
-    let char_menu = CreatePopupMenu().unwrap();
-    let mut servers: Vec<String> = Vec::new();
-    for c in &candidates {
-        if !servers.contains(&c.server) {
-            servers.push(c.server.clone());
+    if let Ok(char_menu) = CreatePopupMenu() {
+        let mut servers: Vec<String> = Vec::new();
+        for c in &candidates {
+            if !servers.contains(&c.server) {
+                servers.push(c.server.clone());
+            }
         }
-    }
 
-    if servers.len() == 1 {
-        for (i, c) in candidates.iter().enumerate() {
-            let label = format!("{}\0", c.character);
-            let wide: Vec<u16> = label.encode_utf16().collect();
-            let _ = AppendMenuW(char_menu, MF_STRING,
-                (IDM_CHAR_BASE + i as u32) as usize,
-                windows::core::PCWSTR(wide.as_ptr()));
-        }
-    } else {
-        for server in &servers {
-            let server_menu = CreatePopupMenu().unwrap();
+        if servers.len() == 1 {
             for (i, c) in candidates.iter().enumerate() {
-                if c.server != *server { continue; }
                 let label = format!("{}\0", c.character);
                 let wide: Vec<u16> = label.encode_utf16().collect();
-                let _ = AppendMenuW(server_menu, MF_STRING,
+                let _ = AppendMenuW(char_menu, MF_STRING,
                     (IDM_CHAR_BASE + i as u32) as usize,
                     windows::core::PCWSTR(wide.as_ptr()));
             }
-            let server_label = format!("{server}\0");
-            let wide: Vec<u16> = server_label.encode_utf16().collect();
-            let _ = AppendMenuW(char_menu, MF_POPUP, server_menu.0 as usize,
-                windows::core::PCWSTR(wide.as_ptr()));
+        } else {
+            for server in &servers {
+                let Ok(server_menu) = CreatePopupMenu() else { continue };
+                for (i, c) in candidates.iter().enumerate() {
+                    if c.server != *server { continue; }
+                    let label = format!("{}\0", c.character);
+                    let wide: Vec<u16> = label.encode_utf16().collect();
+                    let _ = AppendMenuW(server_menu, MF_STRING,
+                        (IDM_CHAR_BASE + i as u32) as usize,
+                        windows::core::PCWSTR(wide.as_ptr()));
+                }
+                let server_label = format!("{server}\0");
+                let wide: Vec<u16> = server_label.encode_utf16().collect();
+                let _ = AppendMenuW(char_menu, MF_POPUP, server_menu.0 as usize,
+                    windows::core::PCWSTR(wide.as_ptr()));
+            }
+        }
+
+        if !candidates.is_empty() {
+            let assign_label: Vec<u16> = "Assign character\0".encode_utf16().collect();
+            let _ = AppendMenuW(hmenu, MF_POPUP, char_menu.0 as usize,
+                windows::core::PCWSTR(assign_label.as_ptr()));
         }
     }
 
-    if !candidates.is_empty() {
-        let assign_label: Vec<u16> = "Assign character\0".encode_utf16().collect();
-        let _ = AppendMenuW(hmenu, MF_POPUP, char_menu.0 as usize,
-            windows::core::PCWSTR(assign_label.as_ptr()));
-    }
-
     // Number reassignment submenu.
-    let num_menu = CreatePopupMenu().unwrap();
-    for n in 1..=s.eq_windows.len() {
-        let label = format!("#{n}\0");
-        let wide: Vec<u16> = label.encode_utf16().collect();
-        let _ = AppendMenuW(num_menu, MF_STRING,
-            (IDM_NUMBER_BASE + n as u32) as usize,
-            windows::core::PCWSTR(wide.as_ptr()));
+    if let Ok(num_menu) = CreatePopupMenu() {
+        for n in 1..=s.eq_windows.len() {
+            let label = format!("#{n}\0");
+            let wide: Vec<u16> = label.encode_utf16().collect();
+            let _ = AppendMenuW(num_menu, MF_STRING,
+                (IDM_NUMBER_BASE + n as u32) as usize,
+                windows::core::PCWSTR(wide.as_ptr()));
+        }
+        let num_label: Vec<u16> = "Assign number\0".encode_utf16().collect();
+        let _ = AppendMenuW(hmenu, MF_POPUP, num_menu.0 as usize,
+            windows::core::PCWSTR(num_label.as_ptr()));
     }
-    let num_label: Vec<u16> = "Assign number\0".encode_utf16().collect();
-    let _ = AppendMenuW(hmenu, MF_POPUP, num_menu.0 as usize,
-        windows::core::PCWSTR(num_label.as_ptr()));
 
     // PiP Edge submenu.
-    let edge_menu = CreatePopupMenu().unwrap();
+    let Ok(edge_menu) = CreatePopupMenu() else {
+        let _ = DestroyMenu(hmenu);
+        return;
+    };
     let edge_options = [
         (config::PipEdge::Right, "Right"),
         (config::PipEdge::Left, "Left"),
@@ -1537,8 +1540,18 @@ unsafe fn handle_number_assign(s: &mut OverlayState, new_number: usize) {
     let _ = std::mem::take(&mut s.context_menu_candidates);
 
     let old_number = s.eq_windows.iter().find(|w| w.pid == target_pid).map(|w| w.number).unwrap_or(0);
+    // Swap numbers with any window that already has new_number.
+    // If the target had no number (0), assign the displaced window the next available number.
+    let replacement = if old_number > 0 {
+        old_number
+    } else {
+        // Target was unassigned — give displaced window the next free number.
+        let mut n = 1;
+        while s.eq_windows.iter().any(|w| w.number == n) || n == new_number { n += 1; }
+        n
+    };
     if let Some(other) = s.eq_windows.iter_mut().find(|w| w.number == new_number && w.pid != target_pid) {
-        other.number = old_number;
+        other.number = replacement;
     }
     if let Some(w) = s.eq_windows.iter_mut().find(|w| w.pid == target_pid) {
         w.number = new_number;
@@ -2601,7 +2614,6 @@ unsafe extern "system" fn pip_wnd_proc(
                         let is_vertical = matches!(s.pip_edge, config::PipEdge::Right | config::PipEdge::Left);
                         let start_size = if is_vertical { s.strip_width } else { s.strip_height };
                         s.strip_resize_drag = Some(StripResizeDragState {
-                            pip_index: pip_idx,
                             start_pt: cursor,
                             start_size,
                         });
