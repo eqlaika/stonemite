@@ -1013,8 +1013,10 @@ unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
 
     let reference = s.eq_windows.first().map(|w| w.hwnd);
     s.monitor_rect = eq_windows::get_monitor_work_area(reference);
-    // Use label_hwnd for DPI since we no longer have a single overlay_hwnd.
-    s.dpi_scale = get_dpi_scale(s.active_label_hwnd);
+    // Get DPI from the same monitor as the EQ windows, so it stays consistent
+    // with monitor_rect after display changes (unplug/replug, DPI change).
+    let dpi_hwnd = reference.unwrap_or(s.active_label_hwnd);
+    s.dpi_scale = get_dpi_scale(dpi_hwnd);
 
     let (rects, sw, sh) = compute_positions(s);
     s.strip_width = sw;
@@ -2740,7 +2742,9 @@ unsafe extern "system" fn pip_wnd_proc(
 
         WM_DPICHANGED | WM_DISPLAYCHANGE => {
             if let Some(s) = state().as_mut() {
-                s.dpi_scale = get_dpi_scale(hwnd);
+                // Don't set dpi_scale from this PiP window — it may be on the
+                // wrong monitor after a display change. rebuild_thumbnails
+                // derives DPI from the EQ window (same source as monitor_rect).
                 rebuild_thumbnails(s);
                 update_visibility(s);
             }
