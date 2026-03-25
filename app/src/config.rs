@@ -72,6 +72,9 @@ pub struct Config {
     /// Hotkeys for swapping to specific window slots (1–6). Default: Ctrl+F1..Ctrl+F6.
     #[serde(default = "default_swap_hotkeys")]
     pub swap_hotkeys: Vec<String>,
+    /// Remembered settings window position [x, y].
+    #[serde(default)]
+    pub settings_position: Option<[f32; 2]>,
     /// Enable anonymous usage telemetry. Default: true.
     #[serde(default = "default_telemetry")]
     pub telemetry: bool,
@@ -117,6 +120,7 @@ impl Default for Config {
             pip_label_opacity: None,
             trusik: false,
             swap_hotkeys: default_swap_hotkeys(),
+            settings_position: None,
             broadcast_hotkey: default_broadcast_hotkey(),
             broadcast_filter_mode: default_broadcast_filter_mode(),
             broadcast_filter_keys: Vec::new(),
