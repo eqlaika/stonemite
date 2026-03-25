@@ -960,7 +960,7 @@ unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
         let ch = rect.bottom - rect.top;
 
         let hwnd = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             pip_class, w!("StonemitePip"), WS_POPUP,
             rect.left, rect.top, cw, ch,
             None, None, None, None,
@@ -1128,11 +1128,19 @@ unsafe fn update_visibility(s: &mut OverlayState) {
 
     let has_pip = !s.pip_order.is_empty();
     let fg = GetForegroundWindow();
+    let visible = has_pip && (s.context_menu_open || is_eq_or_ours(fg, s));
 
-    if has_pip && (s.context_menu_open || is_eq_or_ours(fg, s)) {
+
+    if visible {
+        // Show PiP thumbnail windows first, then labels on top.  Interactions
+        // with a PiP can promote it above its label in the topmost z-order,
+        // so we re-assert label z-order with SetWindowPos(HWND_TOPMOST).
         for pw in &s.pip_windows {
             let _ = ShowWindow(pw.hwnd, SW_SHOWNOACTIVATE);
-            let _ = ShowWindow(pw.label_hwnd, SW_SHOWNOACTIVATE);
+        }
+        for pw in &s.pip_windows {
+            let _ = SetWindowPos(pw.label_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE);
         }
         if !s.active_label_text.is_empty() {
             let _ = ShowWindow(s.active_label_hwnd, SW_SHOWNOACTIVATE);
@@ -1203,11 +1211,7 @@ unsafe fn swap_to(pip_index: usize) {
     }
 
     rebuild_thumbnails(s);
-    // Show PiP windows after swap.
-    for pw in &s.pip_windows {
-        let _ = ShowWindow(pw.hwnd, SW_SHOWNOACTIVATE);
-        let _ = ShowWindow(pw.label_hwnd, SW_SHOWNOACTIVATE);
-    }
+    update_visibility(s);
 }
 
 // ---------------------------------------------------------------------------
@@ -1340,6 +1344,8 @@ unsafe fn show_char_menu(s: &mut OverlayState, target_pid: u32, screen_pt: POINT
     s.context_menu_open = true;
 
     let _ = SetForegroundWindow(owner_hwnd);
+    // Re-assert PiP label z-order after SetForegroundWindow promoted the PiP window.
+    update_visibility(s);
     let _ = TrackPopupMenu(hmenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON,
         screen_pt.x, screen_pt.y, 0, owner_hwnd, None);
 
@@ -1804,22 +1810,6 @@ unsafe fn paint_pip_label(hwnd: HWND) {
     let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
     let _ = DrawTextW(hdc, &mut wide, &mut text_rc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    // Edit mode grip indicator (three dots).
-    if s.edit_mode {
-        let grip_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00FFFFFF));
-        let cx = rc.right - dpi(16, d);
-        let cy = label_h / 2;
-        let dot_size = dpi(3, d);
-        let dot_gap = dpi(5, d);
-        for j in 0..3 {
-            let dot_rect = RECT {
-                left: cx, top: cy - dot_gap + j * dot_gap - dot_size / 2,
-                right: cx + dot_size, bottom: cy - dot_gap + j * dot_gap + dot_size / 2,
-            };
-            let _ = FillRect(hdc, &dot_rect, grip_brush);
-        }
-        let _ = windows::Win32::Graphics::Gdi::DeleteObject(grip_brush);
-    }
 
     let _ = SelectObject(hdc, old_font2);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(name_font);
@@ -2352,11 +2342,7 @@ unsafe extern "system" fn pip_wnd_proc(
                         if to_index != drag.from_index && to_index < s.pip_order.len() && drag.from_index < s.pip_order.len() {
                             s.pip_order.swap(drag.from_index, to_index);
                             rebuild_thumbnails(s);
-                            // Show after rebuild.
-                            for pw in &s.pip_windows {
-                                let _ = ShowWindow(pw.hwnd, SW_SHOWNOACTIVATE);
-                                let _ = ShowWindow(pw.label_hwnd, SW_SHOWNOACTIVATE);
-                            }
+                            update_visibility(s);
                         }
                     }
                 } else {
