@@ -85,7 +85,6 @@ enum Tab {
     PiP,
     Hotkeys,
     Broadcasting,
-    Notifications,
     About,
 }
 
@@ -244,7 +243,6 @@ impl eframe::App for SettingsApp {
                 ui.selectable_value(&mut self.tab, Tab::PiP, "PiP");
                 ui.selectable_value(&mut self.tab, Tab::Hotkeys, "Hotkeys");
                 ui.selectable_value(&mut self.tab, Tab::Broadcasting, "Broadcasting");
-                ui.selectable_value(&mut self.tab, Tab::Notifications, "Notifications");
                 ui.selectable_value(&mut self.tab, Tab::About, "About");
             });
             ui.add_space(2.0);
@@ -272,7 +270,6 @@ impl eframe::App for SettingsApp {
                 Tab::PiP => self.pip_tab(ui),
                 Tab::Hotkeys => self.hotkeys_tab(ui),
                 Tab::Broadcasting => self.broadcasting_tab(ui),
-                Tab::Notifications => self.notifications_tab(ui),
                 Tab::About => self.about_tab(ui),
             }
         });
@@ -297,6 +294,32 @@ impl SettingsApp {
                         self.eq_dir = path.display().to_string();
                     }
                 }
+            });
+        });
+
+        section(ui, "Toast notifications", |ui| {
+            ui.checkbox(&mut self.toast_enabled, "Enabled");
+            ui.horizontal(|ui| {
+                ui.label("Height:");
+                ui.scope(|ui| {
+                    ui.style_mut().visuals.widgets.inactive.bg_fill =
+                        egui::Color32::from_gray(220);
+                    ui.add(egui::Slider::new(&mut self.toast_height, 24..=128).suffix(" px"));
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.label("Duration:");
+                ui.scope(|ui| {
+                    ui.style_mut().visuals.widgets.inactive.bg_fill =
+                        egui::Color32::from_gray(220);
+                    ui.add(
+                        egui::Slider::new(&mut self.toast_duration_tenths, 5..=100)
+                            .custom_formatter(|v, _| format!("{:.1} s", v / 10.0))
+                            .custom_parser(|s| {
+                                s.trim().trim_end_matches('s').trim().parse::<f64>().ok().map(|v| v * 10.0)
+                            }),
+                    );
+                });
             });
         });
     }
@@ -577,36 +600,6 @@ impl SettingsApp {
                 );
             });
         }
-    }
-
-    fn notifications_tab(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
-
-        section(ui, "Toast notifications", |ui| {
-            ui.checkbox(&mut self.toast_enabled, "Enabled");
-            ui.horizontal(|ui| {
-                ui.label("Height:");
-                ui.scope(|ui| {
-                    ui.style_mut().visuals.widgets.inactive.bg_fill =
-                        egui::Color32::from_gray(220);
-                    ui.add(egui::Slider::new(&mut self.toast_height, 24..=128).suffix(" px"));
-                });
-            });
-            ui.horizontal(|ui| {
-                ui.label("Duration:");
-                ui.scope(|ui| {
-                    ui.style_mut().visuals.widgets.inactive.bg_fill =
-                        egui::Color32::from_gray(220);
-                    ui.add(
-                        egui::Slider::new(&mut self.toast_duration_tenths, 5..=100)
-                            .custom_formatter(|v, _| format!("{:.1} s", v / 10.0))
-                            .custom_parser(|s| {
-                                s.trim().trim_end_matches('s').trim().parse::<f64>().ok().map(|v| v * 10.0)
-                            }),
-                    );
-                });
-            });
-        });
     }
 
     fn about_tab(&mut self, ui: &mut egui::Ui) {
