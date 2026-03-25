@@ -284,11 +284,19 @@ impl SettingsApp {
         section(ui, "Labels", |ui| {
             ui.horizontal(|ui| {
                 ui.label("Height:");
-                ui.add(egui::Slider::new(&mut self.label_height, 24..=64).suffix(" px"));
+                ui.scope(|ui| {
+                    ui.style_mut().visuals.widgets.inactive.bg_fill =
+                        egui::Color32::from_gray(220);
+                    ui.add(egui::Slider::new(&mut self.label_height, 24..=64).suffix(" px"));
+                });
             });
             ui.horizontal(|ui| {
                 ui.label("Opacity:");
-                ui.add(egui::Slider::new(&mut self.label_opacity, 10..=100).suffix("%"));
+                ui.scope(|ui| {
+                    ui.style_mut().visuals.widgets.inactive.bg_fill =
+                        egui::Color32::from_gray(220);
+                    ui.add(egui::Slider::new(&mut self.label_opacity, 10..=100).suffix("%"));
+                });
             });
         });
 
