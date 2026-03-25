@@ -960,7 +960,7 @@ unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
         let ch = rect.bottom - rect.top;
 
         let hwnd = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
             pip_class, w!("StonemitePip"), WS_POPUP,
             rect.left, rect.top, cw, ch,
             None, None, None, None,
