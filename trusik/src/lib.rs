@@ -1,4 +1,7 @@
+mod device_proxy;
+mod di8_proxy;
 mod iat_hook;
+mod key_shm;
 mod log;
 pub mod shm;
 
@@ -69,8 +72,10 @@ extern "system" fn DllMain(_hinst: HINSTANCE, reason: u32, _reserved: *mut c_voi
     TRUE
 }
 
-/// Pure passthrough — call the real DirectInput8Create and return its result.
-/// No COM wrapping, no interface interception.
+/// The exported DirectInput8Create that EQ will call.
+///
+/// We call the real function, then wrap the returned IDirectInput8 interface
+/// in our proxy so we can intercept CreateDevice calls.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn DirectInput8Create(
     hinst: HINSTANCE,
@@ -84,6 +89,27 @@ pub unsafe extern "system" fn DirectInput8Create(
         None => return HRESULT(-1),
     };
 
-    log::write("DirectInput8Create: passthrough");
-    unsafe { real_create(hinst, dwversion, riidltf, ppvout, punkouter) }
+    log::write("DirectInput8Create called");
+
+    let hr = unsafe { real_create(hinst, dwversion, riidltf, ppvout, punkouter) };
+    if hr.is_err() {
+        log::write(&format!("DirectInput8Create: real call failed (0x{:08X})", hr.0));
+        return hr;
+    }
+
+    // Wrap the real IDirectInput8 in our proxy.
+    let real_di8 = unsafe { *ppvout };
+    let proxy = di8_proxy::DI8Proxy::new(real_di8);
+    let proxy_ptr = Box::into_raw(Box::new(proxy));
+    unsafe { *ppvout = proxy_ptr as *mut c_void };
+
+    // Install keyboard IAT hooks (once).
+    use std::sync::Once;
+    static IAT_KB_ONCE: Once = Once::new();
+    IAT_KB_ONCE.call_once(|| {
+        unsafe { iat_hook::install_keyboard_hooks() };
+    });
+
+    log::write("DirectInput8Create: wrapped in proxy");
+    hr
 }

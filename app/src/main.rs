@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+mod broadcast;
 mod config;
 mod eq_characters;
 mod eq_windows;
@@ -59,8 +60,16 @@ fn main() {
     // Initialize overlay (creates the overlay window, hidden until EQ windows are detected).
     overlay::init();
 
+    // Initialize broadcast engine if trusik is enabled.
+    if config.trusik {
+        broadcast::init();
+    }
+
     // Run tray icon and message loop (blocks until exit).
     tray::run();
+
+    // Cleanup broadcast engine before exit.
+    broadcast::cleanup();
 
     // Cleanup overlay before exit.
     overlay::cleanup();

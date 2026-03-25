@@ -54,6 +54,15 @@ pub struct Config {
     /// Enable trusik DLL proxy for character detection. Requires restart.
     #[serde(default)]
     pub trusik: bool,
+    /// Hotkey for toggling key broadcasting. Default: "Pause".
+    #[serde(default = "default_broadcast_hotkey")]
+    pub broadcast_hotkey: String,
+    /// Filter mode: "blacklist" or "whitelist". Default: "blacklist".
+    #[serde(default = "default_broadcast_filter_mode")]
+    pub broadcast_filter_mode: String,
+    /// Key names to filter (e.g. "Enter", "Escape").
+    #[serde(default)]
+    pub broadcast_filter_keys: Vec<String>,
     /// Enable anonymous usage telemetry. Default: true.
     #[serde(default = "default_telemetry")]
     pub telemetry: bool,
@@ -70,6 +79,14 @@ fn default_snap_grid() -> u32 {
     16
 }
 
+fn default_broadcast_hotkey() -> String {
+    "Pause".to_string()
+}
+
+fn default_broadcast_filter_mode() -> String {
+    "blacklist".to_string()
+}
+
 fn default_telemetry() -> bool {
     true
 }
@@ -84,6 +101,9 @@ impl Default for Config {
             pip_positions: Vec::new(),
             snap_grid: default_snap_grid(),
             trusik: false,
+            broadcast_hotkey: default_broadcast_hotkey(),
+            broadcast_filter_mode: default_broadcast_filter_mode(),
+            broadcast_filter_keys: Vec::new(),
             telemetry: true,
             telemetry_id: None,
         }
@@ -149,10 +169,15 @@ impl Config {
     pub fn hide_hotkey_vk(&self) -> Option<(u32, u32)> {
         parse_hotkey_combo(&self.hide_hotkey)
     }
+
+    /// Parse the broadcast_hotkey config string into (modifiers, virtual-key code).
+    pub fn broadcast_hotkey_vk(&self) -> Option<(u32, u32)> {
+        parse_hotkey_combo(&self.broadcast_hotkey)
+    }
 }
 
 /// Map a key name (case-insensitive) to a Windows virtual-key code.
-fn parse_vk_name(name: &str) -> Option<u32> {
+pub fn parse_vk_name(name: &str) -> Option<u32> {
     match name.trim().to_uppercase().as_str() {
         // Function keys
         "F1" => Some(0x70),  "F2" => Some(0x71),  "F3" => Some(0x72),  "F4" => Some(0x73),

@@ -68,6 +68,8 @@ const IDM_HIDE_OVERLAY: u32 = 7100;
 const IDM_EDIT_MODE: u32 = 7200;
 /// Menu ID for resetting to auto layout.
 const IDM_RESET_LAYOUT: u32 = 7300;
+/// Menu ID for broadcast toggle.
+const IDM_BROADCAST_TOGGLE: u32 = 7400;
 
 /// Distinct background colors for per-number labels (COLORREF = 0x00BBGGRR).
 const LABEL_COLORS: &[u32] = &[
@@ -150,6 +152,8 @@ struct OverlayState {
     active_label_hwnd: HWND,
     active_label_text: String,
     active_label_color: u32,
+    /// Broadcast banner window, shown next to the active label when broadcasting.
+    broadcast_label_hwnd: HWND,
     event_hook: HWINEVENTHOOK,
     monitor_rect: RECT,
     dpi_scale: f64,
@@ -255,6 +259,7 @@ pub fn debug_log(msg: &str) {
 
 fn is_our_window(hwnd: HWND, s: &OverlayState) -> bool {
     if hwnd == s.active_label_hwnd { return true; }
+    if hwnd == s.broadcast_label_hwnd { return true; }
     s.pip_windows.iter().any(|pw| pw.hwnd == hwnd)
 }
 
@@ -490,6 +495,24 @@ unsafe fn init_inner() -> HWND {
 
     let _ = SetLayeredWindowAttributes(label_hwnd, None, 255, LWA_ALPHA);
 
+    // Register broadcast banner window class.
+    let bc_class = w!("StonemiteBroadcastClass");
+    let bc_wc = WNDCLASSW {
+        lpfnWndProc: Some(broadcast_label_wnd_proc),
+        lpszClassName: bc_class.into(),
+        hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+        ..Default::default()
+    };
+    RegisterClassW(&bc_wc);
+
+    let bc_hwnd = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+        bc_class, w!("StonemiteBroadcast"), WS_POPUP,
+        0, 0, 0, 0, None, None, None, None,
+    ).expect("Failed to create broadcast label window");
+
+    let _ = SetLayeredWindowAttributes(bc_hwnd, None, 255, LWA_ALPHA);
+
     let hook = SetWinEventHook(
         EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
         None, Some(foreground_event_proc), 0, 0, WINEVENT_OUTOFCONTEXT,
@@ -506,6 +529,7 @@ unsafe fn init_inner() -> HWND {
         active_label_hwnd: label_hwnd,
         active_label_text: String::new(),
         active_label_color: LABEL_COLORS[0],
+        broadcast_label_hwnd: bc_hwnd,
         event_hook: hook,
         monitor_rect: RECT::default(),
         dpi_scale: get_dpi_scale(label_hwnd),
@@ -556,6 +580,11 @@ unsafe fn poll_inner() {
         if s.trusik_enabled {
             trusik_poll_characters(s);
         }
+        // Update broadcast targets.
+        let pids: Vec<u32> = s.eq_windows.iter().map(|w| w.pid).collect();
+        crate::broadcast::update_targets(&pids, s.active_pid);
+        update_active_label(s);
+        update_visibility(s);
         return;
     }
 
@@ -629,6 +658,10 @@ unsafe fn poll_inner() {
     if s.trusik_enabled {
         trusik_poll_characters(s);
     }
+
+    // Update broadcast targets.
+    let pids: Vec<u32> = s.eq_windows.iter().map(|w| w.pid).collect();
+    crate::broadcast::update_targets(&pids, s.active_pid);
 
     rebuild_thumbnails(s);
     update_visibility(s);
@@ -879,6 +912,7 @@ unsafe fn update_active_label(s: &mut OverlayState) {
 
     if s.active_label_text.is_empty() {
         let _ = ShowWindow(s.active_label_hwnd, SW_HIDE);
+        let _ = ShowWindow(s.broadcast_label_hwnd, SW_HIDE);
         return;
     }
 
@@ -897,6 +931,20 @@ unsafe fn update_active_label(s: &mut OverlayState) {
     );
 
     let _ = InvalidateRect(s.active_label_hwnd, None, true);
+
+    // Position broadcast banner next to the active label.
+    if crate::broadcast::is_active() {
+        let bc_text = "Key broadcasting active";
+        let bc_width = (bc_text.len() as i32 * (label_h - dpi(8, s.dpi_scale)) * 3) / 5 + label_h;
+        let _ = SetWindowPos(
+            s.broadcast_label_hwnd, HWND_TOPMOST,
+            top_left.x + text_width, top_left.y, bc_width, label_h,
+            SWP_NOACTIVATE,
+        );
+        let _ = InvalidateRect(s.broadcast_label_hwnd, None, true);
+    } else {
+        let _ = ShowWindow(s.broadcast_label_hwnd, SW_HIDE);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -910,6 +958,7 @@ unsafe fn update_visibility(s: &mut OverlayState) {
             let _ = ShowWindow(pw.hwnd, SW_HIDE);
         }
         let _ = ShowWindow(s.active_label_hwnd, SW_HIDE);
+        let _ = ShowWindow(s.broadcast_label_hwnd, SW_HIDE);
         return;
     }
 
@@ -923,12 +972,18 @@ unsafe fn update_visibility(s: &mut OverlayState) {
         if !s.active_label_text.is_empty() {
             let _ = ShowWindow(s.active_label_hwnd, SW_SHOWNOACTIVATE);
         }
+        if crate::broadcast::is_active() {
+            let _ = ShowWindow(s.broadcast_label_hwnd, SW_SHOWNOACTIVATE);
+        } else {
+            let _ = ShowWindow(s.broadcast_label_hwnd, SW_HIDE);
+        }
     } else {
         for pw in &mut s.pip_windows {
             pw.hovered = false;
             let _ = ShowWindow(pw.hwnd, SW_HIDE);
         }
         let _ = ShowWindow(s.active_label_hwnd, SW_HIDE);
+        let _ = ShowWindow(s.broadcast_label_hwnd, SW_HIDE);
     }
 }
 
@@ -974,6 +1029,7 @@ unsafe fn swap_to(pip_index: usize) {
 
     s.pip_order[pip_index] = old_active_pid;
     s.active_pid = Some(new_active_pid);
+    crate::broadcast::set_active_pid(new_active_pid);
 
     if let Some(w) = s.eq_windows.iter().find(|w| w.pid == new_active_pid) {
         let _ = SetWindowPos(w.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
@@ -1088,6 +1144,19 @@ unsafe fn show_char_menu(s: &mut OverlayState, target_pid: u32, screen_pt: POINT
             w!("Reset to auto layout"));
     }
 
+    // Broadcasting toggle (only shown if trusik is enabled).
+    if cfg.trusik {
+        let bc_label = if crate::broadcast::is_active() {
+            format!("Broadcasting: on\t{}\0", cfg.broadcast_hotkey)
+        } else {
+            format!("Broadcasting: off\t{}\0", cfg.broadcast_hotkey)
+        };
+        let bc_wide: Vec<u16> = bc_label.encode_utf16().collect();
+        let bc_flag = if crate::broadcast::is_active() { MF_CHECKED } else { MF_UNCHECKED };
+        let _ = AppendMenuW(hmenu, MF_STRING | bc_flag, IDM_BROADCAST_TOGGLE as usize,
+            windows::core::PCWSTR(bc_wide.as_ptr()));
+    }
+
     // Hide overlay item with hotkey hint.
     let hide_label = format!("Hide overlay\t{}\0", cfg.hide_hotkey);
     let hide_wide: Vec<u16> = hide_label.encode_utf16().collect();
@@ -1113,7 +1182,11 @@ unsafe fn show_char_menu(s: &mut OverlayState, target_pid: u32, screen_pt: POINT
 unsafe fn handle_menu_command(cmd_id: u32) {
     let Some(s) = state().as_mut() else { return };
 
-    if cmd_id == IDM_HIDE_OVERLAY {
+    if cmd_id == IDM_BROADCAST_TOGGLE {
+        crate::broadcast::toggle();
+        update_active_label(s);
+        update_visibility(s);
+    } else if cmd_id == IDM_HIDE_OVERLAY {
         s.hidden_by_user = true;
         update_visibility(s);
     } else if cmd_id == IDM_EDIT_MODE {
@@ -1392,6 +1465,53 @@ unsafe fn paint_label(hwnd: HWND, text: &str, bg_color: u32) {
     let _ = GetClientRect(hwnd, &mut rc);
     rc.left += dpi(8, d);
     rc.top += dpi(4, d);
+    let mut wide: Vec<u16> = text.encode_utf16().collect();
+    let _ = DrawTextW(hdc, &mut wide, &mut rc, DT_LEFT | DT_SINGLELINE | DT_TOP);
+
+    let _ = SelectObject(hdc, old_font);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
+    let _ = EndPaint(hwnd, &ps);
+}
+
+// ---------------------------------------------------------------------------
+// Broadcast banner window proc
+// ---------------------------------------------------------------------------
+
+unsafe extern "system" fn broadcast_label_wnd_proc(
+    hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_PAINT => {
+            paint_broadcast_label(hwnd);
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+unsafe fn paint_broadcast_label(hwnd: HWND) {
+    let d = state().as_ref().map_or(1.0, |s| s.dpi_scale);
+    let mut ps = PAINTSTRUCT::default();
+    let hdc = BeginPaint(hwnd, &mut ps);
+
+    // Red background.
+    let bg_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x002020CC));
+    let _ = FillRect(hdc, &ps.rcPaint, bg_brush);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(bg_brush);
+
+    let font = CreateFontW(
+        dpi(LABEL_HEIGHT - 8, d), 0, 0, 0, FW_BOLD.0 as i32,
+        0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI"),
+    );
+    let old_font = SelectObject(hdc, font);
+    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
+    let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
+
+    let mut rc = RECT::default();
+    let _ = GetClientRect(hwnd, &mut rc);
+    rc.left += dpi(8, d);
+    rc.top += dpi(4, d);
+    let text = "Key broadcasting active";
     let mut wide: Vec<u16> = text.encode_utf16().collect();
     let _ = DrawTextW(hdc, &mut wide, &mut rc, DT_LEFT | DT_SINGLELINE | DT_TOP);
 
@@ -2010,6 +2130,15 @@ pub fn toggle_hidden() {
     }
 }
 
+/// Refresh broadcast label visibility immediately.
+pub fn refresh_broadcast_label() {
+    unsafe {
+        let Some(s) = state().as_mut() else { return };
+        update_active_label(s);
+        update_visibility(s);
+    }
+}
+
 /// Reload config into overlay state and rebuild the layout.
 pub fn force_rebuild() {
     unsafe {
@@ -2035,6 +2164,7 @@ pub fn cleanup() {
                 let _ = DestroyWindow(pw.hwnd);
             }
             let _ = DestroyWindow(s.active_label_hwnd);
+            let _ = DestroyWindow(s.broadcast_label_hwnd);
         }
         *state() = None;
     }
