@@ -1084,7 +1084,7 @@ unsafe fn update_active_label(s: &mut OverlayState) {
 
     // Position broadcast banner next to the active label.
     if crate::broadcast::is_active() {
-        let bc_text = "Broadcasting active";
+        let bc_text = "\u{26A1} Broadcasting";
         let bc_font = CreateFontW(
             dpi(lh - 12, d), 0, 0, 0, FW_HEAVY.0 as i32,
             0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI"),
@@ -1888,7 +1888,7 @@ unsafe fn paint_broadcast_label(hwnd: HWND) {
     let old_font = SelectObject(hdc, font);
     let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
 
-    let text = "Broadcasting active";
+    let text = "\u{26A1} Broadcasting";
     let mut wide: Vec<u16> = text.encode_utf16().collect();
     let pad = dpi(10, d);
 
