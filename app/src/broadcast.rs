@@ -3,11 +3,9 @@
 //! Creates per-process shared memory regions (`Local\DI8_{pid}`) that the
 //! trusik DLL reads to inject synthetic keystrokes into background EQ clients.
 
-#![allow(static_mut_refs)]
-
+use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Memory::{
     CreateFileMappingW, MapViewOfFile, FILE_MAP_WRITE, PAGE_READWRITE,
@@ -38,7 +36,7 @@ const SHM_SIZE: usize = std::mem::size_of::<SharedKeyState>();
 
 /// Per-process shared memory handle.
 struct ProcessShm {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Stored for identification/debugging.
     pid: u32,
     handle: HANDLE,
     ptr: *mut SharedKeyState,
@@ -63,65 +61,79 @@ impl Drop for ProcessShm {
     }
 }
 
-/// Global broadcast state. Only accessed from the main (tray message loop) thread.
-static mut TARGETS: Option<HashMap<u32, ProcessShm>> = None;
-static mut ACTIVE_PID: Option<u32> = None;
-static mut HOOK: HHOOK = HHOOK(std::ptr::null_mut());
-static BROADCASTING: AtomicBool = AtomicBool::new(false);
-
-/// EQ process IDs for foreground check in the LL hook.
-static mut EQ_PIDS: Vec<u32> = Vec::new();
-/// Whether EQ was foreground on the last hook call (for clearing stuck keys).
-static mut EQ_WAS_FOREGROUND: bool = false;
-
-/// Filter configuration cached from config.
-static mut FILTER_MODE: FilterMode = FilterMode::Blacklist;
-static mut FILTER_SCANCODES: Vec<u8> = Vec::new();
-
 #[derive(Clone, Copy, PartialEq)]
 enum FilterMode {
     Blacklist,
     Whitelist,
 }
 
-/// Initialize the broadcast engine. Call once from main.
-pub fn init() {
-    unsafe {
-        TARGETS = Some(HashMap::new());
-        reload_filter();
-    }
+/// All broadcast state, accessed only from the main (tray message loop) thread.
+/// The LL keyboard hook also runs on this thread (Windows dispatches LL hooks
+/// via the installing thread's message loop).
+struct BroadcastState {
+    targets: HashMap<u32, ProcessShm>,
+    active_pid: Option<u32>,
+    hook: HHOOK,
+    broadcasting: bool,
+    eq_pids: Vec<u32>,
+    eq_was_foreground: bool,
+    filter_mode: FilterMode,
+    filter_scancodes: Vec<u8>,
 }
 
-/// Reload filter configuration from disk.
-fn reload_filter() {
+struct BroadcastCell(UnsafeCell<Option<BroadcastState>>);
+unsafe impl Sync for BroadcastCell {}
+
+static STATE: BroadcastCell = BroadcastCell(UnsafeCell::new(None));
+
+fn state() -> &'static mut Option<BroadcastState> {
+    unsafe { &mut *STATE.0.get() }
+}
+
+/// Initialize the broadcast engine. Call once from main.
+pub fn init() {
     let cfg = Config::load();
-    unsafe {
-        FILTER_MODE = if cfg.broadcast_filter_mode == "whitelist" {
-            FilterMode::Whitelist
-        } else {
-            FilterMode::Blacklist
-        };
-        FILTER_SCANCODES = cfg
-            .broadcast_filter_keys
-            .iter()
-            .filter_map(|name| {
-                crate::config::parse_vk_name(name).and_then(|vk| {
-                    let scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
-                    if scan > 0 && scan < 256 {
-                        Some(scan as u8)
-                    } else {
-                        None
-                    }
-                })
+    let (filter_mode, filter_scancodes) = load_filter(&cfg);
+    *state() = Some(BroadcastState {
+        targets: HashMap::new(),
+        active_pid: None,
+        hook: HHOOK(std::ptr::null_mut()),
+        broadcasting: false,
+        eq_pids: Vec::new(),
+        eq_was_foreground: false,
+        filter_mode,
+        filter_scancodes,
+    });
+}
+
+/// Load filter configuration from a config.
+fn load_filter(cfg: &Config) -> (FilterMode, Vec<u8>) {
+    let mode = if cfg.broadcast_filter_mode == "whitelist" {
+        FilterMode::Whitelist
+    } else {
+        FilterMode::Blacklist
+    };
+    let scancodes = cfg
+        .broadcast_filter_keys
+        .iter()
+        .filter_map(|name| {
+            crate::config::parse_vk_name(name).and_then(|vk| {
+                let scan = unsafe { MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) };
+                if scan > 0 && scan < 256 {
+                    Some(scan as u8)
+                } else {
+                    None
+                }
             })
-            .collect();
-    }
+        })
+        .collect();
+    (mode, scancodes)
 }
 
 /// Check if a scan code passes the filter.
-unsafe fn passes_filter(scan: u8) -> bool {
-    let in_list = FILTER_SCANCODES.contains(&scan);
-    match FILTER_MODE {
+fn passes_filter(s: &BroadcastState, scan: u8) -> bool {
+    let in_list = s.filter_scancodes.contains(&scan);
+    match s.filter_mode {
         FilterMode::Blacklist => !in_list,
         FilterMode::Whitelist => in_list,
     }
@@ -130,84 +142,79 @@ unsafe fn passes_filter(scan: u8) -> bool {
 /// Cleanup the broadcast engine. Call before exit.
 pub fn cleanup() {
     set_active(false);
-    unsafe {
-        TARGETS = None;
-    }
+    *state() = None;
 }
 
 /// Toggle broadcasting on/off.
 pub fn toggle() {
-    let currently_active = BROADCASTING.load(Ordering::SeqCst);
+    let currently_active = is_active();
     set_active(!currently_active);
 }
 
 /// Returns whether broadcasting is currently active.
 pub fn is_active() -> bool {
-    BROADCASTING.load(Ordering::SeqCst)
+    state().as_ref().is_some_and(|s| s.broadcasting)
 }
 
 /// Enable or disable broadcasting.
 pub fn set_active(active: bool) {
+    let Some(s) = state().as_mut() else { return };
     unsafe {
-        if active && HOOK.0.is_null() {
+        if active && s.hook.0.is_null() {
             let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(ll_keyboard_proc), None, 0);
             match hook {
-                Ok(h) => HOOK = h,
-                Err(_) => return,
-            }
-        } else if !active && !HOOK.0.is_null() {
-            let _ = UnhookWindowsHookEx(HOOK);
-            HOOK = HHOOK(std::ptr::null_mut());
-            // Clear all keys in all targets.
-            if let Some(targets) = TARGETS.as_ref() {
-                for shm in targets.values() {
-                    std::ptr::write_bytes(&mut (*shm.ptr).keys as *mut u8, 0, 256);
-                    std::ptr::write_volatile(&mut (*shm.ptr).seq, (*shm.ptr).seq.wrapping_add(1));
+                Ok(h) => s.hook = h,
+                Err(e) => {
+                    eprintln!("Failed to install keyboard hook: {e}");
+                    return;
                 }
             }
-        }
-        BROADCASTING.store(active, Ordering::SeqCst);
-        // Write active flag to all shm regions.
-        if let Some(targets) = TARGETS.as_ref() {
-            let flag = if active { 1u32 } else { 0u32 };
-            for shm in targets.values() {
-                std::ptr::write_volatile(&mut (*shm.ptr).active, flag);
+        } else if !active && !s.hook.0.is_null() {
+            let _ = UnhookWindowsHookEx(s.hook);
+            s.hook = HHOOK(std::ptr::null_mut());
+            // Clear all keys in all targets.
+            for shm in s.targets.values() {
+                std::ptr::write_bytes(&mut (*shm.ptr).keys as *mut u8, 0, 256);
+                std::ptr::write_volatile(&mut (*shm.ptr).seq, (*shm.ptr).seq.wrapping_add(1));
             }
+        }
+        s.broadcasting = active;
+        // Write active flag to all shm regions.
+        let flag = if active { 1u32 } else { 0u32 };
+        for shm in s.targets.values() {
+            std::ptr::write_volatile(&mut (*shm.ptr).active, flag);
         }
     }
 }
 
 /// Update the set of target processes. Called from overlay poll.
 /// Creates/destroys shared memory regions as EQ processes come and go.
-/// `hwnds` is the list of EQ window handles for the foreground check.
 pub fn update_targets(pids: &[u32], active_pid: Option<u32>) {
+    let Some(s) = state().as_mut() else { return };
     unsafe {
-        let Some(targets) = TARGETS.as_mut() else { return };
-        let active = BROADCASTING.load(Ordering::SeqCst);
-
         // Update EQ PIDs for the LL hook foreground check.
-        EQ_PIDS.clear();
-        EQ_PIDS.extend_from_slice(pids);
+        s.eq_pids.clear();
+        s.eq_pids.extend_from_slice(pids);
 
         // Remove shm for processes that are gone.
-        targets.retain(|pid, _| pids.contains(pid));
+        s.targets.retain(|pid, _| pids.contains(pid));
 
         // Create shm for new processes.
         for &pid in pids {
-            if targets.contains_key(&pid) {
+            if s.targets.contains_key(&pid) {
                 continue;
             }
             if let Some(shm) = create_shm(pid) {
-                if active {
+                if s.broadcasting {
                     std::ptr::write_volatile(&mut (*shm.ptr).active, 1);
                 }
-                targets.insert(pid, shm);
+                s.targets.insert(pid, shm);
             }
         }
 
         // Update suppress flags: suppress physical keys on background targets.
-        ACTIVE_PID = active_pid;
-        for (&pid, shm) in targets.iter() {
+        s.active_pid = active_pid;
+        for (&pid, shm) in s.targets.iter() {
             let suppress = if Some(pid) == active_pid { 0u32 } else { 1u32 };
             std::ptr::write_volatile(&mut (*shm.ptr).suppress, suppress);
         }
@@ -216,20 +223,23 @@ pub fn update_targets(pids: &[u32], active_pid: Option<u32>) {
 
 /// Update which process is the active (foreground) one.
 pub fn set_active_pid(pid: u32) {
+    let Some(s) = state().as_mut() else { return };
+    s.active_pid = Some(pid);
     unsafe {
-        ACTIVE_PID = Some(pid);
-        if let Some(targets) = TARGETS.as_ref() {
-            for (&target_pid, shm) in targets.iter() {
-                let suppress = if target_pid == pid { 0u32 } else { 1u32 };
-                std::ptr::write_volatile(&mut (*shm.ptr).suppress, suppress);
-            }
+        for (&target_pid, shm) in s.targets.iter() {
+            let suppress = if target_pid == pid { 0u32 } else { 1u32 };
+            std::ptr::write_volatile(&mut (*shm.ptr).suppress, suppress);
         }
     }
 }
 
 /// Reload filter config (called on settings change).
 pub fn on_settings_changed() {
-    reload_filter();
+    let Some(s) = state().as_mut() else { return };
+    let cfg = Config::load();
+    let (mode, scancodes) = load_filter(&cfg);
+    s.filter_mode = mode;
+    s.filter_scancodes = scancodes;
 }
 
 unsafe fn create_shm(pid: u32) -> Option<ProcessShm> {
@@ -274,54 +284,54 @@ unsafe extern "system" fn ll_keyboard_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    let Some(s) = state().as_mut() else {
+        return CallNextHookEx(HHOOK(std::ptr::null_mut()), code, wparam, lparam);
+    };
+
     if code >= 0 {
         // Only broadcast when an EQ window is foreground.
         let fg = GetForegroundWindow();
         let mut fg_pid: u32 = 0;
         GetWindowThreadProcessId(fg, Some(&mut fg_pid));
-        let eq_is_fg = fg_pid != 0 && EQ_PIDS.contains(&fg_pid);
+        let eq_is_fg = fg_pid != 0 && s.eq_pids.contains(&fg_pid);
         if !eq_is_fg {
             // EQ lost focus — release all stuck keys in background targets.
-            if EQ_WAS_FOREGROUND {
-                EQ_WAS_FOREGROUND = false;
-                if let Some(targets) = TARGETS.as_ref() {
-                    let active_pid = ACTIVE_PID;
-                    for (&pid, shm) in targets.iter() {
-                        if Some(pid) == active_pid {
-                            continue;
-                        }
-                        std::ptr::write_bytes(&mut (*shm.ptr).keys as *mut u8, 0, 256);
-                        let seq = std::ptr::read_volatile(&(*shm.ptr).seq);
-                        std::ptr::write_volatile(&mut (*shm.ptr).seq, seq.wrapping_add(1));
+            if s.eq_was_foreground {
+                s.eq_was_foreground = false;
+                let active_pid = s.active_pid;
+                for (&pid, shm) in s.targets.iter() {
+                    if Some(pid) == active_pid {
+                        continue;
                     }
+                    std::ptr::write_bytes(&mut (*shm.ptr).keys as *mut u8, 0, 256);
+                    let seq = std::ptr::read_volatile(&(*shm.ptr).seq);
+                    std::ptr::write_volatile(&mut (*shm.ptr).seq, seq.wrapping_add(1));
                 }
             }
-            return CallNextHookEx(HOOK, code, wparam, lparam);
+            return CallNextHookEx(s.hook, code, wparam, lparam);
         }
-        EQ_WAS_FOREGROUND = true;
+        s.eq_was_foreground = true;
 
         let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
         let vk = kb.vkCode;
         let msg = wparam.0 as u32;
 
         let scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) as u8;
-        if scan > 0 && scan < 255 && passes_filter(scan) {
+        if scan > 0 && scan < 255 && passes_filter(s, scan) {
             let pressed = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
             let value: u8 = if pressed { 0x80 } else { 0x00 };
 
-            if let Some(targets) = TARGETS.as_ref() {
-                let active_pid = ACTIVE_PID;
-                for (&pid, shm) in targets.iter() {
-                    // Only broadcast to background windows (not the active one).
-                    if Some(pid) == active_pid {
-                        continue;
-                    }
-                    std::ptr::write_volatile(&mut (*shm.ptr).keys[scan as usize], value);
-                    let seq = std::ptr::read_volatile(&(*shm.ptr).seq);
-                    std::ptr::write_volatile(&mut (*shm.ptr).seq, seq.wrapping_add(1));
+            let active_pid = s.active_pid;
+            for (&pid, shm) in s.targets.iter() {
+                // Only broadcast to background windows (not the active one).
+                if Some(pid) == active_pid {
+                    continue;
                 }
+                std::ptr::write_volatile(&mut (*shm.ptr).keys[scan as usize], value);
+                let seq = std::ptr::read_volatile(&(*shm.ptr).seq);
+                std::ptr::write_volatile(&mut (*shm.ptr).seq, seq.wrapping_add(1));
             }
         }
     }
-    CallNextHookEx(HOOK, code, wparam, lparam)
+    CallNextHookEx(s.hook, code, wparam, lparam)
 }
