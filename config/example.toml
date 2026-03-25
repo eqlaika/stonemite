@@ -31,5 +31,10 @@ pip_edge = "right"
 # width = 320
 # height = 228
 
+# Toast notifications (shown on window swap, close, broadcast toggle)
+# toast_enabled = true
+# toast_height = 64
+# toast_duration = 2.0
+
 # Anonymous usage telemetry (set to false to disable)
 # telemetry = true

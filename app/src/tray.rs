@@ -212,6 +212,11 @@ unsafe extern "system" fn wnd_proc(
             } else if id == HOTKEY_BROADCAST_TOGGLE {
                 broadcast::toggle();
                 overlay::refresh_broadcast_label();
+                overlay::show_toast(if broadcast::is_active() {
+                    "Key broadcasting enabled"
+                } else {
+                    "Key broadcasting disabled"
+                });
             } else if id >= HOTKEY_SWAP_BASE && id < HOTKEY_SWAP_BASE + MAX_SWAP_HOTKEYS as i32 {
                 let slot = (id - HOTKEY_SWAP_BASE) as usize + 1; // 1-based window number
                 overlay::swap_to_number(slot);
@@ -226,6 +231,11 @@ unsafe extern "system" fn wnd_proc(
                 ID_BROADCAST_TOGGLE => {
                     broadcast::toggle();
                     overlay::refresh_broadcast_label();
+                    overlay::show_toast(if broadcast::is_active() {
+                        "Key broadcasting enabled"
+                    } else {
+                        "Key broadcasting disabled"
+                    });
                 }
                 ID_LAUNCH_EQ => launch_eq(),
                 ID_SETTINGS => settings_dialog::show(),

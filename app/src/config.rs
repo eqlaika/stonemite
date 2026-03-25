@@ -75,6 +75,15 @@ pub struct Config {
     /// Remembered settings window position [x, y].
     #[serde(default)]
     pub settings_position: Option<[f32; 2]>,
+    /// Enable toast notifications. Default: true.
+    #[serde(default = "default_toast_enabled")]
+    pub toast_enabled: bool,
+    /// Toast notification height in pixels. None = default (40).
+    #[serde(default)]
+    pub toast_height: Option<u32>,
+    /// Toast notification duration in seconds. None = default (2.0).
+    #[serde(default)]
+    pub toast_duration: Option<f32>,
     /// Enable anonymous usage telemetry. Default: true.
     #[serde(default = "default_telemetry")]
     pub telemetry: bool,
@@ -103,6 +112,10 @@ fn default_swap_hotkeys() -> Vec<String> {
     (1..=6).map(|i| format!("Ctrl+F{i}")).collect()
 }
 
+fn default_toast_enabled() -> bool {
+    true
+}
+
 fn default_telemetry() -> bool {
     true
 }
@@ -124,6 +137,9 @@ impl Default for Config {
             broadcast_hotkey: default_broadcast_hotkey(),
             broadcast_filter_mode: default_broadcast_filter_mode(),
             broadcast_filter_keys: Vec::new(),
+            toast_enabled: default_toast_enabled(),
+            toast_height: None,
+            toast_duration: None,
             telemetry: true,
             telemetry_id: None,
         }

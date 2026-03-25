@@ -85,6 +85,7 @@ enum Tab {
     PiP,
     Hotkeys,
     Broadcasting,
+    Notifications,
     About,
 }
 
@@ -176,6 +177,9 @@ struct SettingsApp {
     edge_index: usize,
     label_height: u32,
     label_opacity: u32,
+    toast_enabled: bool,
+    toast_height: u32,
+    toast_duration_tenths: u32,
     last_position: Option<[f32; 2]>,
     logo: Option<egui::TextureHandle>,
     avatar: Option<egui::TextureHandle>,
@@ -215,6 +219,9 @@ impl SettingsApp {
             edge_index,
             label_height: cfg.pip_label_height.unwrap_or(48),
             label_opacity: cfg.pip_label_opacity.unwrap_or(80),
+            toast_enabled: cfg.toast_enabled,
+            toast_height: cfg.toast_height.unwrap_or(64),
+            toast_duration_tenths: cfg.toast_duration.map(|d| (d * 10.0).round() as u32).unwrap_or(20),
             last_position: None,
             logo: None,
             avatar: None,
@@ -237,6 +244,7 @@ impl eframe::App for SettingsApp {
                 ui.selectable_value(&mut self.tab, Tab::PiP, "PiP");
                 ui.selectable_value(&mut self.tab, Tab::Hotkeys, "Hotkeys");
                 ui.selectable_value(&mut self.tab, Tab::Broadcasting, "Broadcasting");
+                ui.selectable_value(&mut self.tab, Tab::Notifications, "Notifications");
                 ui.selectable_value(&mut self.tab, Tab::About, "About");
             });
             ui.add_space(2.0);
@@ -264,6 +272,7 @@ impl eframe::App for SettingsApp {
                 Tab::PiP => self.pip_tab(ui),
                 Tab::Hotkeys => self.hotkeys_tab(ui),
                 Tab::Broadcasting => self.broadcasting_tab(ui),
+                Tab::Notifications => self.notifications_tab(ui),
                 Tab::About => self.about_tab(ui),
             }
         });
@@ -570,6 +579,36 @@ impl SettingsApp {
         }
     }
 
+    fn notifications_tab(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+
+        section(ui, "Toast notifications", |ui| {
+            ui.checkbox(&mut self.toast_enabled, "Enabled");
+            ui.horizontal(|ui| {
+                ui.label("Height:");
+                ui.scope(|ui| {
+                    ui.style_mut().visuals.widgets.inactive.bg_fill =
+                        egui::Color32::from_gray(220);
+                    ui.add(egui::Slider::new(&mut self.toast_height, 24..=128).suffix(" px"));
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.label("Duration:");
+                ui.scope(|ui| {
+                    ui.style_mut().visuals.widgets.inactive.bg_fill =
+                        egui::Color32::from_gray(220);
+                    ui.add(
+                        egui::Slider::new(&mut self.toast_duration_tenths, 5..=100)
+                            .custom_formatter(|v, _| format!("{:.1} s", v / 10.0))
+                            .custom_parser(|s| {
+                                s.trim().trim_end_matches('s').trim().parse::<f64>().ok().map(|v| v * 10.0)
+                            }),
+                    );
+                });
+            });
+        });
+    }
+
     fn about_tab(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
 
@@ -673,6 +712,9 @@ impl SettingsApp {
             telemetry_id: existing.telemetry_id,
             pip_label_height: Some(self.label_height),
             pip_label_opacity: Some(self.label_opacity),
+            toast_enabled: self.toast_enabled,
+            toast_height: Some(self.toast_height),
+            toast_duration: Some(self.toast_duration_tenths as f32 / 10.0),
         };
         if let Err(e) = cfg.save() {
             eprintln!("Failed to save config: {e}");
