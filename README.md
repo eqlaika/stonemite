@@ -4,9 +4,9 @@
   <img src="app/assets/app.png" width="128" alt="Stonemite">
 </p>
 
-EverQuest multiboxing PiP overlay tool for Windows.
+EverQuest multiboxing tool for Windows.
 
-Stonemite puts picture-in-picture thumbnails of your other EQ windows on top of your active game window, with click-to-swap, drag-to-reorder, hover highlighting, and character name labels.
+Stonemite makes multiboxing EQ easy — PiP overlays with click-to-swap, swap hotkeys, key broadcasting, automatic character detection, and a drag-and-drop layout editor. No subscription, no setup wizard.
 
 ## Install
 
@@ -52,14 +52,14 @@ The app checks for updates against [eqlaika/stonemite](https://github.com/eqlaik
 | **Setup** | Run the installer, done | Inner Space install, wizard pages, character slots, window layout configs |
 | **PiP overlays** | Native DWM thumbnails, click-to-swap, drag-to-reorder | Video FX regions routed through Inner Space |
 | **Character labels** | Auto-detected | Manual per-character setup |
-| **Input broadcasting** | Coming soon | Full key/mouse broadcasting and round-robin |
+| **Input broadcasting** | Key broadcasting with whitelist/blacklist filtering | Full key/mouse broadcasting and round-robin |
 | **Window management** | Auto-detects EQ windows, z-order stacking | Window layouts with snapping and resizing |
 | **Resource usage** | ~5 MB single exe | Inner Space + ISBoxer addon |
 | **Updates** | One-click from system tray | Manual download through Inner Space |
 
-**When to use Stonemite:** You want a PiP overlay that just works — no subscription, no 45-minute setup wizard. Launch it and go.
+**When to use Stonemite:** You want multiboxing that just works — PiP overlays, swap hotkeys, key broadcasting, and character detection with zero setup. Launch it and go.
 
-**When to use ISBoxer:** You need advanced input broadcasting features today, or you're already comfortable with the Inner Space ecosystem.
+**When to use ISBoxer:** You need mouse broadcasting, round-robin input, or you're already comfortable with the Inner Space ecosystem.
 
 ## Configuration
 

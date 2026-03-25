@@ -1,8 +1,8 @@
 # Stonemite
 
-EverQuest multiboxing PiP overlay tool for Windows.
+EverQuest multiboxing tool for Windows.
 
-- **app/** — system tray application with PiP overlay, window management, click-to-swap
+- **app/** — system tray application with PiP overlay, swap hotkeys, key broadcasting, character autodetect
 
 ## Build
 
