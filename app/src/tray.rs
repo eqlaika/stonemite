@@ -9,7 +9,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DestroyIcon, DestroyWindow, GetCursorPos, GetMessageW, KillTimer, MF_CHECKED, MF_STRING, MF_UNCHECKED,
-    LR_DEFAULTCOLOR, MSG, PostQuitMessage, RegisterClassW,
+    LR_DEFAULTCOLOR, MSG, PostMessageW, PostQuitMessage, RegisterClassW,
     SetForegroundWindow, SetTimer, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW,
     TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_TIMER,
     WM_USER, WNDCLASSW, WS_EX_TOOLWINDOW,
@@ -89,6 +89,9 @@ const MAX_SWAP_HOTKEYS: usize = 6;
 const TIMER_POLL_EQ: usize = 1;
 /// Poll interval in milliseconds (2 seconds).
 const POLL_INTERVAL_MS: u32 = 2000;
+
+/// Custom message posted when a background update check finds a new version.
+const WM_UPDATE_AVAILABLE: u32 = WM_USER + 2;
 
 /// Run the tray icon and message loop. Blocks until exit.
 pub fn run() {
@@ -174,6 +177,8 @@ unsafe extern "system" fn wnd_proc(
         WM_CREATE => {
             // Start polling timer for EQ window detection.
             let _ = SetTimer(hwnd, TIMER_POLL_EQ, POLL_INTERVAL_MS, None);
+            // Check for updates in the background if due.
+            maybe_auto_update_check(hwnd);
             // Register global hotkey for hiding overlay.
             let cfg = config::Config::load();
             if let Some((mods, vk)) = cfg.hide_hotkey_vk() {
@@ -243,6 +248,13 @@ unsafe extern "system" fn wnd_proc(
                 ID_EXIT => PostQuitMessage(0),
                 _ => {}
             }
+            LRESULT(0)
+        }
+        x if x == WM_UPDATE_AVAILABLE => {
+            overlay::show_toast(&format!(
+                "Stonemite v{} available — check for updates to install",
+                update_version_from_wparam(wparam)
+            ));
             LRESULT(0)
         }
         x if x == settings_dialog::WM_SETTINGS_CHANGED => {
@@ -364,6 +376,51 @@ unsafe fn do_update_check(hwnd: HWND) {
                 MB_OK | MB_ICONERROR,
             );
         }
+    }
+}
+
+/// Check if an automatic update check is due and spawn a background thread if so.
+fn maybe_auto_update_check(hwnd: HWND) {
+    let mut cfg = config::Config::load();
+    if !cfg.auto_update_check {
+        return;
+    }
+
+    // Check if enough days have elapsed since last check.
+    if let Some(ref last) = cfg.last_update_check {
+        if let Ok(last_time) = chrono::DateTime::parse_from_rfc3339(last) {
+            let elapsed = chrono::Utc::now().signed_duration_since(last_time);
+            if elapsed.num_days() < cfg.update_check_interval_days as i64 {
+                return;
+            }
+        }
+    }
+
+    // Record that we're checking now.
+    cfg.last_update_check = Some(chrono::Utc::now().to_rfc3339());
+    let _ = cfg.save();
+
+    // Spawn background check.
+    let hwnd_raw = hwnd.0 as usize;
+    std::thread::spawn(move || {
+        if let updater::CheckResult::Available { version } = updater::check_for_update() {
+            let ptr = Box::into_raw(Box::new(version));
+            let hwnd = HWND(hwnd_raw as *mut _);
+            unsafe {
+                let _ = PostMessageW(hwnd, WM_UPDATE_AVAILABLE, WPARAM(ptr as usize), LPARAM(0));
+            }
+        }
+    });
+}
+
+/// Extract the version string from WPARAM (pointer to a heap-allocated String).
+fn update_version_from_wparam(wparam: WPARAM) -> String {
+    unsafe {
+        let ptr = wparam.0 as *mut String;
+        if ptr.is_null() {
+            return String::new();
+        }
+        *Box::from_raw(ptr)
     }
 }
 

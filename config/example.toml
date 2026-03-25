@@ -36,5 +36,9 @@ pip_edge = "right"
 # toast_height = 64
 # toast_duration = 2.0
 
+# Automatically check for updates on launch (default true, checks every 7 days)
+# auto_update_check = true
+# update_check_interval_days = 7
+
 # Anonymous usage telemetry (set to false to disable)
 # telemetry = true

@@ -179,6 +179,8 @@ struct SettingsApp {
     toast_enabled: bool,
     toast_height: u32,
     toast_duration_tenths: u32,
+    auto_update_check: bool,
+    update_check_interval_days: u32,
     last_position: Option<[f32; 2]>,
     logo: Option<egui::TextureHandle>,
     avatar: Option<egui::TextureHandle>,
@@ -221,6 +223,8 @@ impl SettingsApp {
             toast_enabled: cfg.toast_enabled,
             toast_height: cfg.toast_height.unwrap_or(64),
             toast_duration_tenths: cfg.toast_duration.map(|d| (d * 10.0).round() as u32).unwrap_or(20),
+            auto_update_check: cfg.auto_update_check,
+            update_check_interval_days: cfg.update_check_interval_days,
             last_position: None,
             logo: None,
             avatar: None,
@@ -317,6 +321,27 @@ impl SettingsApp {
                             .custom_formatter(|v, _| format!("{:.1} s", v / 10.0))
                             .custom_parser(|s| {
                                 s.trim().trim_end_matches('s').trim().parse::<f64>().ok().map(|v| v * 10.0)
+                            }),
+                    );
+                });
+            });
+        });
+
+        section(ui, "Updates", |ui| {
+            ui.checkbox(&mut self.auto_update_check, "Check automatically on launch");
+            ui.horizontal(|ui| {
+                ui.label("Check every:");
+                ui.scope(|ui| {
+                    ui.style_mut().visuals.widgets.inactive.bg_fill =
+                        egui::Color32::from_gray(220);
+                    ui.add(
+                        egui::Slider::new(&mut self.update_check_interval_days, 1..=30)
+                            .custom_formatter(|v, _| {
+                                let d = v as u32;
+                                if d == 1 { "1 day".to_string() } else { format!("{d} days") }
+                            })
+                            .custom_parser(|s| {
+                                s.trim().trim_end_matches("days").trim_end_matches("day").trim().parse::<f64>().ok()
                             }),
                     );
                 });
@@ -701,6 +726,9 @@ impl SettingsApp {
             broadcast_hotkey: self.broadcast_hotkey.clone(),
             broadcast_filter_mode: FILTER_MODE_OPTIONS[self.filter_mode_index].1.to_string(),
             broadcast_filter_keys: filter_keys,
+            auto_update_check: self.auto_update_check,
+            update_check_interval_days: self.update_check_interval_days,
+            last_update_check: existing.last_update_check,
             telemetry: existing.telemetry,
             telemetry_id: existing.telemetry_id,
             pip_label_height: Some(self.label_height),
