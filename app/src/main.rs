@@ -2,6 +2,7 @@
 
 mod broadcast;
 mod character_cache;
+mod class_icons;
 mod config;
 mod eq_characters;
 mod eq_windows;

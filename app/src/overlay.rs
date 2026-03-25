@@ -126,6 +126,7 @@ struct PipWindowEntry {
     pid: u32,
     thumb: isize,
     label: String,
+    class: Option<String>,
     number: usize,
     hovered: bool,
 }
@@ -172,6 +173,7 @@ struct OverlayState {
     /// Floating label window for the active (foreground) EQ window.
     active_label_hwnd: HWND,
     active_label_text: String,
+    active_label_class: Option<String>,
     active_label_color: u32,
     active_label_number: usize,
     /// Broadcast banner window, shown next to the active label when broadcasting.
@@ -274,10 +276,9 @@ fn badge_color_for_number(number: usize) -> u32 {
 }
 
 fn format_label(w: &EqWindow) -> String {
-    match (&w.character, &w.class) {
-        (Some(name), Some(cls)) => format!("{name} {cls}"),
-        (Some(name), None) => name.clone(),
-        _ => "(right-click)".to_string(),
+    match &w.character {
+        Some(name) => name.clone(),
+        None => "(right-click)".to_string(),
     }
 }
 
@@ -581,6 +582,7 @@ unsafe fn init_inner() -> HWND {
         active_pid: None,
         active_label_hwnd: label_hwnd,
         active_label_text: String::new(),
+        active_label_class: None,
         active_label_color: LABEL_COLORS[0],
         active_label_number: 0,
         broadcast_label_hwnd: bc_hwnd,
@@ -996,7 +998,7 @@ unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
         // Create layered label overlay window on top of the PiP.
         let label_text = format_label(eq_win);
         let label_h = dpi(s.label_height, d);
-        let (lbl_w, _) = measure_pip_label_size(hwnd, s, &label_text, cw - 2 * border);
+        let (lbl_w, _) = measure_pip_label_size(hwnd, s, &label_text, eq_win.class.as_deref(), cw - 2 * border);
         let pip_label_class = w!("StonemitePipLabelClass");
         let lbl_hwnd = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT,
@@ -1014,6 +1016,7 @@ unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
             pid,
             thumb,
             label: label_text,
+            class: eq_win.class.clone(),
             number: eq_win.number,
             hovered: false,
         });
@@ -1029,6 +1032,7 @@ unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
 unsafe fn update_active_label(s: &mut OverlayState) {
     let active = s.active_pid.and_then(|pid| s.eq_windows.iter().find(|w| w.pid == pid));
     s.active_label_text = active.map(|w| format_label(w)).unwrap_or_default();
+    s.active_label_class = active.and_then(|w| w.class.clone());
     s.active_label_color = active.map(|w| color_for_number(w.number)).unwrap_or(LABEL_COLORS[0]);
     s.active_label_number = active.map(|w| w.number).unwrap_or(0);
 
@@ -1062,9 +1066,10 @@ unsafe fn update_active_label(s: &mut OverlayState) {
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(name_font);
     let _ = windows::Win32::Graphics::Gdi::ReleaseDC(s.active_label_hwnd, hdc);
 
-    // Badge width + padding + measured text + right padding.
+    // Badge width + optional class icon + padding + measured text + right padding.
     let badge_w = label_h;
-    let text_width = badge_w + dpi(6, d) + text_size.cx + dpi(10, d);
+    let icon_w = if s.active_label_class.is_some() { badge_w + dpi(6, d) } else { 0 };
+    let text_width = badge_w + dpi(6, d) + icon_w + text_size.cx + dpi(10, d);
     let _ = SetWindowPos(
         s.active_label_hwnd, HWND_TOPMOST,
         top_left.x, top_left.y, text_width, label_h,
@@ -1565,7 +1570,7 @@ unsafe fn paint_pip_window(hwnd: HWND, pip_idx: usize) {
     let _ = EndPaint(hwnd, &ps);
 }
 
-unsafe fn paint_label(hwnd: HWND, text: &str, bg_color: u32) {
+unsafe fn paint_label(hwnd: HWND, text: &str, class: Option<&str>, bg_color: u32) {
     let (d, number, lh) = state().as_ref()
         .map(|s| (s.dpi_scale, s.active_label_number, s.label_height))
         .unwrap_or((1.0, 0, DEFAULT_LABEL_HEIGHT));
@@ -1626,13 +1631,23 @@ unsafe fn paint_label(hwnd: HWND, text: &str, bg_color: u32) {
     let _ = SelectObject(hdc, old_font);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_font);
 
+    // Class icon badge (same size as number badge).
+    let mut after_badges = badge_x + badge_diameter + dpi(6, d);
+    if let Some(cls) = class {
+        let icon_x = after_badges;
+        let icon_y = badge_y;
+        let icon_size = badge_diameter;
+        crate::class_icons::draw_class_icon(hdc, cls, icon_x, icon_y, icon_size);
+        after_badges = icon_x + icon_size + dpi(6, d);
+    }
+
     // Character name with shadow.
     let name_font = CreateFontW(
         dpi(lh - 12, d), 0, 0, 0, FW_BOLD.0 as i32,
         0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI"),
     );
     let old_font2 = SelectObject(hdc, name_font);
-    let text_left = badge_x + badge_diameter + dpi(6, d);
+    let text_left = after_badges;
     let mut wide: Vec<u16> = text.encode_utf16().collect();
 
     // Shadow.
@@ -1661,7 +1676,7 @@ unsafe fn paint_label(hwnd: HWND, text: &str, bg_color: u32) {
 // ---------------------------------------------------------------------------
 
 /// Measure the width needed for a PiP label, capped at max_w.
-unsafe fn measure_pip_label_size(hwnd: HWND, s: &OverlayState, text: &str, max_w: i32) -> (i32, i32) {
+unsafe fn measure_pip_label_size(hwnd: HWND, s: &OverlayState, text: &str, class: Option<&str>, max_w: i32) -> (i32, i32) {
     let d = s.dpi_scale;
     let lh = s.label_height;
     let label_h = dpi(lh, d);
@@ -1678,7 +1693,8 @@ unsafe fn measure_pip_label_size(hwnd: HWND, s: &OverlayState, text: &str, max_w
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
     let _ = windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
     let badge_w = label_h;
-    let w = (badge_w + dpi(6, d) + sz.cx + dpi(10, d)).min(max_w);
+    let icon_w = if class.is_some() { badge_w + dpi(6, d) } else { 0 };
+    let w = (badge_w + dpi(6, d) + icon_w + sz.cx + dpi(10, d)).min(max_w);
     (w, label_h)
 }
 
@@ -1753,13 +1769,23 @@ unsafe fn paint_pip_label(hwnd: HWND) {
     let _ = SelectObject(hdc, old_font);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_font);
 
+    // Class icon badge (same size as number badge).
+    let mut after_badges = badge_x + badge_diameter + dpi(6, d);
+    if let Some(cls) = &pw.class {
+        let icon_x = after_badges;
+        let icon_y = badge_y;
+        let icon_size = badge_diameter;
+        crate::class_icons::draw_class_icon(hdc, cls, icon_x, icon_y, icon_size);
+        after_badges = icon_x + icon_size + dpi(6, d);
+    }
+
     // Character name with shadow.
     let name_font = CreateFontW(
         dpi(lh - 12, d), 0, 0, 0, FW_BOLD.0 as i32,
         0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI"),
     );
     let old_font2 = SelectObject(hdc, name_font);
-    let text_left = badge_x + badge_diameter + dpi(6, d);
+    let text_left = after_badges;
     let mut wide: Vec<u16> = text.encode_utf16().collect();
 
     // Shadow.
@@ -2036,7 +2062,7 @@ unsafe extern "system" fn pip_wnd_proc(
                         let _ = InvalidateRect(pw.hwnd, None, true);
                         // Reposition label overlay.
                         let max_lbl_w = nw - 2 * border;
-                        let (lw, _) = measure_pip_label_size(pw.label_hwnd, s, &pw.label, max_lbl_w);
+                        let (lw, _) = measure_pip_label_size(pw.label_hwnd, s, &pw.label, pw.class.as_deref(), max_lbl_w);
                         let _ = SetWindowPos(pw.label_hwnd, HWND_TOPMOST,
                             new_rect.left + border, new_rect.top + border,
                             lw, dpi(s.label_height, d),
@@ -2104,7 +2130,7 @@ unsafe extern "system" fn pip_wnd_proc(
                             let _ = InvalidateRect(pw.hwnd, None, true);
                             // Reposition label overlay.
                             let max_lbl_w = cw - 2 * border;
-                            let (lw, _) = measure_pip_label_size(pw.label_hwnd, s, &pw.label, max_lbl_w);
+                            let (lw, _) = measure_pip_label_size(pw.label_hwnd, s, &pw.label, pw.class.as_deref(), max_lbl_w);
                             let _ = SetWindowPos(pw.label_hwnd, HWND_TOPMOST,
                                 rect.left + border, rect.top + border,
                                 lw, dpi(s.label_height, d),
@@ -2425,12 +2451,12 @@ unsafe extern "system" fn label_wnd_proc(
             return LRESULT(1);
         }
         WM_PAINT => {
-            let (text, color) = state()
+            let (text, class, color) = state()
                 .as_ref()
-                .map(|s| (s.active_label_text.clone(), s.active_label_color))
-                .unwrap_or((String::new(), LABEL_COLORS[0]));
+                .map(|s| (s.active_label_text.clone(), s.active_label_class.clone(), s.active_label_color))
+                .unwrap_or((String::new(), None, LABEL_COLORS[0]));
             if !text.is_empty() {
-                paint_label(hwnd, &text, color);
+                paint_label(hwnd, &text, class.as_deref(), color);
             } else {
                 let mut ps = PAINTSTRUCT::default();
                 let _ = BeginPaint(hwnd, &mut ps);
