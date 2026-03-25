@@ -15,6 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_USER, WNDCLASSW, WS_EX_TOOLWINDOW,
 };
 
+use crate::broadcast;
 use crate::config;
 use crate::overlay;
 use crate::settings_dialog;
@@ -74,9 +75,12 @@ const ID_SETTINGS: u16 = 1002;
 const ID_SHOW_OVERLAY: u16 = 1003;
 const ID_CHECK_UPDATE: u16 = 1004;
 const ID_EDIT_MODE: u16 = 1005;
+const ID_BROADCAST_TOGGLE: u16 = 1006;
 
 /// Hotkey ID for hide-overlay toggle.
 const HOTKEY_HIDE_OVERLAY: i32 = 1;
+/// Hotkey ID for broadcast toggle.
+const HOTKEY_BROADCAST_TOGGLE: i32 = 2;
 
 /// Timer ID for polling EQ windows.
 const TIMER_POLL_EQ: usize = 1;
@@ -172,6 +176,11 @@ unsafe extern "system" fn wnd_proc(
             if let Some((mods, vk)) = cfg.hide_hotkey_vk() {
                 let _ = RegisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY, HOT_KEY_MODIFIERS(mods), vk);
             }
+            if cfg.trusik {
+                if let Some((mods, vk)) = cfg.broadcast_hotkey_vk() {
+                    let _ = RegisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE, HOT_KEY_MODIFIERS(mods), vk);
+                }
+            }
             LRESULT(0)
         }
         WM_TIMER => {
@@ -191,6 +200,9 @@ unsafe extern "system" fn wnd_proc(
         WM_HOTKEY => {
             if wparam.0 as i32 == HOTKEY_HIDE_OVERLAY && overlay::is_eq_active() {
                 overlay::toggle_hidden();
+            } else if wparam.0 as i32 == HOTKEY_BROADCAST_TOGGLE {
+                broadcast::toggle();
+                overlay::refresh_broadcast_label();
             }
             LRESULT(0)
         }
@@ -199,6 +211,10 @@ unsafe extern "system" fn wnd_proc(
             match id {
                 ID_SHOW_OVERLAY => overlay::toggle_hidden(),
                 ID_EDIT_MODE => overlay::toggle_edit_mode(),
+                ID_BROADCAST_TOGGLE => {
+                    broadcast::toggle();
+                    overlay::refresh_broadcast_label();
+                }
                 ID_LAUNCH_EQ => launch_eq(),
                 ID_SETTINGS => settings_dialog::show(),
                 ID_CHECK_UPDATE => do_update_check(hwnd),
@@ -208,18 +224,26 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         x if x == settings_dialog::WM_SETTINGS_CHANGED => {
-            // Re-register hotkey with new config.
+            // Re-register hotkeys with new config.
             let _ = UnregisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY);
+            let _ = UnregisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE);
             let cfg = config::Config::load();
             if let Some((mods, vk)) = cfg.hide_hotkey_vk() {
                 let _ = RegisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY, HOT_KEY_MODIFIERS(mods), vk);
             }
+            if cfg.trusik {
+                if let Some((mods, vk)) = cfg.broadcast_hotkey_vk() {
+                    let _ = RegisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE, HOT_KEY_MODIFIERS(mods), vk);
+                }
+            }
+            broadcast::on_settings_changed();
             // Reload overlay config (pip_edge, etc.) and rebuild layout.
             overlay::force_rebuild();
             LRESULT(0)
         }
         WM_DESTROY => {
             let _ = UnregisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY);
+            let _ = UnregisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE);
             let _ = KillTimer(hwnd, TIMER_POLL_EQ);
             PostQuitMessage(0);
             LRESULT(0)
@@ -242,6 +266,19 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let edit_wide: Vec<u16> = edit_label.encode_utf16().collect();
     let _ = AppendMenuW(menu, MF_STRING, ID_EDIT_MODE as usize,
         windows::core::PCWSTR(edit_wide.as_ptr()));
+
+    // Broadcasting toggle (only shown if trusik is enabled).
+    if cfg.trusik {
+        let bc_label = if broadcast::is_active() {
+            format!("Broadcasting: on\t{}\0", cfg.broadcast_hotkey)
+        } else {
+            format!("Broadcasting: off\t{}\0", cfg.broadcast_hotkey)
+        };
+        let bc_wide: Vec<u16> = bc_label.encode_utf16().collect();
+        let bc_flag = if broadcast::is_active() { MF_CHECKED } else { MF_UNCHECKED };
+        let _ = AppendMenuW(menu, MF_STRING | bc_flag, ID_BROADCAST_TOGGLE as usize,
+            windows::core::PCWSTR(bc_wide.as_ptr()));
+    }
 
     let _ = AppendMenuW(menu, MF_STRING, ID_LAUNCH_EQ as usize, w!("Launch EQ"));
     let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS as usize, w!("Settings..."));

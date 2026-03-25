@@ -153,11 +153,20 @@ fn configure_style(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
+const FILTER_MODE_OPTIONS: &[(&str, &str)] = &[
+    ("Blacklist", "blacklist"),
+    ("Whitelist", "whitelist"),
+];
+
 struct SettingsApp {
     tab: Tab,
     eq_dir: String,
     hide_hotkey: String,
     capturing_hotkey: bool,
+    broadcast_hotkey: String,
+    capturing_broadcast_hotkey: bool,
+    filter_mode_index: usize,
+    filter_keys_text: String,
     edge_index: usize,
     trusik: bool,
     logo: Option<egui::TextureHandle>,
@@ -171,11 +180,20 @@ impl SettingsApp {
             .position(|(_, e)| *e == cfg.pip_edge)
             .unwrap_or(0);
 
+        let filter_mode_index = FILTER_MODE_OPTIONS
+            .iter()
+            .position(|(_, v)| *v == cfg.broadcast_filter_mode)
+            .unwrap_or(0);
+
         Self {
             tab: Tab::General,
             eq_dir: cfg.eq_dir.clone(),
             hide_hotkey: cfg.hide_hotkey.clone(),
             capturing_hotkey: false,
+            broadcast_hotkey: cfg.broadcast_hotkey.clone(),
+            capturing_broadcast_hotkey: false,
+            filter_mode_index,
+            filter_keys_text: cfg.broadcast_filter_keys.join(", "),
             edge_index,
             trusik: cfg.trusik,
             logo: None,
@@ -348,6 +366,96 @@ impl SettingsApp {
             section(ui, "Character detection", |ui| {
                 ui.label("Auto-detect character names");
             });
+
+            section(ui, "Broadcast toggle hotkey", |ui| {
+                ui.label("Toggle key broadcasting on/off");
+                ui.horizontal(|ui| {
+                    if self.capturing_broadcast_hotkey {
+                        let mods = ui.input(|i| i.modifiers);
+                        let mut parts = Vec::new();
+                        if mods.ctrl { parts.push("Ctrl"); }
+                        if mods.alt { parts.push("Alt"); }
+                        if mods.shift { parts.push("Shift"); }
+
+                        let label = if parts.is_empty() {
+                            "Press a key combo...".to_string()
+                        } else {
+                            format!("{}+...", parts.join("+"))
+                        };
+
+                        let btn = egui::Button::new(
+                            egui::RichText::new(&label).italics(),
+                        );
+                        let resp = ui.add(btn);
+
+                        let pressed = ui.input(|i| {
+                            i.events.iter().find_map(|e| {
+                                if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
+                                    if *key == egui::Key::Escape {
+                                        return Some(None);
+                                    }
+                                    egui_key_to_config_name(key).map(|name| {
+                                        let mut combo = Vec::new();
+                                        if modifiers.ctrl { combo.push("Ctrl"); }
+                                        if modifiers.alt { combo.push("Alt"); }
+                                        if modifiers.shift { combo.push("Shift"); }
+                                        combo.push(name);
+                                        Some(combo.join("+"))
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                        });
+
+                        match pressed {
+                            Some(Some(combo)) => {
+                                self.broadcast_hotkey = combo;
+                                self.capturing_broadcast_hotkey = false;
+                            }
+                            Some(None) => {
+                                self.capturing_broadcast_hotkey = false;
+                            }
+                            None => {
+                                resp.request_focus();
+                            }
+                        }
+                    } else {
+                        let label = if self.broadcast_hotkey.is_empty() {
+                            "None".to_string()
+                        } else {
+                            self.broadcast_hotkey.clone()
+                        };
+                        if ui.button(&label).clicked() {
+                            self.capturing_broadcast_hotkey = true;
+                        }
+                        ui.colored_label(
+                            ui.visuals().weak_text_color(),
+                            "Click to change",
+                        );
+                    }
+                });
+            });
+
+            section(ui, "Key filter", |ui| {
+                ui.label("Choose which keys are broadcast to background windows");
+                ui.horizontal(|ui| {
+                    ui.label("Mode:");
+                    egui::ComboBox::from_id_salt("filter_mode")
+                        .selected_text(FILTER_MODE_OPTIONS[self.filter_mode_index].0)
+                        .show_ui(ui, |ui| {
+                            for (i, (label, _)) in FILTER_MODE_OPTIONS.iter().enumerate() {
+                                ui.selectable_value(&mut self.filter_mode_index, i, *label);
+                            }
+                        });
+                });
+                ui.label("Keys (comma-separated, e.g. Enter, Escape, Tab):");
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.filter_keys_text)
+                        .desired_width(ui.available_width())
+                        .desired_rows(3),
+                );
+            });
         });
     }
 
@@ -431,6 +539,12 @@ impl SettingsApp {
 
     fn save_config(&self) {
         let existing = Config::load();
+        let filter_keys: Vec<String> = self
+            .filter_keys_text
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         let cfg = Config {
             eq_dir: self.eq_dir.clone(),
             hide_hotkey: self.hide_hotkey.clone(),
@@ -439,6 +553,9 @@ impl SettingsApp {
             pip_positions: existing.pip_positions,
             snap_grid: existing.snap_grid,
             trusik: self.trusik,
+            broadcast_hotkey: self.broadcast_hotkey.clone(),
+            broadcast_filter_mode: FILTER_MODE_OPTIONS[self.filter_mode_index].1.to_string(),
+            broadcast_filter_keys: filter_keys,
             telemetry: existing.telemetry,
             telemetry_id: existing.telemetry_id,
         };

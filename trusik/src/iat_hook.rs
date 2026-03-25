@@ -6,7 +6,7 @@
 use std::ffi::c_void;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Foundation::{BOOL, HANDLE};
 use windows::Win32::System::Memory::{VirtualProtect, PAGE_PROTECTION_FLAGS, PAGE_READWRITE};
 
 use crate::log;
@@ -368,6 +368,123 @@ unsafe fn patch_iat(
     }
 
     None
+}
+
+// --- Keyboard state IAT hooks ---
+
+type GetAsyncKeyStateFn = unsafe extern "system" fn(i32) -> i16;
+type GetKeyStateFn = unsafe extern "system" fn(i32) -> i16;
+type GetKeyboardStateFn = unsafe extern "system" fn(*mut u8) -> BOOL;
+type GetForegroundWindowFn = unsafe extern "system" fn() -> isize;
+
+static REAL_ASYNC: OnceLock<GetAsyncKeyStateFn> = OnceLock::new();
+static REAL_KEYSTATE: OnceLock<GetKeyStateFn> = OnceLock::new();
+static REAL_KBSTATE: OnceLock<GetKeyboardStateFn> = OnceLock::new();
+static REAL_GETFOREGROUNDWINDOW: OnceLock<GetForegroundWindowFn> = OnceLock::new();
+
+unsafe extern "system" fn hooked_get_async_key_state(vk: i32) -> i16 {
+    if vk >= 0 && vk <= 255 {
+        let scan = windows::Win32::UI::Input::KeyboardAndMouse::MapVirtualKeyW(
+            vk as u32,
+            windows::Win32::UI::Input::KeyboardAndMouse::MAPVK_VK_TO_VSC,
+        );
+        if scan > 0 && scan < 256 && crate::key_shm::is_key_pressed(scan as u8) {
+            return -32767; // 0x8001
+        }
+    }
+    if let Some(real) = REAL_ASYNC.get() {
+        real(vk)
+    } else {
+        0
+    }
+}
+
+unsafe extern "system" fn hooked_get_key_state(vk: i32) -> i16 {
+    if vk >= 0 && vk <= 255 {
+        let scan = windows::Win32::UI::Input::KeyboardAndMouse::MapVirtualKeyW(
+            vk as u32,
+            windows::Win32::UI::Input::KeyboardAndMouse::MAPVK_VK_TO_VSC,
+        );
+        if scan > 0 && scan < 256 && crate::key_shm::is_key_pressed(scan as u8) {
+            return -32767; // 0x8001
+        }
+    }
+    if let Some(real) = REAL_KEYSTATE.get() {
+        real(vk)
+    } else {
+        0
+    }
+}
+
+unsafe extern "system" fn hooked_get_keyboard_state(buf: *mut u8) -> BOOL {
+    let ok = if let Some(real) = REAL_KBSTATE.get() {
+        real(buf)
+    } else {
+        BOOL(0)
+    };
+    if !buf.is_null() {
+        for vk in 0u16..=255 {
+            let scan = windows::Win32::UI::Input::KeyboardAndMouse::MapVirtualKeyW(
+                vk as u32,
+                windows::Win32::UI::Input::KeyboardAndMouse::MAPVK_VK_TO_VSC,
+            );
+            if scan > 0 && scan < 256 && crate::key_shm::is_key_pressed(scan as u8) {
+                *buf.add(vk as usize) |= 0x80;
+            }
+        }
+    }
+    ok
+}
+
+unsafe extern "system" fn hooked_get_foreground_window() -> isize {
+    let hwnd = crate::device_proxy::eq_hwnd();
+    if hwnd != 0 && crate::key_shm::is_active() {
+        return hwnd;
+    }
+    if let Some(real) = REAL_GETFOREGROUNDWINDOW.get() {
+        real()
+    } else {
+        0
+    }
+}
+
+/// Install keyboard state IAT hooks. Call once from DirectInput8Create.
+pub unsafe fn install_keyboard_hooks() {
+    let base = match windows::Win32::System::LibraryLoader::GetModuleHandleW(None) {
+        Ok(h) => h.0 as *const u8,
+        Err(_) => {
+            log::write("iat_hook: GetModuleHandleW failed (keyboard hooks)");
+            return;
+        }
+    };
+
+    let mut hooked = 0u32;
+
+    if let Some(real) = patch_iat(base, b"user32.dll", b"GetAsyncKeyState", hooked_get_async_key_state as *const c_void) {
+        let func: GetAsyncKeyStateFn = std::mem::transmute(real);
+        let _ = REAL_ASYNC.set(func);
+        hooked += 1;
+    }
+
+    if let Some(real) = patch_iat(base, b"user32.dll", b"GetKeyState", hooked_get_key_state as *const c_void) {
+        let func: GetKeyStateFn = std::mem::transmute(real);
+        let _ = REAL_KEYSTATE.set(func);
+        hooked += 1;
+    }
+
+    if let Some(real) = patch_iat(base, b"user32.dll", b"GetKeyboardState", hooked_get_keyboard_state as *const c_void) {
+        let func: GetKeyboardStateFn = std::mem::transmute(real);
+        let _ = REAL_KBSTATE.set(func);
+        hooked += 1;
+    }
+
+    if let Some(real) = patch_iat(base, b"user32.dll", b"GetForegroundWindow", hooked_get_foreground_window as *const c_void) {
+        let func: GetForegroundWindowFn = std::mem::transmute(real);
+        let _ = REAL_GETFOREGROUNDWINDOW.set(func);
+        hooked += 1;
+    }
+
+    log::write(&format!("iat_hook: {hooked} keyboard function(s) hooked"));
 }
 
 #[cfg(test)]
