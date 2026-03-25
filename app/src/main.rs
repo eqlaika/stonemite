@@ -4,6 +4,7 @@ mod broadcast;
 mod config;
 mod eq_characters;
 mod eq_windows;
+mod log_watcher;
 mod overlay;
 mod settings_dialog;
 mod telemetry;

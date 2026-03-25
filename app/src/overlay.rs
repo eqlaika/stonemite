@@ -26,7 +26,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use crate::{config, eq_characters, eq_windows, trusik_shm};
+use crate::{config, eq_characters, eq_windows, log_watcher, trusik_shm};
 use crate::eq_windows::EqWindow;
 
 // ---------------------------------------------------------------------------
@@ -214,6 +214,8 @@ struct OverlayState {
     strip_height: i32,
     /// Whether trusik character detection is enabled.
     trusik_enabled: bool,
+    /// Log file tailer for /who class detection.
+    log_watcher: log_watcher::LogTailer,
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +272,11 @@ fn badge_color_for_number(number: usize) -> u32 {
 }
 
 fn format_label(w: &EqWindow) -> String {
-    w.character.as_deref().unwrap_or("(right-click)").to_string()
+    match (&w.character, &w.class) {
+        (Some(name), Some(cls)) => format!("{name} {cls}"),
+        (Some(name), None) => name.clone(),
+        _ => "(right-click)".to_string(),
+    }
 }
 
 #[allow(dead_code)]
@@ -598,6 +604,7 @@ unsafe fn init_inner() -> HWND {
         strip_width: 0,
         strip_height: 0,
         trusik_enabled: cfg.trusik,
+        log_watcher: log_watcher::LogTailer::new(),
     });
 
     label_hwnd
@@ -628,6 +635,8 @@ unsafe fn poll_inner() {
         if s.trusik_enabled {
             trusik_poll_characters(s);
         }
+        // Poll log files for /who class detection.
+        log_watcher_poll(s);
         // Update broadcast targets.
         let pids: Vec<u32> = s.eq_windows.iter().map(|w| w.pid).collect();
         crate::broadcast::update_targets(&pids, s.active_pid);
@@ -662,6 +671,7 @@ unsafe fn poll_inner() {
             number,
             character: None,
             server: None,
+            class: None,
         });
         if s.active_pid.is_none() {
             if fg_pid == Some(nw.pid) || fg_pid.is_none() {
@@ -706,6 +716,8 @@ unsafe fn poll_inner() {
     if s.trusik_enabled {
         trusik_poll_characters(s);
     }
+    // Poll log files for /who class detection.
+    log_watcher_poll(s);
 
     // Update broadcast targets.
     let pids: Vec<u32> = s.eq_windows.iter().map(|w| w.pid).collect();
@@ -723,7 +735,44 @@ fn trusik_poll_characters(s: &mut OverlayState) {
             if let Some((name, server)) = trusik_shm::read_character(ew.pid) {
                 ew.character = Some(name);
                 ew.server = Some(server);
+                ew.class = None;
                 changed = true;
+            }
+        }
+    }
+    if changed {
+        unsafe { rebuild_thumbnails(s) };
+    }
+}
+
+/// Poll log files for /who output and update character classes.
+fn log_watcher_poll(s: &mut OverlayState) {
+    let cfg = config::Config::load();
+    let eq_dir = cfg.eq_directory();
+
+    let active_chars: Vec<_> = s.eq_windows.iter()
+        .filter_map(|w| {
+            let name = w.character.as_ref()?;
+            let server = w.server.as_ref()?;
+            (name.clone(), server.clone()).into()
+        })
+        .collect();
+
+    let updates = s.log_watcher.poll(&eq_dir, &active_chars);
+
+    let mut changed = false;
+    for update in &updates {
+        for w in &mut s.eq_windows {
+            if let (Some(name), Some(server)) = (&w.character, &w.server) {
+                if name.eq_ignore_ascii_case(&update.character)
+                    && server.eq_ignore_ascii_case(&update.server)
+                {
+                    let new_class = Some(update.class_abbrev.to_string());
+                    if w.class != new_class {
+                        w.class = new_class;
+                        changed = true;
+                    }
+                }
             }
         }
     }
@@ -1330,6 +1379,7 @@ unsafe fn handle_char_assign(s: &mut OverlayState, cmd_id: u32) {
     if let Some(w) = s.eq_windows.iter_mut().find(|w| w.pid == target_pid) {
         w.character = Some(candidate.character.clone());
         w.server = Some(candidate.server.clone());
+        w.class = None;
     }
 
     rebuild_thumbnails(s);

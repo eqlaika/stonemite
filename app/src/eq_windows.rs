@@ -16,6 +16,7 @@ pub struct EqWindow {
     pub number: usize,
     pub character: Option<String>,
     pub server: Option<String>,
+    pub class: Option<String>,
 }
 
 /// Find all visible top-level windows belonging to eqgame.exe.
@@ -50,6 +51,7 @@ unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
             number: 0, // assigned by overlay
             character: None,
             server: None,
+            class: None,
         });
     }
 
