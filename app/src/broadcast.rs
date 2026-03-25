@@ -71,6 +71,8 @@ static BROADCASTING: AtomicBool = AtomicBool::new(false);
 
 /// EQ process IDs for foreground check in the LL hook.
 static mut EQ_PIDS: Vec<u32> = Vec::new();
+/// Whether EQ was foreground on the last hook call (for clearing stuck keys).
+static mut EQ_WAS_FOREGROUND: bool = false;
 
 /// Filter configuration cached from config.
 static mut FILTER_MODE: FilterMode = FilterMode::Blacklist;
@@ -277,9 +279,26 @@ unsafe extern "system" fn ll_keyboard_proc(
         let fg = GetForegroundWindow();
         let mut fg_pid: u32 = 0;
         GetWindowThreadProcessId(fg, Some(&mut fg_pid));
-        if fg_pid == 0 || !EQ_PIDS.contains(&fg_pid) {
+        let eq_is_fg = fg_pid != 0 && EQ_PIDS.contains(&fg_pid);
+        if !eq_is_fg {
+            // EQ lost focus — release all stuck keys in background targets.
+            if EQ_WAS_FOREGROUND {
+                EQ_WAS_FOREGROUND = false;
+                if let Some(targets) = TARGETS.as_ref() {
+                    let active_pid = ACTIVE_PID;
+                    for (&pid, shm) in targets.iter() {
+                        if Some(pid) == active_pid {
+                            continue;
+                        }
+                        std::ptr::write_bytes(&mut (*shm.ptr).keys as *mut u8, 0, 256);
+                        let seq = std::ptr::read_volatile(&(*shm.ptr).seq);
+                        std::ptr::write_volatile(&mut (*shm.ptr).seq, seq.wrapping_add(1));
+                    }
+                }
+            }
             return CallNextHookEx(HOOK, code, wparam, lparam);
         }
+        EQ_WAS_FOREGROUND = true;
 
         let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
         let vk = kb.vkCode;
