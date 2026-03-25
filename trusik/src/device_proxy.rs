@@ -292,10 +292,6 @@ unsafe extern "system" fn dev_get_device_state(
 static mut PREV_SHM_KEYS: [u8; 256] = [0u8; 256];
 /// Sequence counter for synthetic events (start high to avoid collisions).
 static mut SYNTH_SEQUENCE: u32 = 0x8000_0000;
-/// Re-injection countdown: after injecting events, re-inject pressed keys
-/// for a few more frames in case the flush function consumed them.
-static mut REINJECT_COUNTDOWN: u32 = 0;
-
 /// DIDEVICEOBJECTDATA layout (matches the C struct on 64-bit).
 #[repr(C)]
 struct DiDeviceObjectData {
@@ -361,36 +357,6 @@ unsafe extern "system" fn dev_get_device_data(
     }
 
     if num_changes == 0 {
-        if REINJECT_COUNTDOWN > 0 {
-            REINJECT_COUNTDOWN -= 1;
-            let mut pressed: [(u8, u8); 256] = [(0, 0); 256];
-            let mut n_pressed = 0usize;
-            for i in 0..256 {
-                if cur_keys[i] != 0 {
-                    pressed[n_pressed] = (i as u8, cur_keys[i]);
-                    n_pressed += 1;
-                }
-            }
-            if n_pressed > 0 && !rgdod.is_null() {
-                let buf_start = rgdod as *mut u8;
-                let available = original_capacity.saturating_sub(real_count) as usize;
-                let to_inject = n_pressed.min(available);
-                let timestamp = windows::Win32::System::SystemInformation::GetTickCount();
-                for j in 0..to_inject {
-                    let (scan, _val) = pressed[j];
-                    let offset = (real_count as usize + j) * cbobjectdata as usize;
-                    let entry = buf_start.add(offset) as *mut DiDeviceObjectData;
-                    (*entry).dw_ofs = scan as u32;
-                    (*entry).dw_data = 0x80;
-                    (*entry).dw_time_stamp = timestamp;
-                    (*entry).dw_sequence = SYNTH_SEQUENCE;
-                    SYNTH_SEQUENCE = SYNTH_SEQUENCE.wrapping_add(1);
-                    (*entry).u_app_data = 0;
-                }
-                *pdwinout = real_count + to_inject as u32;
-                return hr;
-            }
-        }
         *pdwinout = real_count;
         return hr;
     }
@@ -423,7 +389,6 @@ unsafe extern "system" fn dev_get_device_data(
     *pdwinout = real_count + to_inject as u32;
     if !peek {
         PREV_SHM_KEYS = cur_keys;
-        REINJECT_COUNTDOWN = 3;
     }
     hr
 }
