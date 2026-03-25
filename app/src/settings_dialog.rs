@@ -62,7 +62,10 @@ pub fn run_standalone() {
             .with_inner_size([480.0, 400.0])
             .with_resizable(false)
             .with_maximize_button(false)
-            .with_icon(load_app_icon()),
+            .with_icon(load_app_icon())
+            .with_position(cfg.settings_position
+                .map(|p| egui::pos2(p[0], p[1]))
+                .unwrap_or_else(|| centered_position(480.0, 400.0))),
         ..Default::default()
     };
 
@@ -173,6 +176,7 @@ struct SettingsApp {
     edge_index: usize,
     label_height: u32,
     label_opacity: u32,
+    last_position: Option<[f32; 2]>,
     logo: Option<egui::TextureHandle>,
     avatar: Option<egui::TextureHandle>,
 }
@@ -211,6 +215,7 @@ impl SettingsApp {
             edge_index,
             label_height: cfg.pip_label_height.unwrap_or(48),
             label_opacity: cfg.pip_label_opacity.unwrap_or(80),
+            last_position: None,
             logo: None,
             avatar: None,
         }
@@ -220,6 +225,10 @@ impl SettingsApp {
 impl eframe::App for SettingsApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         configure_style(ctx);
+
+        if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
+            self.last_position = Some([rect.min.x, rect.min.y]);
+        }
 
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.add_space(2.0);
@@ -239,6 +248,7 @@ impl eframe::App for SettingsApp {
                 ui.add_space(4.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Cancel").clicked() {
+                        self.save_position();
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if ui.button("  Save  ").clicked() {
@@ -655,6 +665,7 @@ impl SettingsApp {
             snap_grid: existing.snap_grid,
             trusik: existing.trusik,
             swap_hotkeys: self.swap_hotkeys.to_vec(),
+            settings_position: self.last_position,
             broadcast_hotkey: self.broadcast_hotkey.clone(),
             broadcast_filter_mode: FILTER_MODE_OPTIONS[self.filter_mode_index].1.to_string(),
             broadcast_filter_keys: filter_keys,
@@ -668,6 +679,12 @@ impl SettingsApp {
         }
 
         notify_tray();
+    }
+
+    fn save_position(&self) {
+        let mut cfg = Config::load();
+        cfg.settings_position = self.last_position;
+        let _ = cfg.save();
     }
 }
 
@@ -763,6 +780,18 @@ fn load_system_font() -> Option<Vec<u8>> {
         }
     }
     None
+}
+
+fn centered_position(width: f32, height: f32) -> egui::Pos2 {
+    use windows::Win32::UI::HiDpi::GetDpiForSystem;
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+    unsafe {
+        let dpi = GetDpiForSystem() as f32;
+        let scale = dpi / 96.0;
+        let sw = GetSystemMetrics(SM_CXSCREEN) as f32 / scale;
+        let sh = GetSystemMetrics(SM_CYSCREEN) as f32 / scale;
+        egui::pos2((sw - width) / 2.0, (sh - height) / 2.0)
+    }
 }
 
 fn notify_tray() {
