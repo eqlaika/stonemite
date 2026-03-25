@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod broadcast;
+mod character_cache;
 mod config;
 mod eq_characters;
 mod eq_windows;

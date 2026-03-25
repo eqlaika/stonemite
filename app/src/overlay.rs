@@ -26,7 +26,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use crate::{config, eq_characters, eq_windows, log_watcher, trusik_shm};
+use crate::{character_cache, config, eq_characters, eq_windows, log_watcher, trusik_shm};
 use crate::eq_windows::EqWindow;
 
 // ---------------------------------------------------------------------------
@@ -216,6 +216,8 @@ struct OverlayState {
     trusik_enabled: bool,
     /// Log file tailer for /who class detection.
     log_watcher: log_watcher::LogTailer,
+    /// Persistent character knowledge (class, pets).
+    character_cache: character_cache::CharacterCache,
 }
 
 // ---------------------------------------------------------------------------
@@ -605,6 +607,7 @@ unsafe fn init_inner() -> HWND {
         strip_height: 0,
         trusik_enabled: cfg.trusik,
         log_watcher: log_watcher::LogTailer::new(),
+        character_cache: character_cache::CharacterCache::load(),
     });
 
     label_hwnd
@@ -733,9 +736,9 @@ fn trusik_poll_characters(s: &mut OverlayState) {
     for ew in &mut s.eq_windows {
         if ew.character.is_none() {
             if let Some((name, server)) = trusik_shm::read_character(ew.pid) {
+                ew.class = s.character_cache.get_class(&server, &name).map(String::from);
                 ew.character = Some(name);
                 ew.server = Some(server);
-                ew.class = None;
                 changed = true;
             }
         }
@@ -758,10 +761,11 @@ fn log_watcher_poll(s: &mut OverlayState) {
         })
         .collect();
 
-    let updates = s.log_watcher.poll(&eq_dir, &active_chars);
+    let result = s.log_watcher.poll(&eq_dir, &active_chars);
 
     let mut changed = false;
-    for update in &updates {
+    for update in &result.class_updates {
+        s.character_cache.set_class(&update.server, &update.character, update.class_abbrev);
         for w in &mut s.eq_windows {
             if let (Some(name), Some(server)) = (&w.character, &w.server) {
                 if name.eq_ignore_ascii_case(&update.character)
@@ -776,6 +780,11 @@ fn log_watcher_poll(s: &mut OverlayState) {
             }
         }
     }
+    for update in &result.pet_updates {
+        s.character_cache.set_pet(&update.server, &update.owner, &update.pet);
+    }
+    s.character_cache.save();
+
     if changed {
         unsafe { rebuild_thumbnails(s) };
     }
@@ -1377,9 +1386,10 @@ unsafe fn handle_char_assign(s: &mut OverlayState, cmd_id: u32) {
     let Some(candidate) = candidates.get(char_idx) else { return };
 
     if let Some(w) = s.eq_windows.iter_mut().find(|w| w.pid == target_pid) {
+        w.class = s.character_cache.get_class(&candidate.server, &candidate.character)
+            .map(String::from);
         w.character = Some(candidate.character.clone());
         w.server = Some(candidate.server.clone());
-        w.class = None;
     }
 
     rebuild_thumbnails(s);
