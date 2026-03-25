@@ -1123,6 +1123,8 @@ unsafe fn update_active_label(s: &mut OverlayState) {
     let _ = GetClientRect(active_hwnd, &mut rect);
     let mut top_left = POINT { x: rect.left, y: rect.top };
     let _ = ClientToScreen(active_hwnd, &mut top_left);
+    let mut top_right = POINT { x: rect.right, y: rect.top };
+    let _ = ClientToScreen(active_hwnd, &mut top_right);
 
     let d = s.dpi_scale;
     let lh = s.label_height;
@@ -1146,9 +1148,17 @@ unsafe fn update_active_label(s: &mut OverlayState) {
     let badge_w = label_h;
     let icon_w = if s.active_label_class.is_some() { badge_w + dpi(6, d) } else { 0 };
     let text_width = badge_w + dpi(6, d) + icon_w + text_size.cx + dpi(10, d);
+
+    // When PiP edge is left, anchor the label at top-right so the strip doesn't cover it.
+    let label_x = if matches!(s.pip_edge, config::PipEdge::Left) {
+        top_right.x - text_width
+    } else {
+        top_left.x
+    };
+
     let _ = SetWindowPos(
         s.active_label_hwnd, HWND_TOPMOST,
-        top_left.x, top_left.y, text_width, label_h,
+        label_x, top_left.y, text_width, label_h,
         SWP_NOACTIVATE,
     );
 
@@ -1174,9 +1184,14 @@ unsafe fn update_active_label(s: &mut OverlayState) {
         let _ = windows::Win32::Graphics::Gdi::DeleteObject(bc_font);
         let _ = windows::Win32::Graphics::Gdi::ReleaseDC(s.broadcast_label_hwnd, bc_hdc);
         let bc_width = bc_size.cx + dpi(20, d);
+        let bc_x = if matches!(s.pip_edge, config::PipEdge::Left) {
+            label_x - bc_width - dpi(4, d)
+        } else {
+            label_x + text_width + dpi(4, d)
+        };
         let _ = SetWindowPos(
             s.broadcast_label_hwnd, HWND_TOPMOST,
-            top_left.x + text_width + dpi(4, d), top_left.y, bc_width, label_h,
+            bc_x, top_left.y, bc_width, label_h,
             SWP_NOACTIVATE,
         );
         let _ = SetLayeredWindowAttributes(s.broadcast_label_hwnd, key, s.label_alpha, LWA_ALPHA | LWA_COLORKEY);
