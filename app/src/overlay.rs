@@ -116,9 +116,45 @@ const EDIT_BORDER_COLOR: u32 = 0x00FFFF00;
 /// VK_SHIFT virtual key code.
 const VK_SHIFT_CODE: i32 = 0x10;
 
+/// Default height of toast notification window (pixels).
+const DEFAULT_TOAST_HEIGHT: i32 = 64;
+/// Default toast visible duration (milliseconds).
+const DEFAULT_TOAST_DURATION_MS: u32 = 2000;
+/// Timer interval for toast fade animation (milliseconds).
+const TOAST_FADE_STEP_MS: u32 = 30;
+/// Alpha change per fade step.
+const TOAST_ALPHA_STEP: u8 = 25;
+/// Maximum alpha for the toast window.
+const TOAST_MAX_ALPHA: u8 = 220;
+/// Background color for toast window (dark neutral, COLORREF = 0x00BBGGRR).
+const TOAST_BG_COLOR: u32 = 0x00403020;
+/// Timer ID for toast animation.
+const TIMER_TOAST_FADE: usize = 42;
+/// Color key for toast layered window.
+const TOAST_COLOR_KEY: u32 = 0x00FF00FF;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ToastPhase {
+    Hidden,
+    FadingIn,
+    Visible,
+    FadingOut,
+}
+
+struct ToastState {
+    hwnd: HWND,
+    text: String,
+    phase: ToastPhase,
+    alpha: u8,
+    phase_start: u64,
+    duration_ms: u32,
+    height: i32,
+    enabled: bool,
+}
 
 struct PipWindowEntry {
     hwnd: HWND,
@@ -214,6 +250,8 @@ struct OverlayState {
     /// Current strip dimensions (for strip resize).
     strip_width: i32,
     strip_height: i32,
+    /// Toast notification state.
+    toast: ToastState,
     /// Whether trusik character detection is enabled.
     trusik_enabled: bool,
     /// Log file tailer for /who class detection.
@@ -299,6 +337,7 @@ pub fn debug_log(msg: &str) {
 fn is_our_window(hwnd: HWND, s: &OverlayState) -> bool {
     if hwnd == s.active_label_hwnd { return true; }
     if hwnd == s.broadcast_label_hwnd { return true; }
+    if hwnd == s.toast.hwnd { return true; }
     s.pip_windows.iter().any(|pw| pw.hwnd == hwnd || pw.label_hwnd == hwnd)
 }
 
@@ -567,6 +606,25 @@ unsafe fn init_inner() -> HWND {
 
     let _ = SetLayeredWindowAttributes(bc_hwnd, label_key, label_alpha, LWA_ALPHA | LWA_COLORKEY);
 
+    // Register toast notification window class.
+    let toast_class = w!("StonemiteToastClass");
+    let toast_wc = WNDCLASSW {
+        lpfnWndProc: Some(toast_wnd_proc),
+        lpszClassName: toast_class.into(),
+        hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+        ..Default::default()
+    };
+    RegisterClassW(&toast_wc);
+
+    let toast_hwnd = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+        toast_class, w!("StonemiteToast"), WS_POPUP,
+        0, 0, 0, 0, None, None, None, None,
+    ).expect("Failed to create toast window");
+
+    let toast_key = windows::Win32::Foundation::COLORREF(TOAST_COLOR_KEY);
+    let _ = SetLayeredWindowAttributes(toast_hwnd, toast_key, 0, LWA_ALPHA | LWA_COLORKEY);
+
     let hook = SetWinEventHook(
         EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
         None, Some(foreground_event_proc), 0, 0, WINEVENT_OUTOFCONTEXT,
@@ -607,6 +665,16 @@ unsafe fn init_inner() -> HWND {
         drop_target: None,
         strip_width: 0,
         strip_height: 0,
+        toast: ToastState {
+            hwnd: toast_hwnd,
+            text: String::new(),
+            phase: ToastPhase::Hidden,
+            alpha: 0,
+            phase_start: 0,
+            duration_ms: cfg.toast_duration.map(|d| (d * 1000.0) as u32).unwrap_or(DEFAULT_TOAST_DURATION_MS),
+            height: cfg.toast_height.map(|h| h as i32).unwrap_or(DEFAULT_TOAST_HEIGHT),
+            enabled: cfg.toast_enabled,
+        },
         trusik_enabled: cfg.trusik,
         log_watcher: log_watcher::LogTailer::new(),
         character_cache: character_cache::CharacterCache::load(),
@@ -653,7 +721,12 @@ unsafe fn poll_inner() {
     let added: Vec<u32> = new_pids.difference(&old_pids).copied().collect();
     let removed: Vec<u32> = old_pids.difference(&new_pids).copied().collect();
 
+    let mut last_closed_label = None;
     for pid in &removed {
+        // Capture info before removing for toast.
+        if let Some(w) = s.eq_windows.iter().find(|w| w.pid == *pid) {
+            last_closed_label = Some(format!("Window #{} closed", w.number));
+        }
         s.eq_windows.retain(|w| w.pid != *pid);
         s.pip_order.retain(|p| *p != *pid);
         if s.active_pid == Some(*pid) {
@@ -662,6 +735,9 @@ unsafe fn poll_inner() {
                 s.pip_order.retain(|p| *p != promoted);
             }
         }
+    }
+    if let Some(label) = last_closed_label {
+        show_toast_inner(s, &label);
     }
 
     let fg_hwnd = GetForegroundWindow();
@@ -1123,6 +1199,9 @@ unsafe fn update_visibility(s: &mut OverlayState) {
         }
         let _ = ShowWindow(s.active_label_hwnd, SW_HIDE);
         let _ = ShowWindow(s.broadcast_label_hwnd, SW_HIDE);
+        let _ = ShowWindow(s.toast.hwnd, SW_HIDE);
+        let _ = KillTimer(s.toast.hwnd, TIMER_TOAST_FADE);
+        s.toast.phase = ToastPhase::Hidden;
         return;
     }
 
@@ -1158,6 +1237,9 @@ unsafe fn update_visibility(s: &mut OverlayState) {
         }
         let _ = ShowWindow(s.active_label_hwnd, SW_HIDE);
         let _ = ShowWindow(s.broadcast_label_hwnd, SW_HIDE);
+        let _ = ShowWindow(s.toast.hwnd, SW_HIDE);
+        let _ = KillTimer(s.toast.hwnd, TIMER_TOAST_FADE);
+        s.toast.phase = ToastPhase::Hidden;
     }
 }
 
@@ -1230,6 +1312,17 @@ unsafe fn swap_to(pip_index: usize) {
 
     rebuild_thumbnails(s);
     update_visibility(s);
+
+    // Toast notification for the swap.
+    let toast_label = if let Some(w) = s.eq_windows.iter().find(|w| w.pid == new_active_pid) {
+        match &w.character {
+            Some(name) => format!("Swapped to #{} {}", w.number, name),
+            None => format!("Swapped to #{}", w.number),
+        }
+    } else {
+        return;
+    };
+    show_toast_inner(s, &toast_label);
 }
 
 // ---------------------------------------------------------------------------
@@ -1922,6 +2015,201 @@ unsafe fn paint_broadcast_label(hwnd: HWND) {
 }
 
 // ---------------------------------------------------------------------------
+// Toast notification
+// ---------------------------------------------------------------------------
+
+unsafe fn paint_toast(hwnd: HWND) {
+    let Some(s) = state().as_ref() else {
+        let mut ps = PAINTSTRUCT::default();
+        let _ = BeginPaint(hwnd, &mut ps);
+        let _ = EndPaint(hwnd, &ps);
+        return;
+    };
+    let d = s.dpi_scale;
+    let mut ps = PAINTSTRUCT::default();
+    let hdc = BeginPaint(hwnd, &mut ps);
+
+    let mut rc = RECT::default();
+    let _ = GetClientRect(hwnd, &mut rc);
+
+    // Fill with color key for transparent corners.
+    let key_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(TOAST_COLOR_KEY));
+    let _ = FillRect(hdc, &rc, key_brush);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(key_brush);
+
+    // Rounded dark background.
+    let radius = dpi(8, d);
+    let bg_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(TOAST_BG_COLOR));
+    let null_pen = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
+    let old_pen = SelectObject(hdc, null_pen);
+    let old_brush = SelectObject(hdc, bg_brush);
+    let _ = RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, radius * 2, radius * 2);
+    let _ = SelectObject(hdc, old_brush);
+    let _ = SelectObject(hdc, old_pen);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(bg_brush);
+
+    let font_h = dpi(s.toast.height - 12, d).max(dpi(12, d));
+    let font = CreateFontW(
+        font_h, 0, 0, 0, FW_BOLD.0 as i32,
+        0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI"),
+    );
+    let old_font = SelectObject(hdc, font);
+    let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
+
+    let mut wide: Vec<u16> = s.toast.text.encode_utf16().collect();
+
+    // Shadow.
+    let mut shadow_rc = RECT {
+        left: rc.left + dpi(1, d), top: rc.top + dpi(1, d),
+        right: rc.right + dpi(1, d), bottom: rc.bottom + dpi(1, d),
+    };
+    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000044));
+    let _ = DrawTextW(hdc, &mut wide, &mut shadow_rc, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+    // Main text (white).
+    let mut text_rc = rc;
+    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
+    let _ = DrawTextW(hdc, &mut wide, &mut text_rc, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+    let _ = SelectObject(hdc, old_font);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
+    let _ = EndPaint(hwnd, &ps);
+}
+
+unsafe extern "system" fn toast_wnd_proc(
+    hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_PAINT => {
+            paint_toast(hwnd);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_TOAST_FADE => {
+            let Some(s) = state().as_mut() else {
+                let _ = KillTimer(hwnd, TIMER_TOAST_FADE);
+                return LRESULT(0);
+            };
+            let now = windows::Win32::System::SystemInformation::GetTickCount64();
+            match s.toast.phase {
+                ToastPhase::FadingIn => {
+                    let new_alpha = s.toast.alpha.saturating_add(TOAST_ALPHA_STEP);
+                    if new_alpha >= TOAST_MAX_ALPHA {
+                        s.toast.alpha = TOAST_MAX_ALPHA;
+                        s.toast.phase = ToastPhase::Visible;
+                        s.toast.phase_start = now;
+                    } else {
+                        s.toast.alpha = new_alpha;
+                    }
+                    let _ = SetLayeredWindowAttributes(
+                        hwnd,
+                        windows::Win32::Foundation::COLORREF(TOAST_COLOR_KEY),
+                        s.toast.alpha,
+                        LWA_ALPHA | LWA_COLORKEY,
+                    );
+                }
+                ToastPhase::Visible => {
+                    if now - s.toast.phase_start >= s.toast.duration_ms as u64 {
+                        s.toast.phase = ToastPhase::FadingOut;
+                    }
+                }
+                ToastPhase::FadingOut => {
+                    let new_alpha = s.toast.alpha.saturating_sub(TOAST_ALPHA_STEP);
+                    if new_alpha == 0 {
+                        s.toast.alpha = 0;
+                        s.toast.phase = ToastPhase::Hidden;
+                        let _ = ShowWindow(hwnd, SW_HIDE);
+                        let _ = KillTimer(hwnd, TIMER_TOAST_FADE);
+                    } else {
+                        s.toast.alpha = new_alpha;
+                    }
+                    let _ = SetLayeredWindowAttributes(
+                        hwnd,
+                        windows::Win32::Foundation::COLORREF(TOAST_COLOR_KEY),
+                        s.toast.alpha,
+                        LWA_ALPHA | LWA_COLORKEY,
+                    );
+                }
+                ToastPhase::Hidden => {
+                    let _ = KillTimer(hwnd, TIMER_TOAST_FADE);
+                }
+            }
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+unsafe fn show_toast_inner(s: &mut OverlayState, text: &str) {
+    if !s.toast.enabled { return; }
+
+    s.toast.text = text.to_string();
+    s.toast.alpha = 0;
+    s.toast.phase = ToastPhase::FadingIn;
+    s.toast.phase_start = windows::Win32::System::SystemInformation::GetTickCount64();
+
+    // Position centered on the active EQ window, near the top.
+    let active_hwnd = s.active_pid
+        .and_then(|pid| s.eq_windows.iter().find(|w| w.pid == pid))
+        .map(|w| w.hwnd);
+    let Some(eq_hwnd) = active_hwnd else { return; };
+
+    let mut eq_rect = RECT::default();
+    let _ = GetClientRect(eq_hwnd, &mut eq_rect);
+    let mut top_left = POINT { x: eq_rect.left, y: eq_rect.top };
+    let _ = ClientToScreen(eq_hwnd, &mut top_left);
+
+    let d = s.dpi_scale;
+    let toast_h = dpi(s.toast.height, d);
+
+    // Measure text width.
+    let font_h = dpi(s.toast.height - 12, d).max(dpi(12, d));
+    let font = CreateFontW(
+        font_h, 0, 0, 0, FW_BOLD.0 as i32,
+        0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI"),
+    );
+    let hdc = windows::Win32::Graphics::Gdi::GetDC(s.toast.hwnd);
+    let old_font = SelectObject(hdc, font);
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    let mut text_size = windows::Win32::Foundation::SIZE::default();
+    let _ = GetTextExtentPoint32W(hdc, &wide, &mut text_size);
+    let _ = SelectObject(hdc, old_font);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
+    let _ = windows::Win32::Graphics::Gdi::ReleaseDC(s.toast.hwnd, hdc);
+
+    let pad = dpi(20, d);
+    let toast_w = text_size.cx + pad * 2;
+    let eq_client_w = eq_rect.right - eq_rect.left;
+    let toast_x = top_left.x + (eq_client_w - toast_w) / 2;
+    let eq_client_h = eq_rect.bottom - eq_rect.top;
+    let toast_y = top_left.y + eq_client_h / 3;
+
+    let _ = SetWindowPos(
+        s.toast.hwnd, HWND_TOPMOST,
+        toast_x, toast_y, toast_w, toast_h,
+        SWP_NOACTIVATE,
+    );
+
+    let _ = SetLayeredWindowAttributes(
+        s.toast.hwnd,
+        windows::Win32::Foundation::COLORREF(TOAST_COLOR_KEY),
+        0,
+        LWA_ALPHA | LWA_COLORKEY,
+    );
+
+    let _ = ShowWindow(s.toast.hwnd, SW_SHOWNOACTIVATE);
+    let _ = InvalidateRect(s.toast.hwnd, None, true);
+    let _ = SetTimer(s.toast.hwnd, TIMER_TOAST_FADE, TOAST_FADE_STEP_MS, None);
+}
+
+pub fn show_toast(text: &str) {
+    unsafe {
+        let Some(s) = state().as_mut() else { return };
+        show_toast_inner(s, text);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PiP window proc
 // ---------------------------------------------------------------------------
 
@@ -2575,6 +2863,10 @@ pub fn force_rebuild() {
         let key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
         let _ = SetLayeredWindowAttributes(s.active_label_hwnd, key, s.label_alpha, LWA_ALPHA | LWA_COLORKEY);
         let _ = SetLayeredWindowAttributes(s.broadcast_label_hwnd, key, s.label_alpha, LWA_ALPHA | LWA_COLORKEY);
+        // Reload toast config.
+        s.toast.enabled = cfg.toast_enabled;
+        s.toast.height = cfg.toast_height.map(|h| h as i32).unwrap_or(DEFAULT_TOAST_HEIGHT);
+        s.toast.duration_ms = cfg.toast_duration.map(|d| (d * 1000.0) as u32).unwrap_or(DEFAULT_TOAST_DURATION_MS);
         rebuild_thumbnails(s);
         update_visibility(s);
     }
@@ -2593,6 +2885,8 @@ pub fn cleanup() {
             }
             let _ = DestroyWindow(s.active_label_hwnd);
             let _ = DestroyWindow(s.broadcast_label_hwnd);
+            let _ = KillTimer(s.toast.hwnd, TIMER_TOAST_FADE);
+            let _ = DestroyWindow(s.toast.hwnd);
         }
         *state() = None;
     }
