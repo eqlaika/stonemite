@@ -10,10 +10,11 @@ use windows::Win32::Graphics::Dwm::{
     DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, ClientToScreen, CreateFontW, CreateSolidBrush, DrawTextW, EndPaint, FillRect,
-    FrameRect, GetStockObject, InvalidateRect, SelectObject, SetBkMode, SetTextColor,
-    BACKGROUND_MODE, DT_LEFT, DT_SINGLELINE, DT_TOP, FW_BOLD, HBRUSH, BLACK_BRUSH,
-    PAINTSTRUCT,
+    AlphaBlend, BeginPaint, ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC,
+    CreateFontW, CreatePen, CreateSolidBrush, DeleteDC, DrawTextW, Ellipse, EndPaint, FillRect,
+    FrameRect, GetStockObject, InvalidateRect, RoundRect, SelectObject, SetBkMode, SetTextColor,
+    AC_SRC_OVER, BACKGROUND_MODE, BLENDFUNCTION, DT_CENTER, DT_LEFT,
+    DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_HEAVY, HBRUSH, BLACK_BRUSH, PAINTSTRUCT, PS_NULL,
 };
 use windows::Win32::UI::Accessibility::{
     HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent,
@@ -53,8 +54,14 @@ const THUMB_OPACITY_HOVER: u8 = 255;
 /// Border thickness for hover highlight.
 const BORDER_WIDTH: i32 = 3;
 
-/// Height of the character name label overlay.
-const LABEL_HEIGHT: i32 = 48;
+/// Default height of the character name label overlay.
+const DEFAULT_LABEL_HEIGHT: i32 = 48;
+
+/// Default label opacity percentage (0–100).
+const DEFAULT_LABEL_OPACITY: u32 = 80;
+
+/// Color key for layered window transparency (magenta, COLORREF = 0x00BBGGRR).
+const LABEL_COLOR_KEY: u32 = 0x00FF00FF;
 
 /// Base ID for character-assign context menu items.
 const IDM_CHAR_BASE: u32 = 5000;
@@ -70,15 +77,27 @@ const IDM_EDIT_MODE: u32 = 7200;
 const IDM_RESET_LAYOUT: u32 = 7300;
 /// Menu ID for broadcast toggle.
 const IDM_BROADCAST_TOGGLE: u32 = 7400;
+/// Menu ID for opening settings dialog.
+const IDM_SETTINGS: u32 = 7500;
 
 /// Distinct background colors for per-number labels (COLORREF = 0x00BBGGRR).
 const LABEL_COLORS: &[u32] = &[
-    0x00F6A893, // soft blue     (rgb #93A8F6)
-    0x0098D6A3, // mint green    (rgb #A3D698)
-    0x009393F4, // soft rose     (rgb #F49393)
-    0x0080CEF5, // warm peach    (rgb #F5CE80)
-    0x00F4A8C8, // soft lavender (rgb #C8A8F4)
-    0x00D4E898, // pale cyan     (rgb #98E8D4)
+    0x00D4864A, // medium blue   (rgb #4A86D4)
+    0x0060B06A, // forest green  (rgb #6AB060)
+    0x005858D8, // warm rose     (rgb #D85858)
+    0x0048B8E0, // amber         (rgb #E0B848)
+    0x00C87CA0, // orchid        (rgb #A07CC8)
+    0x00A8C858, // teal          (rgb #58C8A8)
+];
+
+/// Darker accent for number badge circles (COLORREF = 0x00BBGGRR).
+const BADGE_COLORS: &[u32] = &[
+    0x00B06830, // deep blue     (rgb #3068B0)
+    0x00409048, // deep green    (rgb #489040)
+    0x003838B8, // deep rose     (rgb #B83838)
+    0x002898C0, // deep amber    (rgb #C09828)
+    0x00A85C80, // deep orchid   (rgb #805CA8)
+    0x0088A838, // deep teal     (rgb #38A888)
 ];
 
 /// Minimum pixel distance before a click becomes a drag.
@@ -152,8 +171,13 @@ struct OverlayState {
     active_label_hwnd: HWND,
     active_label_text: String,
     active_label_color: u32,
+    active_label_number: usize,
     /// Broadcast banner window, shown next to the active label when broadcasting.
     broadcast_label_hwnd: HWND,
+    /// Configured label height (logical pixels).
+    label_height: i32,
+    /// Configured label alpha (0–255).
+    label_alpha: u8,
     event_hook: HWINEVENTHOOK,
     monitor_rect: RECT,
     dpi_scale: f64,
@@ -238,9 +262,13 @@ fn color_for_number(number: usize) -> u32 {
     LABEL_COLORS[(number - 1) % LABEL_COLORS.len()]
 }
 
+fn badge_color_for_number(number: usize) -> u32 {
+    if number == 0 { return BADGE_COLORS[0]; }
+    BADGE_COLORS[(number - 1) % BADGE_COLORS.len()]
+}
+
 fn format_label(w: &EqWindow) -> String {
-    let name = w.character.as_deref().unwrap_or("(right-click)");
-    format!("{}: {}", w.number, name)
+    w.character.as_deref().unwrap_or("(right-click)").to_string()
 }
 
 #[allow(dead_code)]
@@ -493,7 +521,12 @@ unsafe fn init_inner() -> HWND {
         0, 0, 0, 0, None, None, None, None,
     ).expect("Failed to create label window");
 
-    let _ = SetLayeredWindowAttributes(label_hwnd, None, 255, LWA_ALPHA);
+    let cfg = config::Config::load();
+    let label_opacity = cfg.pip_label_opacity.unwrap_or(DEFAULT_LABEL_OPACITY).min(100);
+    let label_alpha = ((label_opacity as u16 * 255) / 100) as u8;
+
+    let label_key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
+    let _ = SetLayeredWindowAttributes(label_hwnd, label_key, label_alpha, LWA_ALPHA | LWA_COLORKEY);
 
     // Register broadcast banner window class.
     let bc_class = w!("StonemiteBroadcastClass");
@@ -511,15 +544,15 @@ unsafe fn init_inner() -> HWND {
         0, 0, 0, 0, None, None, None, None,
     ).expect("Failed to create broadcast label window");
 
-    let _ = SetLayeredWindowAttributes(bc_hwnd, None, 255, LWA_ALPHA);
+    let _ = SetLayeredWindowAttributes(bc_hwnd, label_key, label_alpha, LWA_ALPHA | LWA_COLORKEY);
 
     let hook = SetWinEventHook(
         EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
         None, Some(foreground_event_proc), 0, 0, WINEVENT_OUTOFCONTEXT,
     );
 
-    let cfg = config::Config::load();
     let has_custom = !cfg.pip_positions.is_empty();
+    let label_height = cfg.pip_label_height.map(|v| v as i32).unwrap_or(DEFAULT_LABEL_HEIGHT);
 
     *state() = Some(OverlayState {
         pip_windows: Vec::new(),
@@ -529,7 +562,10 @@ unsafe fn init_inner() -> HWND {
         active_label_hwnd: label_hwnd,
         active_label_text: String::new(),
         active_label_color: LABEL_COLORS[0],
+        active_label_number: 0,
         broadcast_label_hwnd: bc_hwnd,
+        label_height,
+        label_alpha,
         event_hook: hook,
         monitor_rect: RECT::default(),
         dpi_scale: get_dpi_scale(label_hwnd),
@@ -693,7 +729,7 @@ unsafe fn compute_strip_positions(s: &OverlayState) -> Vec<RECT> {
     let d = s.dpi_scale;
     let gap = dpi(THUMB_GAP, d);
     let border = dpi(BORDER_WIDTH, d);
-    let label_h = dpi(LABEL_HEIGHT, d);
+    let label_h = dpi(s.label_height, d);
 
     let mon_w = s.monitor_rect.right - s.monitor_rect.left;
     let mon_h = s.monitor_rect.bottom - s.monitor_rect.top;
@@ -840,7 +876,7 @@ unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
 
     let d = s.dpi_scale;
     let border = dpi(BORDER_WIDTH, d);
-    let label_h = dpi(LABEL_HEIGHT, d);
+    let label_h = dpi(s.label_height, d);
 
     let pip_class = w!("StonemitePipClass");
 
@@ -862,7 +898,7 @@ unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
         // Store 1-based index so 0 = uninitialized.
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (i + 1) as isize);
 
-        // Register DWM thumbnail.
+        // Register DWM thumbnail below the label bar.
         let thumb_rect = RECT {
             left: border,
             top: border + label_h,
@@ -909,6 +945,7 @@ unsafe fn update_active_label(s: &mut OverlayState) {
     let active = s.active_pid.and_then(|pid| s.eq_windows.iter().find(|w| w.pid == pid));
     s.active_label_text = active.map(|w| format_label(w)).unwrap_or_default();
     s.active_label_color = active.map(|w| color_for_number(w.number)).unwrap_or(LABEL_COLORS[0]);
+    s.active_label_number = active.map(|w| w.number).unwrap_or(0);
 
     if s.active_label_text.is_empty() {
         let _ = ShowWindow(s.active_label_hwnd, SW_HIDE);
@@ -922,25 +959,35 @@ unsafe fn update_active_label(s: &mut OverlayState) {
     let mut top_left = POINT { x: rect.left, y: rect.top };
     let _ = ClientToScreen(active_hwnd, &mut top_left);
 
-    let label_h = dpi(LABEL_HEIGHT, s.dpi_scale);
-    let text_width = (s.active_label_text.len() as i32 * (label_h - dpi(8, s.dpi_scale)) * 3) / 5 + label_h;
+    let d = s.dpi_scale;
+    let lh = s.label_height;
+    let label_h = dpi(lh, d);
+    // Badge width + padding + text + right padding.
+    let badge_w = label_h; // badge circle takes label_h width
+    let char_per_px = (dpi(lh - 10, d) * 3) / 5;
+    let text_width = badge_w + (s.active_label_text.len() as i32 * char_per_px) + dpi(16, d);
     let _ = SetWindowPos(
         s.active_label_hwnd, HWND_TOPMOST,
         top_left.x, top_left.y, text_width, label_h,
         SWP_NOACTIVATE,
     );
 
+    // Color key transparency: magenta pixels become fully transparent, rest gets alpha.
+    let key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
+    let _ = SetLayeredWindowAttributes(s.active_label_hwnd, key, s.label_alpha, LWA_ALPHA | LWA_COLORKEY);
+
     let _ = InvalidateRect(s.active_label_hwnd, None, true);
 
     // Position broadcast banner next to the active label.
     if crate::broadcast::is_active() {
-        let bc_text = "Key broadcasting active";
-        let bc_width = (bc_text.len() as i32 * (label_h - dpi(8, s.dpi_scale)) * 3) / 5 + label_h;
+        let bc_text = "BROADCAST";
+        let bc_width = (bc_text.len() as i32 * char_per_px) + dpi(20, d);
         let _ = SetWindowPos(
             s.broadcast_label_hwnd, HWND_TOPMOST,
-            top_left.x + text_width, top_left.y, bc_width, label_h,
+            top_left.x + text_width + dpi(4, d), top_left.y, bc_width, label_h,
             SWP_NOACTIVATE,
         );
+        let _ = SetLayeredWindowAttributes(s.broadcast_label_hwnd, key, s.label_alpha, LWA_ALPHA | LWA_COLORKEY);
         let _ = InvalidateRect(s.broadcast_label_hwnd, None, true);
     } else {
         let _ = ShowWindow(s.broadcast_label_hwnd, SW_HIDE);
@@ -1163,6 +1210,11 @@ unsafe fn show_char_menu(s: &mut OverlayState, target_pid: u32, screen_pt: POINT
     let _ = AppendMenuW(hmenu, MF_STRING, IDM_HIDE_OVERLAY as usize,
         windows::core::PCWSTR(hide_wide.as_ptr()));
 
+    let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, None);
+    let settings_label: Vec<u16> = "Settings...\0".encode_utf16().collect();
+    let _ = AppendMenuW(hmenu, MF_STRING, IDM_SETTINGS as usize,
+        windows::core::PCWSTR(settings_label.as_ptr()));
+
     s.context_menu_target_pid = Some(target_pid);
     s.context_menu_candidates = candidates;
     s.context_menu_open = true;
@@ -1189,6 +1241,8 @@ unsafe fn handle_menu_command(cmd_id: u32) {
     } else if cmd_id == IDM_HIDE_OVERLAY {
         s.hidden_by_user = true;
         update_visibility(s);
+    } else if cmd_id == IDM_SETTINGS {
+        crate::settings_dialog::show();
     } else if cmd_id == IDM_EDIT_MODE {
         toggle_edit_mode_inner(s);
     } else if cmd_id == IDM_RESET_LAYOUT {
@@ -1327,8 +1381,9 @@ unsafe fn paint_pip_window(hwnd: HWND, pip_idx: usize) {
     };
 
     let d = s.dpi_scale;
+    let lh = s.label_height;
     let border = dpi(BORDER_WIDTH, d);
-    let label_h = dpi(LABEL_HEIGHT, d);
+    let label_h = dpi(lh, d);
 
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
@@ -1391,7 +1446,7 @@ unsafe fn paint_pip_window(hwnd: HWND, pip_idx: usize) {
         let _ = windows::Win32::Graphics::Gdi::DeleteObject(edit_brush);
     }
 
-    // Colored label bar.
+    // Colored label bar — rendered to memory DC then alpha-blended for transparency.
     let bg_color = color_for_number(pw.number);
     let label_bg_rect = RECT {
         left: client_rect.left + border,
@@ -1399,34 +1454,91 @@ unsafe fn paint_pip_window(hwnd: HWND, pip_idx: usize) {
         right: client_rect.right - border,
         bottom: client_rect.top + border + label_h,
     };
+    let lbl_w = label_bg_rect.right - label_bg_rect.left;
+    let lbl_h = label_bg_rect.bottom - label_bg_rect.top;
+
+    // Create memory DC and bitmap for the label.
+    let mem_dc = CreateCompatibleDC(hdc);
+    let mem_bmp = CreateCompatibleBitmap(hdc, lbl_w, lbl_h);
+    let old_bmp = SelectObject(mem_dc, mem_bmp);
+
+    // Fill label background in mem DC.
+    let mem_rect = RECT { left: 0, top: 0, right: lbl_w, bottom: lbl_h };
+    let radius = dpi(6, d);
     let label_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(bg_color));
-    let _ = FillRect(hdc, &label_bg_rect, label_brush);
+    let _ = FillRect(mem_dc, &mem_rect, HBRUSH(GetStockObject(BLACK_BRUSH).0));
+    let null_pen = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
+    let mp = SelectObject(mem_dc, null_pen);
+    let mb = SelectObject(mem_dc, label_brush);
+    // Rounded top corners; extend below to hide bottom rounding.
+    let _ = RoundRect(mem_dc, 0, 0, lbl_w, lbl_h + radius, radius * 2, radius * 2);
+    let _ = SelectObject(mem_dc, mb);
+    let _ = SelectObject(mem_dc, mp);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(label_brush);
 
-    // Label text.
-    let font = CreateFontW(
-        dpi(LABEL_HEIGHT - 8, d), 0, 0, 0, FW_BOLD.0 as i32,
+    // Number badge circle.
+    let badge_diameter = lbl_h - dpi(6, d);
+    let badge_x = dpi(4, d);
+    let badge_y = (lbl_h - badge_diameter) / 2;
+    let badge_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(badge_color_for_number(pw.number)));
+    let null_pen2 = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
+    let mp2 = SelectObject(mem_dc, null_pen2);
+    let mb2 = SelectObject(mem_dc, badge_brush);
+    let _ = Ellipse(mem_dc, badge_x, badge_y, badge_x + badge_diameter, badge_y + badge_diameter);
+    let _ = SelectObject(mem_dc, mb2);
+    let _ = SelectObject(mem_dc, mp2);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen2);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_brush);
+
+    // Number text inside badge.
+    let badge_font = CreateFontW(
+        dpi(lh - 14, d), 0, 0, 0, FW_HEAVY.0 as i32,
         0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI"),
     );
-    let old_font = SelectObject(hdc, font);
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x0048372D));
-    let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
-
-    let mut label_rect = RECT {
-        left: label_bg_rect.left + dpi(8, d),
-        top: label_bg_rect.top + dpi(4, d),
-        right: label_bg_rect.right,
-        bottom: label_bg_rect.bottom,
+    let old_font = SelectObject(mem_dc, badge_font);
+    let _ = SetBkMode(mem_dc, BACKGROUND_MODE(1));
+    let mut badge_rect = RECT {
+        left: badge_x, top: badge_y,
+        right: badge_x + badge_diameter, bottom: badge_y + badge_diameter,
     };
+    let num_str = format!("{}", pw.number);
+    let mut num_wide: Vec<u16> = num_str.encode_utf16().collect();
+    let _ = SetTextColor(mem_dc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
+    let _ = DrawTextW(mem_dc, &mut num_wide, &mut badge_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+    let _ = SelectObject(mem_dc, old_font);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_font);
+
+    // Character name text with shadow.
+    let name_font = CreateFontW(
+        dpi(lh - 12, d), 0, 0, 0, FW_BOLD.0 as i32,
+        0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI"),
+    );
+    let old_font2 = SelectObject(mem_dc, name_font);
+    let text_left = badge_x + badge_diameter + dpi(6, d);
     let mut text: Vec<u16> = pw.label.encode_utf16().collect();
-    let _ = DrawTextW(hdc, &mut text, &mut label_rect, DT_LEFT | DT_SINGLELINE | DT_TOP);
+
+    // Shadow pass.
+    let mut shadow_rect = RECT {
+        left: text_left + dpi(1, d), top: dpi(1, d),
+        right: lbl_w, bottom: lbl_h,
+    };
+    let _ = SetTextColor(mem_dc, windows::Win32::Foundation::COLORREF(0x00000000));
+    let _ = DrawTextW(mem_dc, &mut text, &mut shadow_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    // Main text pass (white).
+    let mut label_rect = RECT {
+        left: text_left, top: 0,
+        right: lbl_w, bottom: lbl_h,
+    };
+    let _ = SetTextColor(mem_dc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
+    let _ = DrawTextW(mem_dc, &mut text, &mut label_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
     // Edit mode grip indicator (three dots in label bar).
     if s.edit_mode {
-        let grip_color = windows::Win32::Foundation::COLORREF(0x0048372D);
-        let grip_brush = CreateSolidBrush(grip_color);
-        let cx = label_bg_rect.right - dpi(16, d);
-        let cy = (label_bg_rect.top + label_bg_rect.bottom) / 2;
+        let grip_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00FFFFFF));
+        let cx = lbl_w - dpi(16, d);
+        let cy = lbl_h / 2;
         let dot_size = dpi(3, d);
         let dot_gap = dpi(5, d);
         for j in 0..3 {
@@ -1434,42 +1546,119 @@ unsafe fn paint_pip_window(hwnd: HWND, pip_idx: usize) {
                 left: cx, top: cy - dot_gap + j * dot_gap - dot_size / 2,
                 right: cx + dot_size, bottom: cy - dot_gap + j * dot_gap + dot_size / 2,
             };
-            let _ = FillRect(hdc, &dot_rect, grip_brush);
+            let _ = FillRect(mem_dc, &dot_rect, grip_brush);
         }
         let _ = windows::Win32::Graphics::Gdi::DeleteObject(grip_brush);
     }
 
-    let _ = SelectObject(hdc, old_font);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
+    let _ = SelectObject(mem_dc, old_font2);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(name_font);
+
+    // Alpha-blend the label onto the PiP window.
+    let blend = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: s.label_alpha,
+        AlphaFormat: 0, // no per-pixel alpha, just constant
+    };
+    let _ = AlphaBlend(hdc,
+        label_bg_rect.left, label_bg_rect.top, lbl_w, lbl_h,
+        mem_dc, 0, 0, lbl_w, lbl_h, blend);
+
+    let _ = SelectObject(mem_dc, old_bmp);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(mem_bmp);
+    let _ = DeleteDC(mem_dc);
     let _ = EndPaint(hwnd, &ps);
 }
 
 unsafe fn paint_label(hwnd: HWND, text: &str, bg_color: u32) {
-    let d = state().as_ref().map_or(1.0, |s| s.dpi_scale);
+    let (d, number, lh) = state().as_ref()
+        .map(|s| (s.dpi_scale, s.active_label_number, s.label_height))
+        .unwrap_or((1.0, 0, DEFAULT_LABEL_HEIGHT));
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
 
-    let bg_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(bg_color));
-    let _ = FillRect(hdc, &ps.rcPaint, bg_brush);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(bg_brush);
-
-    let font = CreateFontW(
-        dpi(LABEL_HEIGHT - 8, d), 0, 0, 0, FW_BOLD.0 as i32,
-        0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI"),
-    );
-    let old_font = SelectObject(hdc, font);
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x0048372D));
-    let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
-
     let mut rc = RECT::default();
     let _ = GetClientRect(hwnd, &mut rc);
-    rc.left += dpi(8, d);
-    rc.top += dpi(4, d);
-    let mut wide: Vec<u16> = text.encode_utf16().collect();
-    let _ = DrawTextW(hdc, &mut wide, &mut rc, DT_LEFT | DT_SINGLELINE | DT_TOP);
+    let label_h = rc.bottom - rc.top;
 
+    // Fill entire window with color key (becomes transparent via LWA_COLORKEY).
+    let key_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY));
+    let _ = FillRect(hdc, &rc, key_brush);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(key_brush);
+
+    // Rounded background.
+    let radius = dpi(8, d);
+    let bg_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(bg_color));
+    let null_pen = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
+    let old_pen = SelectObject(hdc, null_pen);
+    let old_brush = SelectObject(hdc, bg_brush);
+    let _ = RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, radius * 2, radius * 2);
+    let _ = SelectObject(hdc, old_brush);
+    let _ = SelectObject(hdc, old_pen);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(bg_brush);
+
+    let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
+
+    // Number badge circle.
+    let badge_diameter = label_h - dpi(6, d);
+    let badge_x = rc.left + dpi(4, d);
+    let badge_y = rc.top + (label_h - badge_diameter) / 2;
+    let badge_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(badge_color_for_number(number)));
+    let null_pen2 = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
+    let op2 = SelectObject(hdc, null_pen2);
+    let ob2 = SelectObject(hdc, badge_brush);
+    let _ = Ellipse(hdc, badge_x, badge_y, badge_x + badge_diameter, badge_y + badge_diameter);
+    let _ = SelectObject(hdc, ob2);
+    let _ = SelectObject(hdc, op2);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen2);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_brush);
+
+    // Number text in badge.
+    let badge_font = CreateFontW(
+        dpi(lh - 14, d), 0, 0, 0, FW_HEAVY.0 as i32,
+        0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI"),
+    );
+    let old_font = SelectObject(hdc, badge_font);
+    let mut badge_rect = RECT {
+        left: badge_x, top: badge_y,
+        right: badge_x + badge_diameter, bottom: badge_y + badge_diameter,
+    };
+    let num_str = format!("{number}");
+    let mut num_wide: Vec<u16> = num_str.encode_utf16().collect();
+    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
+    let _ = DrawTextW(hdc, &mut num_wide, &mut badge_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
     let _ = SelectObject(hdc, old_font);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_font);
+
+    // Character name with shadow.
+    let name_font = CreateFontW(
+        dpi(lh - 12, d), 0, 0, 0, FW_BOLD.0 as i32,
+        0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI"),
+    );
+    let old_font2 = SelectObject(hdc, name_font);
+    let text_left = badge_x + badge_diameter + dpi(6, d);
+    let mut wide: Vec<u16> = text.encode_utf16().collect();
+
+    // Shadow.
+    let mut shadow_rc = RECT {
+        left: text_left + dpi(1, d), top: rc.top + dpi(1, d),
+        right: rc.right, bottom: rc.bottom,
+    };
+    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000000));
+    let _ = DrawTextW(hdc, &mut wide, &mut shadow_rc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    // Main text (white).
+    let mut text_rc = RECT {
+        left: text_left, top: rc.top,
+        right: rc.right, bottom: rc.bottom,
+    };
+    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
+    let _ = DrawTextW(hdc, &mut wide, &mut text_rc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    let _ = SelectObject(hdc, old_font2);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(name_font);
     let _ = EndPaint(hwnd, &ps);
 }
 
@@ -1490,30 +1679,52 @@ unsafe extern "system" fn broadcast_label_wnd_proc(
 }
 
 unsafe fn paint_broadcast_label(hwnd: HWND) {
-    let d = state().as_ref().map_or(1.0, |s| s.dpi_scale);
+    let (d, lh) = state().as_ref()
+        .map(|s| (s.dpi_scale, s.label_height))
+        .unwrap_or((1.0, DEFAULT_LABEL_HEIGHT));
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
 
-    // Red background.
-    let bg_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x002020CC));
-    let _ = FillRect(hdc, &ps.rcPaint, bg_brush);
+    let mut rc = RECT::default();
+    let _ = GetClientRect(hwnd, &mut rc);
+
+    // Fill with color key for transparent corners.
+    let key_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY));
+    let _ = FillRect(hdc, &rc, key_brush);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(key_brush);
+
+    // Rounded red background.
+    let radius = dpi(8, d);
+    let bg_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x002030CC));
+    let null_pen = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
+    let old_pen = SelectObject(hdc, null_pen);
+    let old_brush = SelectObject(hdc, bg_brush);
+    let _ = RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, radius * 2, radius * 2);
+    let _ = SelectObject(hdc, old_brush);
+    let _ = SelectObject(hdc, old_pen);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(bg_brush);
 
     let font = CreateFontW(
-        dpi(LABEL_HEIGHT - 8, d), 0, 0, 0, FW_BOLD.0 as i32,
+        dpi(lh - 12, d), 0, 0, 0, FW_HEAVY.0 as i32,
         0, 0, 0, 0, 0, 0, 0, 0, w!("Segoe UI"),
     );
     let old_font = SelectObject(hdc, font);
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
     let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
 
-    let mut rc = RECT::default();
-    let _ = GetClientRect(hwnd, &mut rc);
-    rc.left += dpi(8, d);
-    rc.top += dpi(4, d);
-    let text = "Key broadcasting active";
+    // Shadow.
+    let mut shadow_rc = RECT {
+        left: rc.left + dpi(1, d), top: rc.top + dpi(1, d),
+        right: rc.right, bottom: rc.bottom,
+    };
+    let text = "BROADCAST";
     let mut wide: Vec<u16> = text.encode_utf16().collect();
-    let _ = DrawTextW(hdc, &mut wide, &mut rc, DT_LEFT | DT_SINGLELINE | DT_TOP);
+    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000044));
+    let _ = DrawTextW(hdc, &mut wide, &mut shadow_rc, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+    // Main text (white).
+    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
+    let _ = DrawTextW(hdc, &mut wide, &mut rc, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
     let _ = SelectObject(hdc, old_font);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
@@ -1639,7 +1850,7 @@ unsafe extern "system" fn pip_wnd_proc(
 
                     let d = s.dpi_scale;
                     let border = dpi(BORDER_WIDTH, d);
-                    let label_h = dpi(LABEL_HEIGHT, d);
+                    let label_h = dpi(s.label_height, d);
                     let new_rect = snap_resize(edge, rd.start_rect, dx, dy,
                         &others, s.monitor_rect, s.snap_grid, border, label_h);
                     let nw = new_rect.right - new_rect.left;
@@ -1704,7 +1915,7 @@ unsafe extern "system" fn pip_wnd_proc(
                     s.strip_height = sh;
                     let d = s.dpi_scale;
                     let border = dpi(BORDER_WIDTH, d);
-                    let label_h = dpi(LABEL_HEIGHT, d);
+                    let label_h = dpi(s.label_height, d);
                     for (i, pw) in s.pip_windows.iter().enumerate() {
                         if let Some(rect) = rects.get(i) {
                             let cw = rect.right - rect.left;
@@ -2053,7 +2264,9 @@ unsafe extern "system" fn label_wnd_proc(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            let _ = SetLayeredWindowAttributes(hwnd, None, 128, LWA_ALPHA);
+            let key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
+            let alpha = state().as_ref().map_or(204, |s| s.label_alpha);
+            let _ = SetLayeredWindowAttributes(hwnd, key, alpha / 2, LWA_ALPHA | LWA_COLORKEY);
             let mut tme = TRACKMOUSEEVENT {
                 cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
                 dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0,
@@ -2062,7 +2275,9 @@ unsafe extern "system" fn label_wnd_proc(
             LRESULT(0)
         }
         WM_MOUSELEAVE => {
-            let _ = SetLayeredWindowAttributes(hwnd, None, 255, LWA_ALPHA);
+            let key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
+            let alpha = state().as_ref().map_or(204, |s| s.label_alpha);
+            let _ = SetLayeredWindowAttributes(hwnd, key, alpha, LWA_ALPHA | LWA_COLORKEY);
             LRESULT(0)
         }
         WM_RBUTTONUP => {
@@ -2148,6 +2363,13 @@ pub fn force_rebuild() {
         s.custom_strip_width = cfg.pip_strip_width.map(|v| v as i32);
         s.has_custom_positions = !cfg.pip_positions.is_empty();
         s.snap_grid = cfg.snap_grid as i32;
+        s.label_height = cfg.pip_label_height.map(|v| v as i32).unwrap_or(DEFAULT_LABEL_HEIGHT);
+        let opacity = cfg.pip_label_opacity.unwrap_or(DEFAULT_LABEL_OPACITY).min(100);
+        s.label_alpha = ((opacity as u16 * 255) / 100) as u8;
+        // Update layered window attributes for floating labels.
+        let key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
+        let _ = SetLayeredWindowAttributes(s.active_label_hwnd, key, s.label_alpha, LWA_ALPHA | LWA_COLORKEY);
+        let _ = SetLayeredWindowAttributes(s.broadcast_label_hwnd, key, s.label_alpha, LWA_ALPHA | LWA_COLORKEY);
         rebuild_thumbnails(s);
         update_visibility(s);
     }

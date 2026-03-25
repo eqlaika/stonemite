@@ -79,7 +79,7 @@ pub fn run_standalone() {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tab {
     General,
-    Hotkeys,
+    PiP,
     Broadcasting,
     About,
 }
@@ -168,7 +168,8 @@ struct SettingsApp {
     filter_mode_index: usize,
     filter_keys_text: String,
     edge_index: usize,
-    trusik: bool,
+    label_height: u32,
+    label_opacity: u32,
     logo: Option<egui::TextureHandle>,
     avatar: Option<egui::TextureHandle>,
 }
@@ -195,7 +196,8 @@ impl SettingsApp {
             filter_mode_index,
             filter_keys_text: cfg.broadcast_filter_keys.join(", "),
             edge_index,
-            trusik: cfg.trusik,
+            label_height: cfg.pip_label_height.unwrap_or(48),
+            label_opacity: cfg.pip_label_opacity.unwrap_or(80),
             logo: None,
             avatar: None,
         }
@@ -210,7 +212,7 @@ impl eframe::App for SettingsApp {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.tab, Tab::General, "General");
-                ui.selectable_value(&mut self.tab, Tab::Hotkeys, "Hotkeys");
+                ui.selectable_value(&mut self.tab, Tab::PiP, "PiP");
                 ui.selectable_value(&mut self.tab, Tab::Broadcasting, "Broadcasting");
                 ui.selectable_value(&mut self.tab, Tab::About, "About");
             });
@@ -235,7 +237,7 @@ impl eframe::App for SettingsApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.tab {
                 Tab::General => self.general_tab(ui),
-                Tab::Hotkeys => self.hotkeys_tab(ui),
+                Tab::PiP => self.pip_tab(ui),
                 Tab::Broadcasting => self.broadcasting_tab(ui),
                 Tab::About => self.about_tab(ui),
             }
@@ -263,8 +265,12 @@ impl SettingsApp {
                 }
             });
         });
+    }
 
-        section(ui, "PiP edge", |ui| {
+    fn pip_tab(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+
+        section(ui, "Layout", |ui| {
             ui.label("Screen edge where PiP thumbnails are anchored");
             egui::ComboBox::from_id_salt("pip_edge")
                 .selected_text(PIP_EDGE_OPTIONS[self.edge_index].0)
@@ -275,12 +281,18 @@ impl SettingsApp {
                 });
         });
 
-    }
+        section(ui, "Labels", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Height:");
+                ui.add(egui::Slider::new(&mut self.label_height, 24..=64).suffix(" px"));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Opacity:");
+                ui.add(egui::Slider::new(&mut self.label_opacity, 10..=100).suffix("%"));
+            });
+        });
 
-    fn hotkeys_tab(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
-
-        section(ui, "Hide overlay", |ui| {
+        section(ui, "Hide overlay hotkey", |ui| {
             ui.label("Toggle PiP overlay visibility while EQ is focused");
             ui.horizontal(|ui| {
                 if self.capturing_hotkey {
@@ -356,17 +368,7 @@ impl SettingsApp {
     fn broadcasting_tab(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
 
-        ui.checkbox(&mut self.trusik, "Enable key broadcasting features (requires restart)");
-
-        ui.add_space(4.0);
-        ui.separator();
-        ui.add_space(4.0);
-
-        ui.add_enabled_ui(self.trusik, |ui| {
-            section(ui, "Character detection", |ui| {
-                ui.label("Auto-detect character names");
-            });
-
+        {
             section(ui, "Broadcast toggle hotkey", |ui| {
                 ui.label("Toggle key broadcasting on/off");
                 ui.horizontal(|ui| {
@@ -456,7 +458,7 @@ impl SettingsApp {
                         .desired_rows(3),
                 );
             });
-        });
+        }
     }
 
     fn about_tab(&mut self, ui: &mut egui::Ui) {
@@ -552,25 +554,17 @@ impl SettingsApp {
             pip_strip_width: existing.pip_strip_width,
             pip_positions: existing.pip_positions,
             snap_grid: existing.snap_grid,
-            trusik: self.trusik,
+            trusik: existing.trusik,
             broadcast_hotkey: self.broadcast_hotkey.clone(),
             broadcast_filter_mode: FILTER_MODE_OPTIONS[self.filter_mode_index].1.to_string(),
             broadcast_filter_keys: filter_keys,
             telemetry: existing.telemetry,
             telemetry_id: existing.telemetry_id,
+            pip_label_height: Some(self.label_height),
+            pip_label_opacity: Some(self.label_opacity),
         };
         if let Err(e) = cfg.save() {
             eprintln!("Failed to save config: {e}");
-        }
-
-        // Deploy or remove trusik DLL immediately on save.
-        let eq_dir = cfg.eq_directory();
-        if cfg.trusik {
-            if let Err(e) = crate::trusik_deploy::deploy(&eq_dir) {
-                eprintln!("trusik deploy failed: {e}");
-            }
-        } else {
-            let _ = crate::trusik_deploy::remove(&eq_dir);
         }
 
         notify_tray();
