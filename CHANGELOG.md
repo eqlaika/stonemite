@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.3.0
+
+- Key broadcasting to background EQ clients
+- Swap-to-window hotkeys (Ctrl+F1–F6) with configurable bindings
+- Toast notifications for swaps, window closes, and broadcast toggle
+- Character class detection with class icons in labels
+- Character cache and pet claim detection
+- Redesigned PiP labels with number badges, rounded corners, and configurable opacity
+- Settings dialog rebuilt with egui
+- Settings window remembers its position between opens
+- Press-to-capture hotkey binding with modifier support
+- Clear broadcast key states when EQ loses focus
+- Squircle background on app icons for dark taskbar visibility
+- Remove dinput8.dll from EQ directory on uninstall
+- Fix crash when an EQ window exits while others remain
+- Fix crash when monitor is unplugged
+- Fix PiP label z-order after interactions
+- Fix active label click-through and hover opacity
+- Fix doubled keystrokes from re-injection
+- Fix PiP windows hiding when context menu opens
+
 ## v0.2.0
 
 - Free PiP placement: move and resize individual PiPs anywhere on screen
