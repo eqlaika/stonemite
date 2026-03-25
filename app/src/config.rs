@@ -51,6 +51,12 @@ pub struct Config {
     /// Snap grid size in pixels. 0 = no grid snap. Default: 16.
     #[serde(default = "default_snap_grid")]
     pub snap_grid: u32,
+    /// PiP label height in pixels. None = default (48).
+    #[serde(default)]
+    pub pip_label_height: Option<u32>,
+    /// PiP label opacity as a percentage (0–100). None = default (80).
+    #[serde(default)]
+    pub pip_label_opacity: Option<u32>,
     /// Enable trusik DLL proxy for character detection. Requires restart.
     #[serde(default)]
     pub trusik: bool,
@@ -100,6 +106,8 @@ impl Default for Config {
             pip_strip_width: None,
             pip_positions: Vec::new(),
             snap_grid: default_snap_grid(),
+            pip_label_height: None,
+            pip_label_opacity: None,
             trusik: false,
             broadcast_hotkey: default_broadcast_hotkey(),
             broadcast_filter_mode: default_broadcast_filter_mode(),

@@ -16,6 +16,12 @@ pip_edge = "right"
 # Snap grid size in pixels for free PiP placement (0 = no grid snap)
 # snap_grid = 16
 
+# PiP label height in pixels (default 48, try 32 for compact or 56 for large)
+# pip_label_height = 48
+
+# PiP label opacity as a percentage, 0–100 (default 80)
+# pip_label_opacity = 80
+
 # Per-PiP custom positions (set via Edit Layout mode, or manually).
 # Empty = auto strip layout. Each entry needs slot, x, y, width, height.
 # [[pip_positions]]
