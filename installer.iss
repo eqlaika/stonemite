@@ -34,6 +34,41 @@ Name: "notelemetry"; Description: "Disable anonymous usage telemetry"; Flags: un
 Filename: "{app}\stonemite.exe"; Description: "Launch Stonemite"; Flags: nowait postinstall skipifsilent
 
 [Code]
+function GetEqDirFromConfig(): String;
+var
+  ConfigPath: String;
+  Lines: TArrayOfString;
+  I, P: Integer;
+  Line, Value: String;
+begin
+  Result := 'C:\Users\Public\Daybreak Game Company\Installed Games\EverQuest';
+  ConfigPath := ExpandConstant('{userappdata}\Stonemite\config.toml');
+  if not FileExists(ConfigPath) then
+    Exit;
+  if not LoadStringsFromFile(ConfigPath, Lines) then
+    Exit;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := Trim(Lines[I]);
+    if Pos('eq_dir', Line) = 1 then
+    begin
+      P := Pos('=', Line);
+      if P > 0 then
+      begin
+        Value := Trim(Copy(Line, P + 1, Length(Line)));
+        // Strip surrounding quotes
+        if (Length(Value) >= 2) and (Value[1] = '"') and (Value[Length(Value)] = '"') then
+          Value := Copy(Value, 2, Length(Value) - 2);
+        // Unescape backslashes
+        StringChangeEx(Value, '\\', '\', True);
+        if Value <> '' then
+          Result := Value;
+      end;
+      Exit;
+    end;
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ConfigDir: String;
@@ -52,5 +87,19 @@ begin
       else
         SaveStringToFile(ConfigPath, #13#10 + 'telemetry = false' + #13#10, True);
     end;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  EqDir: String;
+  DllPath: String;
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    EqDir := GetEqDirFromConfig();
+    DllPath := EqDir + '\dinput8.dll';
+    if FileExists(DllPath) then
+      DeleteFile(DllPath);
   end;
 end;
