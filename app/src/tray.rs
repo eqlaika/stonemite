@@ -181,19 +181,7 @@ unsafe extern "system" fn wnd_proc(
             maybe_auto_update_check(hwnd);
             // Register global hotkey for hiding overlay.
             let cfg = config::Config::load();
-            if let Some((mods, vk)) = cfg.hide_hotkey_vk() {
-                let _ = RegisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY, HOT_KEY_MODIFIERS(mods), vk);
-            }
-            if cfg.trusik {
-                if let Some((mods, vk)) = cfg.broadcast_hotkey_vk() {
-                    let _ = RegisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE, HOT_KEY_MODIFIERS(mods), vk);
-                }
-            }
-            for i in 0..MAX_SWAP_HOTKEYS {
-                if let Some((mods, vk)) = cfg.swap_hotkey_vk(i) {
-                    let _ = RegisterHotKey(hwnd, HOTKEY_SWAP_BASE + i as i32, HOT_KEY_MODIFIERS(mods), vk);
-                }
-            }
+            register_hotkeys(hwnd, &cfg);
             LRESULT(0)
         }
         WM_TIMER => {
@@ -259,36 +247,16 @@ unsafe extern "system" fn wnd_proc(
         }
         x if x == settings_dialog::WM_SETTINGS_CHANGED => {
             // Re-register hotkeys with new config.
-            let _ = UnregisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY);
-            let _ = UnregisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE);
-            for i in 0..MAX_SWAP_HOTKEYS {
-                let _ = UnregisterHotKey(hwnd, HOTKEY_SWAP_BASE + i as i32);
-            }
+            unregister_hotkeys(hwnd);
             let cfg = config::Config::load();
-            if let Some((mods, vk)) = cfg.hide_hotkey_vk() {
-                let _ = RegisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY, HOT_KEY_MODIFIERS(mods), vk);
-            }
-            if cfg.trusik {
-                if let Some((mods, vk)) = cfg.broadcast_hotkey_vk() {
-                    let _ = RegisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE, HOT_KEY_MODIFIERS(mods), vk);
-                }
-            }
-            for i in 0..MAX_SWAP_HOTKEYS {
-                if let Some((mods, vk)) = cfg.swap_hotkey_vk(i) {
-                    let _ = RegisterHotKey(hwnd, HOTKEY_SWAP_BASE + i as i32, HOT_KEY_MODIFIERS(mods), vk);
-                }
-            }
+            register_hotkeys(hwnd, &cfg);
             broadcast::on_settings_changed();
             // Reload overlay config (pip_edge, etc.) and rebuild layout.
             overlay::force_rebuild();
             LRESULT(0)
         }
         WM_DESTROY => {
-            let _ = UnregisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY);
-            let _ = UnregisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE);
-            for i in 0..MAX_SWAP_HOTKEYS {
-                let _ = UnregisterHotKey(hwnd, HOTKEY_SWAP_BASE + i as i32);
-            }
+            unregister_hotkeys(hwnd);
             let _ = KillTimer(hwnd, TIMER_POLL_EQ);
             PostQuitMessage(0);
             LRESULT(0)
@@ -421,6 +389,37 @@ fn update_version_from_wparam(wparam: WPARAM) -> String {
             return String::new();
         }
         *Box::from_raw(ptr)
+    }
+}
+
+unsafe fn register_hotkeys(hwnd: HWND, cfg: &config::Config) {
+    if let Some((mods, vk)) = cfg.hide_hotkey_vk() {
+        if RegisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY, HOT_KEY_MODIFIERS(mods), vk).is_err() {
+            eprintln!("Failed to register hide overlay hotkey: {}", cfg.hide_hotkey);
+        }
+    }
+    if cfg.trusik {
+        if let Some((mods, vk)) = cfg.broadcast_hotkey_vk() {
+            if RegisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE, HOT_KEY_MODIFIERS(mods), vk).is_err() {
+                eprintln!("Failed to register broadcast hotkey: {}", cfg.broadcast_hotkey);
+            }
+        }
+    }
+    for i in 0..MAX_SWAP_HOTKEYS {
+        if let Some((mods, vk)) = cfg.swap_hotkey_vk(i) {
+            if RegisterHotKey(hwnd, HOTKEY_SWAP_BASE + i as i32, HOT_KEY_MODIFIERS(mods), vk).is_err() {
+                eprintln!("Failed to register swap hotkey {}: {}", i + 1,
+                    cfg.swap_hotkeys.get(i).map(|s| s.as_str()).unwrap_or("?"));
+            }
+        }
+    }
+}
+
+unsafe fn unregister_hotkeys(hwnd: HWND) {
+    let _ = UnregisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY);
+    let _ = UnregisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE);
+    for i in 0..MAX_SWAP_HOTKEYS {
+        let _ = UnregisterHotKey(hwnd, HOTKEY_SWAP_BASE + i as i32);
     }
 }
 
