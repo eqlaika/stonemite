@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 // ---------------------------------------------------------------------------
 
 /// A parsed EQ log line: timestamp + message body.
-#[allow(dead_code)]
+#[allow(dead_code)] // Fields populated by parser; not all read yet.
 pub struct LogLine<'a> {
     pub timestamp: &'a str,
     pub body: &'a str,
@@ -32,7 +32,7 @@ impl<'a> LogLine<'a> {
 // ---------------------------------------------------------------------------
 
 /// A fully parsed /who result entry.
-#[allow(dead_code)]
+#[allow(dead_code)] // Fields populated by parser; not all read yet.
 pub struct WhoEntry<'a> {
     pub character: &'a str,
     pub level: Option<u16>,

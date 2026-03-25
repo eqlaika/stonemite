@@ -95,19 +95,6 @@ impl CharacterCache {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn get_owner_for_pet(&self, server: &str, pet: &str) -> Option<&str> {
-        let key = (server.to_ascii_lowercase(), pet.to_ascii_lowercase());
-        self.pet_to_owner.get(&key).map(|s| s.as_str())
-    }
-
-    #[allow(dead_code)]
-    pub fn get_pet_for_owner(&self, server: &str, owner: &str) -> Option<&str> {
-        let key = (server.to_ascii_lowercase(), owner.to_ascii_lowercase());
-        let idx = *self.by_key.get(&key)?;
-        self.entries[idx].pet.as_deref()
-    }
-
     fn upsert(&mut self, server: &str, name: &str) -> usize {
         let key = (server.to_ascii_lowercase(), name.to_ascii_lowercase());
         if let Some(&idx) = self.by_key.get(&key) {
