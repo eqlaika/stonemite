@@ -385,71 +385,8 @@ impl SettingsApp {
         section(ui, "Hide overlay hotkey", |ui| {
             ui.label("Toggle PiP overlay visibility while EQ is focused");
             ui.horizontal(|ui| {
-                if self.capturing_hotkey {
-                    // Show currently held modifiers as the user builds the combo.
-                    let mods = ui.input(|i| i.modifiers);
-                    let mut parts = Vec::new();
-                    if mods.ctrl { parts.push("Ctrl"); }
-                    if mods.alt { parts.push("Alt"); }
-                    if mods.shift { parts.push("Shift"); }
-
-                    let label = if parts.is_empty() {
-                        "Press a key combo...".to_string()
-                    } else {
-                        format!("{}+...", parts.join("+"))
-                    };
-
-                    let btn = egui::Button::new(
-                        egui::RichText::new(&label).italics(),
-                    );
-                    let resp = ui.add(btn);
-
-                    // Check for a non-modifier key press to complete the combo.
-                    let pressed = ui.input(|i| {
-                        i.events.iter().find_map(|e| {
-                            if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
-                                if *key == egui::Key::Escape {
-                                    return Some(None); // Cancel capture
-                                }
-                                egui_key_to_config_name(key).map(|name| {
-                                    let mut combo = Vec::new();
-                                    if modifiers.ctrl { combo.push("Ctrl"); }
-                                    if modifiers.alt { combo.push("Alt"); }
-                                    if modifiers.shift { combo.push("Shift"); }
-                                    combo.push(name);
-                                    Some(combo.join("+"))
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                    });
-
-                    match pressed {
-                        Some(Some(combo)) => {
-                            self.hide_hotkey = combo;
-                            self.capturing_hotkey = false;
-                        }
-                        Some(None) => {
-                            self.capturing_hotkey = false;
-                        }
-                        None => {
-                            resp.request_focus();
-                        }
-                    }
-                } else {
-                    let label = if self.hide_hotkey.is_empty() {
-                        "None".to_string()
-                    } else {
-                        self.hide_hotkey.clone()
-                    };
-                    if ui.button(&label).clicked() {
-                        self.capturing_hotkey = true;
-                    }
-                    ui.colored_label(
-                        ui.visuals().weak_text_color(),
-                        "Click to change",
-                    );
+                if let Some(combo) = hotkey_capture_button(ui, &self.hide_hotkey, &mut self.capturing_hotkey) {
+                    self.hide_hotkey = combo;
                 }
             });
         });
@@ -462,69 +399,15 @@ impl SettingsApp {
             for slot in 0..6 {
                 ui.horizontal(|ui| {
                     ui.label(format!("Window {}:", slot + 1));
-                    if self.capturing_swap_hotkey == Some(slot) {
-                        let mods = ui.input(|i| i.modifiers);
-                        let mut parts = Vec::new();
-                        if mods.ctrl { parts.push("Ctrl"); }
-                        if mods.alt { parts.push("Alt"); }
-                        if mods.shift { parts.push("Shift"); }
-
-                        let label = if parts.is_empty() {
-                            "Press a key combo...".to_string()
-                        } else {
-                            format!("{}+...", parts.join("+"))
-                        };
-
-                        let btn = egui::Button::new(
-                            egui::RichText::new(&label).italics(),
-                        );
-                        let resp = ui.add(btn);
-
-                        let pressed = ui.input(|i| {
-                            i.events.iter().find_map(|e| {
-                                if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
-                                    if *key == egui::Key::Escape {
-                                        return Some(None);
-                                    }
-                                    egui_key_to_config_name(key).map(|name| {
-                                        let mut combo = Vec::new();
-                                        if modifiers.ctrl { combo.push("Ctrl"); }
-                                        if modifiers.alt { combo.push("Alt"); }
-                                        if modifiers.shift { combo.push("Shift"); }
-                                        combo.push(name);
-                                        Some(combo.join("+"))
-                                    })
-                                } else {
-                                    None
-                                }
-                            })
-                        });
-
-                        match pressed {
-                            Some(Some(combo)) => {
-                                self.swap_hotkeys[slot] = combo;
-                                self.capturing_swap_hotkey = None;
-                            }
-                            Some(None) => {
-                                self.capturing_swap_hotkey = None;
-                            }
-                            None => {
-                                resp.request_focus();
-                            }
-                        }
-                    } else {
-                        let label = if self.swap_hotkeys[slot].is_empty() {
-                            "None".to_string()
-                        } else {
-                            self.swap_hotkeys[slot].clone()
-                        };
-                        if ui.button(&label).clicked() {
-                            self.capturing_swap_hotkey = Some(slot);
-                        }
-                        ui.colored_label(
-                            ui.visuals().weak_text_color(),
-                            "Click to change",
-                        );
+                    let mut capturing = self.capturing_swap_hotkey == Some(slot);
+                    if let Some(combo) = hotkey_capture_button(ui, &self.swap_hotkeys[slot], &mut capturing) {
+                        self.swap_hotkeys[slot] = combo;
+                    }
+                    // Sync the per-slot capturing state back.
+                    if capturing && self.capturing_swap_hotkey != Some(slot) {
+                        self.capturing_swap_hotkey = Some(slot);
+                    } else if !capturing && self.capturing_swap_hotkey == Some(slot) {
+                        self.capturing_swap_hotkey = None;
                     }
                 });
             }
@@ -534,77 +417,16 @@ impl SettingsApp {
     fn broadcasting_tab(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
 
-        {
-            section(ui, "Broadcast toggle hotkey", |ui| {
-                ui.label("Toggle key broadcasting on/off");
-                ui.horizontal(|ui| {
-                    if self.capturing_broadcast_hotkey {
-                        let mods = ui.input(|i| i.modifiers);
-                        let mut parts = Vec::new();
-                        if mods.ctrl { parts.push("Ctrl"); }
-                        if mods.alt { parts.push("Alt"); }
-                        if mods.shift { parts.push("Shift"); }
-
-                        let label = if parts.is_empty() {
-                            "Press a key combo...".to_string()
-                        } else {
-                            format!("{}+...", parts.join("+"))
-                        };
-
-                        let btn = egui::Button::new(
-                            egui::RichText::new(&label).italics(),
-                        );
-                        let resp = ui.add(btn);
-
-                        let pressed = ui.input(|i| {
-                            i.events.iter().find_map(|e| {
-                                if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
-                                    if *key == egui::Key::Escape {
-                                        return Some(None);
-                                    }
-                                    egui_key_to_config_name(key).map(|name| {
-                                        let mut combo = Vec::new();
-                                        if modifiers.ctrl { combo.push("Ctrl"); }
-                                        if modifiers.alt { combo.push("Alt"); }
-                                        if modifiers.shift { combo.push("Shift"); }
-                                        combo.push(name);
-                                        Some(combo.join("+"))
-                                    })
-                                } else {
-                                    None
-                                }
-                            })
-                        });
-
-                        match pressed {
-                            Some(Some(combo)) => {
-                                self.broadcast_hotkey = combo;
-                                self.capturing_broadcast_hotkey = false;
-                            }
-                            Some(None) => {
-                                self.capturing_broadcast_hotkey = false;
-                            }
-                            None => {
-                                resp.request_focus();
-                            }
-                        }
-                    } else {
-                        let label = if self.broadcast_hotkey.is_empty() {
-                            "None".to_string()
-                        } else {
-                            self.broadcast_hotkey.clone()
-                        };
-                        if ui.button(&label).clicked() {
-                            self.capturing_broadcast_hotkey = true;
-                        }
-                        ui.colored_label(
-                            ui.visuals().weak_text_color(),
-                            "Click to change",
-                        );
-                    }
-                });
+        section(ui, "Broadcast toggle hotkey", |ui| {
+            ui.label("Toggle key broadcasting on/off");
+            ui.horizontal(|ui| {
+                if let Some(combo) = hotkey_capture_button(ui, &self.broadcast_hotkey, &mut self.capturing_broadcast_hotkey) {
+                    self.broadcast_hotkey = combo;
+                }
             });
+        });
 
+        {
             section(ui, "Key filter", |ui| {
                 ui.label("Choose which keys are broadcast to background windows");
                 ui.horizontal(|ui| {
@@ -789,6 +611,68 @@ fn egui_key_to_config_name(key: &egui::Key) -> Option<&'static str> {
         Period => Some("Period"),
         Slash => Some("Slash"),
         _ => None,
+    }
+}
+
+/// Render a hotkey capture button. When `capturing` is true, waits for a key
+/// combo (Escape cancels). Returns `Some(combo)` when a combo is captured.
+fn hotkey_capture_button(ui: &mut egui::Ui, current_value: &str, capturing: &mut bool) -> Option<String> {
+    if *capturing {
+        let mods = ui.input(|i| i.modifiers);
+        let mut parts = Vec::new();
+        if mods.ctrl { parts.push("Ctrl"); }
+        if mods.alt { parts.push("Alt"); }
+        if mods.shift { parts.push("Shift"); }
+
+        let label = if parts.is_empty() {
+            "Press a key combo...".to_string()
+        } else {
+            format!("{}+...", parts.join("+"))
+        };
+
+        let btn = egui::Button::new(egui::RichText::new(&label).italics());
+        let resp = ui.add(btn);
+
+        let pressed = ui.input(|i| {
+            i.events.iter().find_map(|e| {
+                if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
+                    if *key == egui::Key::Escape {
+                        return Some(None);
+                    }
+                    egui_key_to_config_name(key).map(|name| {
+                        let mut combo = Vec::new();
+                        if modifiers.ctrl { combo.push("Ctrl"); }
+                        if modifiers.alt { combo.push("Alt"); }
+                        if modifiers.shift { combo.push("Shift"); }
+                        combo.push(name);
+                        Some(combo.join("+"))
+                    })
+                } else {
+                    None
+                }
+            })
+        });
+
+        match pressed {
+            Some(Some(combo)) => {
+                *capturing = false;
+                return Some(combo);
+            }
+            Some(None) => {
+                *capturing = false;
+            }
+            None => {
+                resp.request_focus();
+            }
+        }
+        None
+    } else {
+        let label = if current_value.is_empty() { "None" } else { current_value };
+        if ui.button(label).clicked() {
+            *capturing = true;
+        }
+        ui.colored_label(ui.visuals().weak_text_color(), "Click to change");
+        None
     }
 }
 
