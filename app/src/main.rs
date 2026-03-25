@@ -44,6 +44,9 @@ fn main() {
         h
     };
 
+    // Check if this is a first launch (no config file yet).
+    let first_launch = config::Config::path().map_or(false, |p| !p.exists());
+
     // Load config (creates default if missing).
     let config = config::Config::load();
 
@@ -66,6 +69,11 @@ fn main() {
     // Initialize broadcast engine if trusik is enabled.
     if config.trusik {
         broadcast::init();
+    }
+
+    // On first launch, open settings so the user can configure the app.
+    if first_launch {
+        settings_dialog::show();
     }
 
     // Run tray icon and message loop (blocks until exit).
