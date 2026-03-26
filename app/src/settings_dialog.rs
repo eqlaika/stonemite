@@ -176,6 +176,7 @@ struct SettingsApp {
     edge_index: usize,
     label_height: u32,
     label_opacity: u32,
+    auto_order: bool,
     toast_enabled: bool,
     toast_height: u32,
     toast_duration_tenths: u32,
@@ -220,6 +221,7 @@ impl SettingsApp {
             edge_index,
             label_height: cfg.pip_label_height.unwrap_or(48),
             label_opacity: cfg.pip_label_opacity.unwrap_or(80),
+            auto_order: cfg.auto_order,
             toast_enabled: cfg.toast_enabled,
             toast_height: cfg.toast_height.unwrap_or(64),
             toast_duration_tenths: cfg.toast_duration.map(|d| (d * 10.0).round() as u32).unwrap_or(20),
@@ -361,6 +363,7 @@ impl SettingsApp {
                         ui.selectable_value(&mut self.edge_index, i, *label);
                     }
                 });
+            ui.checkbox(&mut self.auto_order, "Auto order windows");
         });
 
         section(ui, "Labels", |ui| {
@@ -555,6 +558,7 @@ impl SettingsApp {
             telemetry_id: existing.telemetry_id,
             pip_label_height: Some(self.label_height),
             pip_label_opacity: Some(self.label_opacity),
+            auto_order: self.auto_order,
             toast_enabled: self.toast_enabled,
             toast_height: Some(self.toast_height),
             toast_duration: Some(self.toast_duration_tenths as f32 / 10.0),

@@ -22,6 +22,9 @@ pip_edge = "right"
 # PiP label opacity as a percentage, 0–100 (default 80)
 # pip_label_opacity = 80
 
+# Automatically order PiP windows by slot number (default true)
+# auto_order = true
+
 # Per-PiP custom positions (set via Edit Layout mode, or manually).
 # Empty = auto strip layout. Each entry needs slot, x, y, width, height.
 # [[pip_positions]]
