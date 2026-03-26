@@ -314,7 +314,7 @@ fn badge_color_for_number(number: usize) -> u32 {
 fn format_label(w: &EqWindow) -> String {
     match &w.character {
         Some(name) => name.clone(),
-        None => "(right-click)".to_string(),
+        None => String::new(),
     }
 }
 
