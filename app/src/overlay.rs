@@ -284,11 +284,24 @@ fn next_available_number(eq_windows: &[EqWindow]) -> usize {
     n
 }
 
+/// Sort pip_order so windows appear in slot-number order (1, 2, 3, …).
+fn apply_auto_order(s: &mut OverlayState) {
+    s.pip_order.sort_by_key(|pid| {
+        s.eq_windows.iter().find(|w| w.pid == *pid).map_or(usize::MAX, |w| w.number)
+    });
+}
+
+/// Get the effective DPI scale for the monitor a window is on.
+/// Uses GetDpiForMonitor (not GetDpiForWindow) so the result is correct
+/// even when the window belongs to a DPI-unaware process like EQ.
 unsafe fn get_dpi_scale(hwnd: HWND) -> f64 {
-    use windows::Win32::UI::HiDpi::GetDpiForWindow;
-    let dpi = GetDpiForWindow(hwnd);
-    if dpi > 0 {
-        return dpi as f64 / 96.0;
+    use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTOPRIMARY};
+    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+    let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+    let mut dpi_x = 0u32;
+    let mut dpi_y = 0u32;
+    if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).is_ok() && dpi_x > 0 {
+        return dpi_x as f64 / 96.0;
     }
     use windows::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, ReleaseDC, LOGPIXELSY};
     let dc = GetDC(HWND::default());
@@ -711,7 +724,16 @@ unsafe fn poll_inner() {
         // Update broadcast targets.
         let pids: Vec<u32> = s.eq_windows.iter().map(|w| w.pid).collect();
         crate::broadcast::update_targets(&pids, s.active_pid);
-        update_active_label(s);
+        // Re-derive DPI from the EQ window; if it changed (e.g. monitor
+        // reconnect moved EQ to a different-DPI display), rebuild everything.
+        let dpi_hwnd = s.eq_windows.first().map(|w| w.hwnd).unwrap_or(s.active_label_hwnd);
+        let new_dpi = get_dpi_scale(dpi_hwnd);
+        if (new_dpi - s.dpi_scale).abs() > 0.001 {
+            s.dpi_scale = new_dpi;
+            rebuild_thumbnails(s);
+        } else {
+            update_active_label(s);
+        }
         update_visibility(s);
         return;
     }
@@ -801,6 +823,10 @@ unsafe fn poll_inner() {
     // Update broadcast targets.
     let pids: Vec<u32> = s.eq_windows.iter().map(|w| w.pid).collect();
     crate::broadcast::update_targets(&pids, s.active_pid);
+
+    if config::Config::load().auto_order {
+        apply_auto_order(s);
+    }
 
     rebuild_thumbnails(s);
     update_visibility(s);
@@ -1279,6 +1305,9 @@ unsafe extern "system" fn foreground_event_proc(
                     s.pip_order.remove(pos);
                 }
                 s.active_pid = Some(fg_pid);
+                if config::Config::load().auto_order {
+                    apply_auto_order(s);
+                }
                 rebuild_thumbnails(s);
             }
         }
@@ -1319,6 +1348,10 @@ unsafe fn swap_to(pip_index: usize) {
     s.pip_order[pip_index] = old_active_pid;
     s.active_pid = Some(new_active_pid);
     crate::broadcast::set_active_pid(new_active_pid);
+
+    if config::Config::load().auto_order {
+        apply_auto_order(s);
+    }
 
     if let Some(w) = s.eq_windows.iter().find(|w| w.pid == new_active_pid) {
         let _ = SetWindowPos(w.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
@@ -2675,6 +2708,18 @@ unsafe extern "system" fn pip_wnd_proc(
                     // Perform swap if target is valid.
                     if let Some(to_index) = old_drop_target {
                         if to_index != drag.from_index && to_index < s.pip_order.len() && drag.from_index < s.pip_order.len() {
+                            // When auto-order is on, swap window numbers so the
+                            // sort keeps the user's intended arrangement.
+                            if config::Config::load().auto_order {
+                                let pid_a = s.pip_order[drag.from_index];
+                                let pid_b = s.pip_order[to_index];
+                                let num_a = s.eq_windows.iter().find(|w| w.pid == pid_a).map(|w| w.number);
+                                let num_b = s.eq_windows.iter().find(|w| w.pid == pid_b).map(|w| w.number);
+                                if let (Some(na), Some(nb)) = (num_a, num_b) {
+                                    if let Some(wa) = s.eq_windows.iter_mut().find(|w| w.pid == pid_a) { wa.number = nb; }
+                                    if let Some(wb) = s.eq_windows.iter_mut().find(|w| w.pid == pid_b) { wb.number = na; }
+                                }
+                            }
                             s.pip_order.swap(drag.from_index, to_index);
                             rebuild_thumbnails(s);
                             update_visibility(s);
