@@ -177,6 +177,7 @@ struct SettingsApp {
     label_height: u32,
     label_opacity: u32,
     auto_order: bool,
+    hide_from_alt_tab: bool,
     toast_enabled: bool,
     toast_height: u32,
     toast_duration_tenths: u32,
@@ -222,6 +223,7 @@ impl SettingsApp {
             label_height: cfg.pip_label_height.unwrap_or(48),
             label_opacity: cfg.pip_label_opacity.unwrap_or(80),
             auto_order: cfg.auto_order,
+            hide_from_alt_tab: cfg.hide_from_alt_tab,
             toast_enabled: cfg.toast_enabled,
             toast_height: cfg.toast_height.unwrap_or(64),
             toast_duration_tenths: cfg.toast_duration.map(|d| (d * 10.0).round() as u32).unwrap_or(20),
@@ -301,6 +303,10 @@ impl SettingsApp {
                     }
                 }
             });
+        });
+
+        section(ui, "EQ windows", |ui| {
+            ui.checkbox(&mut self.hide_from_alt_tab, "Hide from Alt-Tab");
         });
 
         section(ui, "Toast notifications", |ui| {
@@ -559,6 +565,7 @@ impl SettingsApp {
             pip_label_height: Some(self.label_height),
             pip_label_opacity: Some(self.label_opacity),
             auto_order: self.auto_order,
+            hide_from_alt_tab: self.hide_from_alt_tab,
             toast_enabled: self.toast_enabled,
             toast_height: Some(self.toast_height),
             toast_duration: Some(self.toast_duration_tenths as f32 / 10.0),

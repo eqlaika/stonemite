@@ -25,6 +25,9 @@ pip_edge = "right"
 # Automatically order PiP windows by slot number (default true)
 # auto_order = true
 
+# Hide background EQ windows from Alt-Tab (active window stays visible)
+# hide_from_alt_tab = true
+
 # Per-PiP custom positions (set via Edit Layout mode, or manually).
 # Empty = auto strip layout. Each entry needs slot, x, y, width, height.
 # [[pip_positions]]

@@ -1,5 +1,5 @@
 use std::cell::UnsafeCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use windows::core::w;
@@ -250,6 +250,10 @@ struct OverlayState {
     strip_height: i32,
     /// Toast notification state.
     toast: ToastState,
+    /// Whether to hide background EQ windows from Alt-Tab.
+    hide_from_alt_tab: bool,
+    /// Original extended styles for EQ windows, keyed by HWND as isize.
+    original_ex_styles: HashMap<isize, isize>,
     /// Whether trusik character detection is enabled.
     trusik_enabled: bool,
     /// Log file tailer for /who class detection.
@@ -289,6 +293,49 @@ fn apply_auto_order(s: &mut OverlayState) {
     s.pip_order.sort_by_key(|pid| {
         s.eq_windows.iter().find(|w| w.pid == *pid).map_or(usize::MAX, |w| w.number)
     });
+}
+
+/// Save original extended style and apply WS_EX_TOOLWINDOW to hide from Alt-Tab.
+unsafe fn hide_window_from_alt_tab(s: &mut OverlayState, hwnd: HWND) {
+    let key = hwnd.0 as isize;
+    s.original_ex_styles.entry(key).or_insert_with(|| {
+        GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+    });
+    let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    let new_style = (style | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
+    if new_style != style {
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+    }
+}
+
+/// Restore a window's original extended style from the saved HashMap.
+unsafe fn restore_window_ex_style(s: &mut OverlayState, hwnd: HWND) {
+    let key = hwnd.0 as isize;
+    if let Some(original) = s.original_ex_styles.remove(&key) {
+        let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        if current != original {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, original);
+        }
+    }
+}
+
+/// Apply Alt-Tab hiding: hide background EQ windows, restore the active one.
+unsafe fn apply_alt_tab_hiding(s: &mut OverlayState) {
+    if !s.hide_from_alt_tab {
+        return;
+    }
+    let active_pid = s.active_pid;
+    let windows: Vec<(HWND, u32)> = s.eq_windows.iter().map(|w| (w.hwnd, w.pid)).collect();
+    for (hwnd, pid) in &windows {
+        if active_pid == Some(*pid) {
+            restore_window_ex_style(s, *hwnd);
+        } else {
+            hide_window_from_alt_tab(s, *hwnd);
+        }
+    }
+    // Prune stale entries for windows that no longer exist.
+    let live_hwnds: HashSet<isize> = s.eq_windows.iter().map(|w| w.hwnd.0 as isize).collect();
+    s.original_ex_styles.retain(|k, _| live_hwnds.contains(k));
 }
 
 /// Get the effective DPI scale for the monitor a window is on.
@@ -686,6 +733,8 @@ unsafe fn init_inner() -> HWND {
             height: cfg.toast_height.map(|h| h as i32).unwrap_or(DEFAULT_TOAST_HEIGHT),
             enabled: cfg.toast_enabled,
         },
+        hide_from_alt_tab: cfg.hide_from_alt_tab,
+        original_ex_styles: HashMap::new(),
         trusik_enabled: cfg.trusik,
         log_watcher: log_watcher::LogTailer::new(),
         character_cache: character_cache::CharacterCache::load(),
@@ -734,6 +783,7 @@ unsafe fn poll_inner() {
         } else {
             update_active_label(s);
         }
+        apply_alt_tab_hiding(s);
         update_visibility(s);
         return;
     }
@@ -828,6 +878,7 @@ unsafe fn poll_inner() {
         apply_auto_order(s);
     }
 
+    apply_alt_tab_hiding(s);
     rebuild_thumbnails(s);
     update_visibility(s);
 }
@@ -1308,6 +1359,7 @@ unsafe extern "system" fn foreground_event_proc(
                 if config::Config::load().auto_order {
                     apply_auto_order(s);
                 }
+                apply_alt_tab_hiding(s);
                 rebuild_thumbnails(s);
             }
         }
@@ -1352,6 +1404,8 @@ unsafe fn swap_to(pip_index: usize) {
     if config::Config::load().auto_order {
         apply_auto_order(s);
     }
+
+    apply_alt_tab_hiding(s);
 
     if let Some(w) = s.eq_windows.iter().find(|w| w.pid == new_active_pid) {
         let _ = SetWindowPos(w.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
@@ -2939,6 +2993,18 @@ pub fn force_rebuild() {
         let key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
         let _ = SetLayeredWindowAttributes(s.active_label_hwnd, key, s.label_alpha, LWA_ALPHA | LWA_COLORKEY);
         let _ = SetLayeredWindowAttributes(s.broadcast_label_hwnd, key, s.label_alpha, LWA_ALPHA | LWA_COLORKEY);
+        // Handle hide_from_alt_tab setting change.
+        let old_hide = s.hide_from_alt_tab;
+        s.hide_from_alt_tab = cfg.hide_from_alt_tab;
+        if old_hide && !s.hide_from_alt_tab {
+            // Setting turned off: restore all original styles.
+            let hwnds: Vec<HWND> = s.eq_windows.iter().map(|w| w.hwnd).collect();
+            for hwnd in hwnds {
+                restore_window_ex_style(s, hwnd);
+            }
+        } else if s.hide_from_alt_tab {
+            apply_alt_tab_hiding(s);
+        }
         // Reload toast config.
         s.toast.enabled = cfg.toast_enabled;
         s.toast.height = cfg.toast_height.map(|h| h as i32).unwrap_or(DEFAULT_TOAST_HEIGHT);
@@ -2951,6 +3017,11 @@ pub fn force_rebuild() {
 pub fn cleanup() {
     unsafe {
         if let Some(s) = state().as_mut() {
+            // Restore original ex styles on all EQ windows before shutting down.
+            let hwnds: Vec<HWND> = s.eq_windows.iter().map(|w| w.hwnd).collect();
+            for hwnd in hwnds {
+                restore_window_ex_style(s, hwnd);
+            }
             if !s.event_hook.is_invalid() {
                 let _ = UnhookWinEvent(s.event_hook);
             }
