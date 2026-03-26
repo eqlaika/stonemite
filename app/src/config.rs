@@ -60,6 +60,9 @@ pub struct Config {
     /// Automatically order PiP windows by slot number in auto layout mode.
     #[serde(default = "default_auto_order")]
     pub auto_order: bool,
+    /// Hide background EQ windows from Alt-Tab (active window stays visible).
+    #[serde(default = "default_hide_from_alt_tab")]
+    pub hide_from_alt_tab: bool,
     /// Enable trusik DLL proxy for character detection. Requires restart.
     #[serde(default)]
     pub trusik: bool,
@@ -144,6 +147,10 @@ fn default_auto_order() -> bool {
     true
 }
 
+fn default_hide_from_alt_tab() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -156,6 +163,7 @@ impl Default for Config {
             pip_label_height: None,
             pip_label_opacity: None,
             auto_order: default_auto_order(),
+            hide_from_alt_tab: default_hide_from_alt_tab(),
             trusik: false,
             swap_hotkeys: default_swap_hotkeys(),
             settings_position: None,
