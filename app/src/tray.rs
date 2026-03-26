@@ -7,8 +7,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-    DestroyIcon, DestroyWindow, GetCursorPos, GetMessageW, KillTimer, MF_CHECKED, MF_STRING, MF_UNCHECKED,
+    AppendMenuW, CreateIconFromResourceEx, CreateMenu, CreatePopupMenu, CreateWindowExW,
+    DefWindowProcW, DestroyIcon, DestroyWindow, GetCursorPos, GetMessageW, KillTimer,
+    MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
     LR_DEFAULTCOLOR, MSG, PostMessageW, PostQuitMessage, RegisterClassW,
     SetForegroundWindow, SetTimer, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW,
     TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_TIMER,
@@ -76,6 +77,10 @@ const ID_SHOW_OVERLAY: u16 = 1003;
 const ID_CHECK_UPDATE: u16 = 1004;
 const ID_EDIT_MODE: u16 = 1005;
 const ID_BROADCAST_TOGGLE: u16 = 1006;
+const ID_CONFIGURE_ACCOUNTS: u16 = 1007;
+const ID_LOGIN_ALL: u16 = 1008;
+/// Account login IDs start here: 2000, 2001, 2002, ...
+const ID_LOGIN_ACCOUNT_BASE: u16 = 2000;
 
 /// Hotkey ID for hide-overlay toggle.
 const HOTKEY_HIDE_OVERLAY: i32 = 1;
@@ -230,10 +235,29 @@ unsafe extern "system" fn wnd_proc(
                         "Key broadcasting disabled"
                     });
                 }
-                ID_LAUNCH_EQ => launch_eq(),
+                ID_LAUNCH_EQ => launch_eq(None),
+                ID_LOGIN_ALL => {
+                    let cfg = config::Config::load();
+                    let usernames: Vec<String> = cfg.accounts.iter().map(|a| a.username.clone()).collect();
+                    std::thread::spawn(move || {
+                        for username in &usernames {
+                            launch_eq(Some(username));
+                        }
+                    });
+                }
+                ID_CONFIGURE_ACCOUNTS => {
+                    settings_dialog::show();
+                }
                 ID_SETTINGS => settings_dialog::show(),
                 ID_CHECK_UPDATE => do_update_check(hwnd),
                 ID_EXIT => PostQuitMessage(0),
+                _ if id >= ID_LOGIN_ACCOUNT_BASE => {
+                    let index = (id - ID_LOGIN_ACCOUNT_BASE) as usize;
+                    let cfg = config::Config::load();
+                    if let Some(account) = cfg.accounts.get(index) {
+                        launch_eq(Some(&account.username));
+                    }
+                }
                 _ => {}
             }
             LRESULT(0)
@@ -293,7 +317,31 @@ unsafe fn show_context_menu(hwnd: HWND) {
             windows::core::PCWSTR(bc_wide.as_ptr()));
     }
 
-    let _ = AppendMenuW(menu, MF_STRING, ID_LAUNCH_EQ as usize, w!("Launch EQ"));
+    if cfg.accounts.is_empty() {
+        let _ = AppendMenuW(menu, MF_STRING, ID_LAUNCH_EQ as usize, w!("Launch EQ"));
+    } else {
+        let login_menu = CreateMenu().expect("Failed to create login submenu");
+        let _ = AppendMenuW(login_menu, MF_STRING, ID_LOGIN_ALL as usize, w!("Login all accounts"));
+        let _ = AppendMenuW(login_menu, MF_SEPARATOR, 0, None);
+        for (i, account) in cfg.accounts.iter().enumerate() {
+            let label = format!("{}\0", account.username);
+            let wide: Vec<u16> = label.encode_utf16().collect();
+            let _ = AppendMenuW(
+                login_menu,
+                MF_STRING,
+                (ID_LOGIN_ACCOUNT_BASE + i as u16) as usize,
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+        }
+        let _ = AppendMenuW(login_menu, MF_SEPARATOR, 0, None);
+        let _ = AppendMenuW(
+            login_menu,
+            MF_STRING,
+            ID_CONFIGURE_ACCOUNTS as usize,
+            w!("Configure accounts..."),
+        );
+        let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, login_menu.0 as usize, w!("Login"));
+    }
     let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS as usize, w!("Settings..."));
     let update_label = format!("Check for updates\tv{}\0", updater::current_version());
     let update_wide: Vec<u16> = update_label.encode_utf16().collect();
@@ -423,7 +471,7 @@ unsafe fn unregister_hotkeys(hwnd: HWND) {
     }
 }
 
-fn launch_eq() {
+fn launch_eq(username: Option<&str>) {
     let cfg = config::Config::load();
     let eq_dir = cfg.eq_directory();
     let exe = eq_dir.join("eqgame.exe");
@@ -431,11 +479,12 @@ fn launch_eq() {
         eprintln!("eqgame.exe not found in {}", eq_dir.display());
         return;
     }
-    if let Err(e) = std::process::Command::new(&exe)
-        .arg("patchme")
-        .current_dir(&eq_dir)
-        .spawn()
-    {
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.arg("patchme").current_dir(&eq_dir);
+    if let Some(user) = username {
+        cmd.arg(format!("/login:{user}"));
+    }
+    if let Err(e) = cmd.spawn() {
         eprintln!("Failed to launch EQ: {e}");
     }
 }
