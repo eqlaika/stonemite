@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.1
+
+- Automatic update check on launch with configurable interval
+- Open settings window automatically on first launch
+- Anchor active window label at top-right when PiP edge is left
+- Fix overlay rendering at half size after monitor reconnect on high-DPI displays
+- Fix number reassignment displacing a window to number 0
+- Fix potential panic when system fails to allocate context menus
+- Log hotkey registration failures for easier troubleshooting
+
 ## v0.3.0
 
 - Key broadcasting to background EQ clients
