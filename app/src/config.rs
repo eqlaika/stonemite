@@ -57,6 +57,9 @@ pub struct Config {
     /// PiP label opacity as a percentage (0–100). None = default (80).
     #[serde(default)]
     pub pip_label_opacity: Option<u32>,
+    /// Automatically order PiP windows by slot number in auto layout mode.
+    #[serde(default = "default_auto_order")]
+    pub auto_order: bool,
     /// Enable trusik DLL proxy for character detection. Requires restart.
     #[serde(default)]
     pub trusik: bool,
@@ -137,6 +140,10 @@ fn default_telemetry() -> bool {
     true
 }
 
+fn default_auto_order() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -148,6 +155,7 @@ impl Default for Config {
             snap_grid: default_snap_grid(),
             pip_label_height: None,
             pip_label_opacity: None,
+            auto_order: default_auto_order(),
             trusik: false,
             swap_hotkeys: default_swap_hotkeys(),
             settings_position: None,
