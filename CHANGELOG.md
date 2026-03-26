@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.2
+
+- Hide background EQ windows from Alt-Tab (active window stays visible, enabled by default)
+- Add auto order windows setting to keep PiP thumbnails sorted by slot number
+- Fix DPI scaling for DPI-unaware EQ windows
+- Remove "(right-click)" hint from unknown character labels
+
 ## v0.3.1
 
 - Automatic update check on launch with configurable interval
