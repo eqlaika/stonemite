@@ -1,4 +1,4 @@
-use std::cell::UnsafeCell;
+use std::cell::{Cell, UnsafeCell};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -271,7 +271,33 @@ unsafe impl Sync for OverlayCell {}
 
 static OVERLAY: OverlayCell = OverlayCell(UnsafeCell::new(None));
 
+// Guard against re-entrant access to overlay state.
+// Win32 calls like CreateWindowExW pump messages, which can trigger
+// foreground event hooks while we're already mutating state.
+thread_local! {
+    static IN_OVERLAY: Cell<bool> = const { Cell::new(false) };
+}
+
+// Dummy None value returned when re-entrant access is detected.
+// This prevents callers from aliasing the real OVERLAY's &mut.
+struct NoneCel(UnsafeCell<Option<OverlayState>>);
+unsafe impl Sync for NoneCel {}
+static REENTRANT_NONE: NoneCel = NoneCel(UnsafeCell::new(None));
+
+/// Access overlay state. Returns a reference to a dummy `None` if called
+/// re-entrantly (while IN_OVERLAY is set), preventing aliasing UB.
+/// Use `state_unguarded()` only inside sections that already hold IN_OVERLAY.
 fn state() -> &'static mut Option<OverlayState> {
+    if IN_OVERLAY.get() {
+        return unsafe { &mut *REENTRANT_NONE.0.get() };
+    }
+    unsafe { &mut *OVERLAY.0.get() }
+}
+
+/// Direct access to overlay state without the re-entrancy check.
+/// Only safe to call from inside a section that already holds IN_OVERLAY
+/// (poll_inner_guarded, foreground_event_proc, etc.).
+fn state_unguarded() -> &'static mut Option<OverlayState> {
     unsafe { &mut *OVERLAY.0.get() }
 }
 
@@ -400,7 +426,23 @@ fn is_our_window(hwnd: HWND, s: &OverlayState) -> bool {
 }
 
 fn is_eq_or_ours(hwnd: HWND, s: &OverlayState) -> bool {
-    is_our_window(hwnd, s) || s.eq_windows.iter().any(|w| w.hwnd == hwnd)
+    if is_our_window(hwnd, s) {
+        return true;
+    }
+    // Check by HWND first (fast path), then fall back to PID check.
+    // The PID fallback handles EQ recreating its window (new HWND, same PID)
+    // before the next poll updates our cached HWNDs.
+    if s.eq_windows.iter().any(|w| w.hwnd == hwnd) {
+        return true;
+    }
+    if !s.eq_windows.is_empty() {
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)); }
+        if pid != 0 {
+            return s.eq_windows.iter().any(|w| w.pid == pid);
+        }
+    }
+    false
 }
 
 /// Detect resize edge/corner in edit mode from client-area point.
@@ -619,6 +661,7 @@ unsafe fn init_inner() -> HWND {
         lpfnWndProc: Some(pip_label_wnd_proc),
         lpszClassName: pip_label_class.into(),
         hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+        hCursor: cursor,
         ..Default::default()
     };
     RegisterClassW(&pip_label_wc);
@@ -629,6 +672,7 @@ unsafe fn init_inner() -> HWND {
         lpfnWndProc: Some(label_wnd_proc),
         lpszClassName: label_class.into(),
         hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+        hCursor: cursor,
         ..Default::default()
     };
     RegisterClassW(&label_wc);
@@ -652,6 +696,7 @@ unsafe fn init_inner() -> HWND {
         lpfnWndProc: Some(broadcast_label_wnd_proc),
         lpszClassName: bc_class.into(),
         hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+        hCursor: cursor,
         ..Default::default()
     };
     RegisterClassW(&bc_wc);
@@ -670,6 +715,7 @@ unsafe fn init_inner() -> HWND {
         lpfnWndProc: Some(toast_wnd_proc),
         lpszClassName: toast_class.into(),
         hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+        hCursor: cursor,
         ..Default::default()
     };
     RegisterClassW(&toast_wc);
@@ -691,7 +737,7 @@ unsafe fn init_inner() -> HWND {
     let has_custom = !cfg.pip_positions.is_empty();
     let label_height = cfg.pip_label_height.map(|v| v as i32).unwrap_or(DEFAULT_LABEL_HEIGHT);
 
-    *state() = Some(OverlayState {
+    *state_unguarded() = Some(OverlayState {
         pip_windows: Vec::new(),
         eq_windows: Vec::new(),
         pip_order: Vec::new(),
@@ -752,16 +798,27 @@ pub fn poll() {
 }
 
 unsafe fn poll_inner() {
-    let Some(s) = state().as_mut() else { return };
+    if IN_OVERLAY.get() { return; }
+    IN_OVERLAY.set(true);
+    poll_inner_guarded();
+    IN_OVERLAY.set(false);
+}
+
+unsafe fn poll_inner_guarded() {
+    let Some(s) = state_unguarded().as_mut() else { return };
 
     let new_windows = eq_windows::find_eq_windows();
     let old_pids: HashSet<u32> = s.eq_windows.iter().map(|w| w.pid).collect();
     let new_pids: HashSet<u32> = new_windows.iter().map(|w| w.pid).collect();
 
     if old_pids == new_pids {
+        let mut hwnd_changed = false;
         for nw in &new_windows {
             if let Some(ow) = s.eq_windows.iter_mut().find(|w| w.pid == nw.pid) {
-                ow.hwnd = nw.hwnd;
+                if ow.hwnd != nw.hwnd {
+                    ow.hwnd = nw.hwnd;
+                    hwnd_changed = true;
+                }
             }
         }
         // Poll trusik shared memory for character names.
@@ -775,9 +832,11 @@ unsafe fn poll_inner() {
         crate::broadcast::update_targets(&pids, s.active_pid);
         // Re-derive DPI from the EQ window; if it changed (e.g. monitor
         // reconnect moved EQ to a different-DPI display), rebuild everything.
+        // Also rebuild if any HWND changed (e.g. EQ recreated its window
+        // during login), since DWM thumbnails are bound to specific HWNDs.
         let dpi_hwnd = s.eq_windows.first().map(|w| w.hwnd).unwrap_or(s.active_label_hwnd);
         let new_dpi = get_dpi_scale(dpi_hwnd);
-        if (new_dpi - s.dpi_scale).abs() > 0.001 {
+        if hwnd_changed || (new_dpi - s.dpi_scale).abs() > 0.001 {
             s.dpi_scale = new_dpi;
             rebuild_thumbnails(s);
         } else {
@@ -790,7 +849,6 @@ unsafe fn poll_inner() {
 
     let added: Vec<u32> = new_pids.difference(&old_pids).copied().collect();
     let removed: Vec<u32> = old_pids.difference(&new_pids).copied().collect();
-
     let mut last_closed_label = None;
     for pid in &removed {
         // Capture info before removing for toast.
@@ -1077,8 +1135,8 @@ unsafe fn compute_positions(s: &OverlayState) -> (Vec<RECT>, i32, i32) {
 unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
     // Destroy existing PiP windows and unregister thumbnails.
     for pw in s.pip_windows.drain(..) {
-        let _ = DwmUnregisterThumbnail(pw.thumb);
-        let _ = DestroyWindow(pw.label_hwnd);
+        if pw.thumb != 0 { let _ = DwmUnregisterThumbnail(pw.thumb); }
+        if !pw.label_hwnd.is_invalid() { let _ = DestroyWindow(pw.label_hwnd); }
         let _ = DestroyWindow(pw.hwnd);
     }
     s.drop_target = None;
@@ -1299,19 +1357,23 @@ unsafe fn update_visibility(s: &mut OverlayState) {
 
     let has_pip = !s.pip_order.is_empty();
     let fg = GetForegroundWindow();
-    let visible = has_pip && (s.context_menu_open || is_eq_or_ours(fg, s));
-
+    let eq_or_ours = is_eq_or_ours(fg, s);
+    let visible = has_pip && (s.context_menu_open || eq_or_ours);
 
     if visible {
-        // Show PiP thumbnail windows first, then labels on top.  Interactions
-        // with a PiP can promote it above its label in the topmost z-order,
-        // so we re-assert label z-order with SetWindowPos(HWND_TOPMOST).
+        // Show PiP thumbnail windows first, then labels on top.
+        // ShowWindow first, then SetWindowPos to re-assert z-order
+        // (interactions with a PiP can promote it above its label).
         for pw in &s.pip_windows {
             let _ = ShowWindow(pw.hwnd, SW_SHOWNOACTIVATE);
         }
         for pw in &s.pip_windows {
+            let _ = ShowWindow(pw.label_hwnd, SW_SHOWNOACTIVATE);
+        }
+        // Re-assert z-order: labels above thumbnails.
+        for pw in &s.pip_windows {
             let _ = SetWindowPos(pw.label_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE);
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
         if !s.active_label_text.is_empty() {
             let _ = ShowWindow(s.active_label_hwnd, SW_SHOWNOACTIVATE);
@@ -1343,7 +1405,13 @@ unsafe extern "system" fn foreground_event_proc(
     _hook: HWINEVENTHOOK, _event: u32, _hwnd: HWND,
     _id_object: i32, _id_child: i32, _id_event_thread: u32, _dw_ms_event_time: u32,
 ) {
-    let Some(s) = state().as_mut() else { return };
+    if IN_OVERLAY.get() { return; }
+    IN_OVERLAY.set(true);
+
+    let Some(s) = state_unguarded().as_mut() else {
+        IN_OVERLAY.set(false);
+        return;
+    };
 
     let fg = GetForegroundWindow();
     if let Some(fg_eq) = s.eq_windows.iter().find(|w| w.hwnd == fg) {
@@ -1366,6 +1434,7 @@ unsafe extern "system" fn foreground_event_proc(
     }
 
     update_visibility(s);
+    IN_OVERLAY.set(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -1884,21 +1953,23 @@ unsafe fn paint_label(hwnd: HWND, text: &str, class: Option<&str>, bg_color: u32
     let text_left = after_badges;
     let mut wide: Vec<u16> = text.encode_utf16().collect();
 
-    // Shadow.
-    let mut shadow_rc = RECT {
-        left: text_left + dpi(1, d), top: rc.top + dpi(1, d),
-        right: rc.right, bottom: rc.bottom,
-    };
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000000));
-    let _ = DrawTextW(hdc, &mut wide, &mut shadow_rc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    if !wide.is_empty() {
+        // Shadow.
+        let mut shadow_rc = RECT {
+            left: text_left + dpi(1, d), top: rc.top + dpi(1, d),
+            right: rc.right, bottom: rc.bottom,
+        };
+        let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000000));
+        let _ = DrawTextW(hdc, &mut wide, &mut shadow_rc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    // Main text (white).
-    let mut text_rc = RECT {
-        left: text_left, top: rc.top,
-        right: rc.right, bottom: rc.bottom,
-    };
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
-    let _ = DrawTextW(hdc, &mut wide, &mut text_rc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        // Main text (white).
+        let mut text_rc = RECT {
+            left: text_left, top: rc.top,
+            right: rc.right, bottom: rc.bottom,
+        };
+        let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
+        let _ = DrawTextW(hdc, &mut wide, &mut text_rc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    }
 
     let _ = SelectObject(hdc, old_font2);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(name_font);
@@ -2022,22 +2093,23 @@ unsafe fn paint_pip_label(hwnd: HWND) {
     let text_left = after_badges;
     let mut wide: Vec<u16> = text.encode_utf16().collect();
 
-    // Shadow.
-    let mut shadow_rc = RECT {
-        left: text_left + dpi(1, d), top: rc.top + dpi(1, d),
-        right: rc.right, bottom: rc.bottom,
-    };
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000000));
-    let _ = DrawTextW(hdc, &mut wide, &mut shadow_rc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    if !wide.is_empty() {
+        // Shadow.
+        let mut shadow_rc = RECT {
+            left: text_left + dpi(1, d), top: rc.top + dpi(1, d),
+            right: rc.right, bottom: rc.bottom,
+        };
+        let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000000));
+        let _ = DrawTextW(hdc, &mut wide, &mut shadow_rc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-    // Main text (white).
-    let mut text_rc = RECT {
-        left: text_left, top: rc.top,
-        right: rc.right, bottom: rc.bottom,
-    };
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
-    let _ = DrawTextW(hdc, &mut wide, &mut text_rc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-
+        // Main text (white).
+        let mut text_rc = RECT {
+            left: text_left, top: rc.top,
+            right: rc.right, bottom: rc.bottom,
+        };
+        let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
+        let _ = DrawTextW(hdc, &mut wide, &mut text_rc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    }
 
     let _ = SelectObject(hdc, old_font2);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(name_font);
@@ -2047,6 +2119,9 @@ unsafe fn paint_pip_label(hwnd: HWND) {
 unsafe extern "system" fn pip_label_wnd_proc(
     hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
 ) -> LRESULT {
+    if IN_OVERLAY.get() {
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
     match msg {
         WM_PAINT => {
             paint_pip_label(hwnd);
@@ -2063,6 +2138,9 @@ unsafe extern "system" fn pip_label_wnd_proc(
 unsafe extern "system" fn broadcast_label_wnd_proc(
     hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
 ) -> LRESULT {
+    if IN_OVERLAY.get() {
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
     match msg {
         WM_PAINT => {
             paint_broadcast_label(hwnd);
@@ -2197,6 +2275,9 @@ unsafe fn paint_toast(hwnd: HWND) {
 unsafe extern "system" fn toast_wnd_proc(
     hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
 ) -> LRESULT {
+    if IN_OVERLAY.get() {
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
     match msg {
         WM_PAINT => {
             paint_toast(hwnd);
@@ -2333,6 +2414,11 @@ pub fn show_toast(text: &str) {
 unsafe extern "system" fn pip_wnd_proc(
     hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
 ) -> LRESULT {
+    // Skip if we're inside a rebuild/poll to avoid re-entrant state access.
+    if IN_OVERLAY.get() {
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+
     // Decode pip index from GWLP_USERDATA (1-based, 0 = not yet set).
     let raw_idx = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as usize;
     if raw_idx == 0 {
@@ -2866,6 +2952,9 @@ unsafe extern "system" fn pip_wnd_proc(
 unsafe extern "system" fn label_wnd_proc(
     hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
 ) -> LRESULT {
+    if IN_OVERLAY.get() {
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
     match msg {
         WM_SETCURSOR => {
             let cursor = LoadCursorW(None, IDC_ARROW).unwrap_or_default();
@@ -3016,7 +3105,7 @@ pub fn force_rebuild() {
 
 pub fn cleanup() {
     unsafe {
-        if let Some(s) = state().as_mut() {
+        if let Some(s) = state_unguarded().as_mut() {
             // Restore original ex styles on all EQ windows before shutting down.
             let hwnds: Vec<HWND> = s.eq_windows.iter().map(|w| w.hwnd).collect();
             for hwnd in hwnds {
@@ -3035,6 +3124,6 @@ pub fn cleanup() {
             let _ = KillTimer(s.toast.hwnd, TIMER_TOAST_FADE);
             let _ = DestroyWindow(s.toast.hwnd);
         }
-        *state() = None;
+        *state_unguarded() = None;
     }
 }

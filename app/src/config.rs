@@ -31,6 +31,14 @@ pub struct PipPosition {
     pub height: u32,
 }
 
+/// An EverQuest account for auto-login.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Account {
+    pub username: String,
+    /// DPAPI-encrypted, base64-encoded password.
+    pub password: String,
+}
+
 /// Top-level configuration persisted to %APPDATA%\Stonemite\config.toml.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -105,6 +113,9 @@ pub struct Config {
     /// Anonymous user identifier (auto-generated UUID).
     #[serde(default)]
     pub telemetry_id: Option<String>,
+    /// EverQuest accounts for auto-login.
+    #[serde(default)]
+    pub accounts: Vec<Account>,
 }
 
 fn default_hide_hotkey() -> String {
@@ -178,6 +189,7 @@ impl Default for Config {
             last_update_check: None,
             telemetry: true,
             telemetry_id: None,
+            accounts: Vec::new(),
         }
     }
 }

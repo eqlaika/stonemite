@@ -8,7 +8,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use eframe::egui;
 
-use crate::config::{Config, PipEdge};
+use crate::config::{Account, Config, PipEdge};
+use crate::crypt;
 
 /// Custom message posted to the tray window after settings are saved.
 pub const WM_SETTINGS_CHANGED: u32 = WM_USER + 100;
@@ -82,10 +83,18 @@ pub fn run_standalone() {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tab {
     General,
+    Accounts,
     PiP,
     Hotkeys,
     Broadcasting,
     About,
+}
+
+/// UI state for an account row (plaintext password for editing).
+struct AccountRow {
+    username: String,
+    password: String,
+    show_password: bool,
 }
 
 fn configure_fonts(ctx: &egui::Context) {
@@ -183,6 +192,7 @@ struct SettingsApp {
     toast_duration_tenths: u32,
     auto_update_check: bool,
     update_check_interval_days: u32,
+    accounts: Vec<AccountRow>,
     last_position: Option<[f32; 2]>,
     logo: Option<egui::TextureHandle>,
     avatar: Option<egui::TextureHandle>,
@@ -229,6 +239,15 @@ impl SettingsApp {
             toast_duration_tenths: cfg.toast_duration.map(|d| (d * 10.0).round() as u32).unwrap_or(20),
             auto_update_check: cfg.auto_update_check,
             update_check_interval_days: cfg.update_check_interval_days,
+            accounts: cfg
+                .accounts
+                .iter()
+                .map(|a| AccountRow {
+                    username: a.username.clone(),
+                    password: crypt::decrypt(&a.password).unwrap_or_default(),
+                    show_password: false,
+                })
+                .collect(),
             last_position: None,
             logo: None,
             avatar: None,
@@ -248,6 +267,7 @@ impl eframe::App for SettingsApp {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.tab, Tab::General, "General");
+                ui.selectable_value(&mut self.tab, Tab::Accounts, "Accounts");
                 ui.selectable_value(&mut self.tab, Tab::PiP, "PiP");
                 ui.selectable_value(&mut self.tab, Tab::Hotkeys, "Hotkeys");
                 ui.selectable_value(&mut self.tab, Tab::Broadcasting, "Broadcasting");
@@ -275,6 +295,7 @@ impl eframe::App for SettingsApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.tab {
                 Tab::General => self.general_tab(ui),
+                Tab::Accounts => self.accounts_tab(ui),
                 Tab::PiP => self.pip_tab(ui),
                 Tab::Hotkeys => self.hotkeys_tab(ui),
                 Tab::Broadcasting => self.broadcasting_tab(ui),
@@ -354,6 +375,58 @@ impl SettingsApp {
                     );
                 });
             });
+        });
+    }
+
+    fn accounts_tab(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+
+        section(ui, "EverQuest accounts", |ui| {
+            ui.label("Credentials are encrypted with Windows DPAPI");
+            ui.add_space(4.0);
+
+            let mut remove_index = None;
+            for (i, account) in self.accounts.iter_mut().enumerate() {
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Username:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut account.username)
+                                .desired_width(200.0),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Password:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut account.password)
+                                .password(!account.show_password)
+                                .desired_width(200.0),
+                        );
+                        let toggle_label = if account.show_password { "Hide" } else { "Show" };
+                        if ui.button(toggle_label).clicked() {
+                            account.show_password = !account.show_password;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("Remove").clicked() {
+                            remove_index = Some(i);
+                        }
+                    });
+                });
+                ui.add_space(2.0);
+            }
+            if let Some(i) = remove_index {
+                self.accounts.remove(i);
+            }
+
+            ui.add_space(4.0);
+            if ui.button("Add account").clicked() {
+                self.accounts.push(AccountRow {
+                    username: String::new(),
+                    password: String::new(),
+                    show_password: false,
+                });
+            }
         });
     }
 
@@ -562,6 +635,17 @@ impl SettingsApp {
             last_update_check: existing.last_update_check,
             telemetry: existing.telemetry,
             telemetry_id: existing.telemetry_id,
+            accounts: self
+                .accounts
+                .iter()
+                .filter(|a| !a.username.is_empty())
+                .filter_map(|a| {
+                    crypt::encrypt(&a.password).ok().map(|encrypted| Account {
+                        username: a.username.clone(),
+                        password: encrypted,
+                    })
+                })
+                .collect(),
             pip_label_height: Some(self.label_height),
             pip_label_opacity: Some(self.label_opacity),
             auto_order: self.auto_order,

@@ -63,6 +63,20 @@ The app checks for updates against [eqlaika/stonemite](https://github.com/eqlaik
 
 **When to use ISBoxer:** You need mouse broadcasting, round-robin input, or you're already comfortable with the Inner Space ecosystem.
 
+## Auto-login
+
+Stonemite can launch your EQ accounts and log them in automatically — no patcher, no typing passwords, no clicking through server select. Add your accounts in Settings > Accounts, and Stonemite handles the rest.
+
+### Password security
+
+Your passwords are encrypted using [Windows DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/) and stored in your local config file. They are:
+
+- **Encrypted by Windows itself** — Stonemite does not implement its own encryption or manage any keys. Only your Windows user account on your machine can decrypt them.
+- **Never transmitted** — passwords are never sent over the network. Stonemite's telemetry only sends an anonymous ID and app version. You can verify this in the [source code](https://github.com/eqlaika/stonemite).
+- **Used only to launch EQ** — passwords are decrypted in memory only when launching the game client.
+
+Stonemite is open source. The encryption code is in [`app/src/crypt.rs`](app/src/crypt.rs) and the telemetry code is in [`app/src/telemetry.rs`](app/src/telemetry.rs) — you can audit exactly what the app does with your data.
+
 ## Configuration
 
 Config lives at `%APPDATA%\Stonemite\config.toml`. See [config/example.toml](config/example.toml) for options.
