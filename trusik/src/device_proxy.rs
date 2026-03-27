@@ -31,6 +31,7 @@ fn wm_activate_thread() {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn PostMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> i32;
+        fn GetForegroundWindow() -> isize;
     }
 
     let mut was_active = false;
@@ -47,6 +48,22 @@ fn wm_activate_thread() {
             crate::log::write(&format!(
                 "wm_activate: posted WM_ACTIVATEAPP(1) hwnd=0x{hwnd:X}"
             ));
+        } else if !active && was_active && hwnd != 0 {
+            // Shm went inactive — reset EQ's internal "active" flag so
+            // keyboard_process stops running.  Without this, the background
+            // keyboard (NONEXCLUSIVE mode) keeps feeding physical keystrokes
+            // to EQ, and an Escape pressed in another window would kick EQ
+            // back from char select to server select.
+            //
+            // Only post if the window is NOT actually foreground, so we don't
+            // clobber real activation state.
+            let fg = unsafe { GetForegroundWindow() };
+            if fg != hwnd {
+                unsafe { PostMessageW(hwnd, WM_ACTIVATEAPP, 0, 0); }
+                crate::log::write(&format!(
+                    "wm_activate: posted WM_ACTIVATEAPP(0) hwnd=0x{hwnd:X}"
+                ));
+            }
         }
         was_active = active;
     }
