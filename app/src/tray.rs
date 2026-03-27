@@ -235,13 +235,16 @@ unsafe extern "system" fn wnd_proc(
                         "Key broadcasting disabled"
                     });
                 }
-                ID_LAUNCH_EQ => launch_eq(None),
+                ID_LAUNCH_EQ => launch_eq(None, None),
                 ID_LOGIN_ALL => {
                     let cfg = config::Config::load();
-                    let usernames: Vec<String> = cfg.accounts.iter().map(|a| a.username.clone()).collect();
+                    let accounts: Vec<(String, Option<String>)> = cfg.accounts.iter().map(|a| {
+                        let pw = crate::crypt::decrypt(&a.password).ok();
+                        (a.username.clone(), pw)
+                    }).collect();
                     std::thread::spawn(move || {
-                        for username in &usernames {
-                            launch_eq(Some(username));
+                        for (username, password) in &accounts {
+                            launch_eq(Some(username), password.as_deref());
                         }
                     });
                 }
@@ -255,7 +258,8 @@ unsafe extern "system" fn wnd_proc(
                     let index = (id - ID_LOGIN_ACCOUNT_BASE) as usize;
                     let cfg = config::Config::load();
                     if let Some(account) = cfg.accounts.get(index) {
-                        launch_eq(Some(&account.username));
+                        let pw = crate::crypt::decrypt(&account.password).ok();
+                        launch_eq(Some(&account.username), pw.as_deref());
                     }
                 }
                 _ => {}
@@ -471,7 +475,7 @@ unsafe fn unregister_hotkeys(hwnd: HWND) {
     }
 }
 
-fn launch_eq(username: Option<&str>) {
+fn launch_eq(username: Option<&str>, password: Option<&str>) {
     let cfg = config::Config::load();
     let eq_dir = cfg.eq_directory();
     let exe = eq_dir.join("eqgame.exe");
@@ -479,12 +483,26 @@ fn launch_eq(username: Option<&str>) {
         eprintln!("eqgame.exe not found in {}", eq_dir.display());
         return;
     }
+    overlay::debug_log(&format!(
+        "launch_eq: user={:?} has_password={}",
+        username,
+        password.is_some()
+    ));
     let mut cmd = std::process::Command::new(&exe);
     cmd.arg("patchme").current_dir(&eq_dir);
     if let Some(user) = username {
         cmd.arg(format!("/login:{user}"));
     }
-    if let Err(e) = cmd.spawn() {
-        eprintln!("Failed to launch EQ: {e}");
+    match cmd.spawn() {
+        Ok(child) => {
+            let pid = child.id();
+            overlay::debug_log(&format!("launch_eq: spawned pid={pid}"));
+            if let Some(pw) = password {
+                crate::auto_type::spawn(pid, pw.to_string());
+            }
+        }
+        Err(e) => {
+            overlay::debug_log(&format!("launch_eq: spawn failed: {e}"));
+        }
     }
 }
