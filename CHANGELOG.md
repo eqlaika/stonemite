@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.0
+
+- Auto-login: automatically enter credentials on the EQ login screen with encrypted password storage and server selection
+- Prevent overlay freeze when swapping to/from a zoning EQ window
+- Fix DrawTextW crash with empty text
+
 ## v0.3.2
 
 - Hide background EQ windows from Alt-Tab (active window stays visible, enabled by default)
