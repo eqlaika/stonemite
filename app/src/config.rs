@@ -116,6 +116,9 @@ pub struct Config {
     /// EverQuest accounts for auto-login.
     #[serde(default)]
     pub accounts: Vec<Account>,
+    /// EverQuest server name for auto-login (written to eqlsPlayerData.ini).
+    #[serde(default)]
+    pub server: String,
 }
 
 fn default_hide_hotkey() -> String {
@@ -190,6 +193,7 @@ impl Default for Config {
             telemetry: true,
             telemetry_id: None,
             accounts: Vec::new(),
+            server: String::new(),
         }
     }
 }
@@ -257,6 +261,32 @@ impl Config {
     /// Parse the broadcast_hotkey config string into (modifiers, virtual-key code).
     pub fn broadcast_hotkey_vk(&self) -> Option<(u32, u32)> {
         parse_hotkey_combo(&self.broadcast_hotkey)
+    }
+
+    /// Read `LastServerName` from the main `eqlsPlayerData.ini` in the EQ directory.
+    pub fn read_server_from_ini(&self) -> Option<String> {
+        let path = self.eq_directory().join("eqlsPlayerData.ini");
+        read_ini_value(&path, "MISC", "LastServerName")
+    }
+
+    /// Write `LastServerName` to all `eqlsPlayerData*.ini` files in the EQ directory.
+    pub fn write_server_to_ini(&self) {
+        if self.server.is_empty() {
+            return;
+        }
+        let eq_dir = self.eq_directory();
+        let entries = match std::fs::read_dir(&eq_dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("eqlsPlayerData") && name_str.ends_with(".ini") {
+                let path = entry.path();
+                write_ini_value(&path, "MISC", "LastServerName", &self.server);
+            }
+        }
     }
 
     /// Parse swap hotkey at the given index (0-based) into (modifiers, virtual-key code).
@@ -332,4 +362,71 @@ fn parse_hotkey_combo(combo: &str) -> Option<(u32, u32)> {
 
     let vk = parse_vk_name(key_part.as_deref().unwrap_or(""))?;
     Some((mods, vk))
+}
+
+/// Write a key=value pair under [section] in a Windows INI file.
+/// Creates the section if missing, replaces the key if it exists.
+fn write_ini_value(path: &Path, section: &str, key: &str, value: &str) {
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let section_header = format!("[{section}]");
+    let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+
+    // Find the section.
+    let section_pos = lines.iter().position(|l| l.trim().eq_ignore_ascii_case(&section_header));
+
+    if let Some(sec_idx) = section_pos {
+        // Find existing key in this section.
+        let mut key_idx = None;
+        for i in (sec_idx + 1)..lines.len() {
+            let trimmed = lines[i].trim();
+            if trimmed.starts_with('[') {
+                break;
+            }
+            if trimmed.starts_with(&format!("{key}=")) || trimmed.starts_with(&format!("{key} =")) {
+                key_idx = Some(i);
+                break;
+            }
+        }
+        if let Some(ki) = key_idx {
+            lines[ki] = format!("{key}={value}");
+        } else {
+            lines.insert(sec_idx + 1, format!("{key}={value}"));
+        }
+    } else {
+        // Append new section.
+        lines.push(String::new());
+        lines.push(section_header);
+        lines.push(format!("{key}={value}"));
+    }
+
+    let _ = std::fs::write(path, lines.join("\r\n"));
+}
+
+/// Read a value for key under [section] from a Windows INI file.
+fn read_ini_value(path: &Path, section: &str, key: &str) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let section_header = format!("[{section}]");
+    let mut in_section = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case(&section_header) {
+            in_section = true;
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            if in_section {
+                break;
+            }
+            continue;
+        }
+        if in_section {
+            if let Some(val) = trimmed.strip_prefix(key) {
+                let val = val.trim_start();
+                if let Some(val) = val.strip_prefix('=') {
+                    return Some(val.trim().to_string());
+                }
+            }
+        }
+    }
+    None
 }

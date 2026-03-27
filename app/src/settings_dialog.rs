@@ -21,6 +21,35 @@ const PIP_EDGE_OPTIONS: &[(&str, PipEdge)] = &[
     ("Bottom", PipEdge::Bottom),
 ];
 
+const SERVER_OPTIONS: &[&str] = &[
+    "",
+    "Agnarr",
+    "Antonius Bayle - Kane Bayle",
+    "Aradune",
+    "Bertoxxulous - Saryn",
+    "Bristlebane - The Tribunal",
+    "Cazic-Thule - Fennin Ro",
+    "Drinal - Maelin Starpyre",
+    "Erollisi Marr - The Nameless",
+    "Fangbreaker",
+    "Firiona Vie",
+    "Luclin - Stromm",
+    "Mangler",
+    "Mischief",
+    "Oakwynd",
+    "Povar - Quellious",
+    "Rizlona",
+    "Teek",
+    "The Rathe - Prexus",
+    "Tormax",
+    "Tunare - The Seventh Hammer",
+    "Vaniki",
+    "Vox",
+    "Xegony - Druzzil Ro",
+    "Yelinak",
+    "Zek",
+];
+
 /// Whether a settings subprocess is currently running.
 static SETTINGS_OPEN: AtomicBool = AtomicBool::new(false);
 
@@ -61,7 +90,7 @@ pub fn run_standalone() {
         viewport: egui::ViewportBuilder::default()
             .with_title("Stonemite Settings")
             .with_inner_size([480.0, 400.0])
-            .with_resizable(false)
+            .with_min_inner_size([480.0, 300.0])
             .with_maximize_button(false)
             .with_icon(load_app_icon())
             .with_position(cfg.settings_position
@@ -192,6 +221,7 @@ struct SettingsApp {
     toast_duration_tenths: u32,
     auto_update_check: bool,
     update_check_interval_days: u32,
+    server_index: usize,
     accounts: Vec<AccountRow>,
     last_position: Option<[f32; 2]>,
     logo: Option<egui::TextureHandle>,
@@ -239,6 +269,11 @@ impl SettingsApp {
             toast_duration_tenths: cfg.toast_duration.map(|d| (d * 10.0).round() as u32).unwrap_or(20),
             auto_update_check: cfg.auto_update_check,
             update_check_interval_days: cfg.update_check_interval_days,
+            server_index: {
+                let ini_server = cfg.read_server_from_ini().unwrap_or_default();
+                let server = if ini_server.is_empty() { &cfg.server } else { &ini_server };
+                SERVER_OPTIONS.iter().position(|s| *s == server).unwrap_or(0)
+            },
             accounts: cfg
                 .accounts
                 .iter()
@@ -381,53 +416,73 @@ impl SettingsApp {
     fn accounts_tab(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
 
-        section(ui, "EverQuest accounts", |ui| {
+        section(ui, "Server", |ui| {
+            let selected = SERVER_OPTIONS[self.server_index];
+            let display = if selected.is_empty() { "None" } else { selected };
+            egui::ComboBox::from_id_salt("server")
+                .selected_text(display)
+                .width(240.0)
+                .show_ui(ui, |ui| {
+                    for (i, name) in SERVER_OPTIONS.iter().enumerate() {
+                        let label = if name.is_empty() { "None" } else { name };
+                        ui.selectable_value(&mut self.server_index, i, label);
+                    }
+                });
+        });
+
+        ui.strong("EverQuest accounts");
+        ui.indent("accounts", |ui| {
             ui.label("Credentials are encrypted with Windows DPAPI");
             ui.add_space(4.0);
-
-            let mut remove_index = None;
-            for (i, account) in self.accounts.iter_mut().enumerate() {
-                ui.group(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Username:");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut account.username)
-                                .desired_width(200.0),
-                        );
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Password:");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut account.password)
-                                .password(!account.show_password)
-                                .desired_width(200.0),
-                        );
-                        let toggle_label = if account.show_password { "Hide" } else { "Show" };
-                        if ui.button(toggle_label).clicked() {
-                            account.show_password = !account.show_password;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        if ui.button("Remove").clicked() {
-                            remove_index = Some(i);
-                        }
-                    });
-                });
-                ui.add_space(2.0);
-            }
-            if let Some(i) = remove_index {
-                self.accounts.remove(i);
-            }
-
-            ui.add_space(4.0);
-            if ui.button("Add account").clicked() {
-                self.accounts.push(AccountRow {
-                    username: String::new(),
-                    password: String::new(),
-                    show_password: false,
-                });
-            }
         });
+
+        let mut remove_index = None;
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.indent("accounts_list", |ui| {
+                for (i, account) in self.accounts.iter_mut().enumerate() {
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Username:");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut account.username)
+                                    .desired_width(200.0),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Password:");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut account.password)
+                                    .password(!account.show_password)
+                                    .desired_width(200.0),
+                            );
+                            let toggle_label = if account.show_password { "Hide" } else { "Show" };
+                            if ui.button(toggle_label).clicked() {
+                                account.show_password = !account.show_password;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button("Remove").clicked() {
+                                remove_index = Some(i);
+                            }
+                        });
+                    });
+                    ui.add_space(2.0);
+                }
+
+                ui.add_space(4.0);
+                if ui.button("Add account").clicked() {
+                    self.accounts.push(AccountRow {
+                        username: String::new(),
+                        password: String::new(),
+                        show_password: false,
+                    });
+                }
+            });
+        });
+
+        if let Some(i) = remove_index {
+            self.accounts.remove(i);
+        }
     }
 
     fn pip_tab(&mut self, ui: &mut egui::Ui) {
@@ -653,7 +708,9 @@ impl SettingsApp {
             toast_enabled: self.toast_enabled,
             toast_height: Some(self.toast_height),
             toast_duration: Some(self.toast_duration_tenths as f32 / 10.0),
+            server: SERVER_OPTIONS[self.server_index].to_string(),
         };
+        cfg.write_server_to_ini();
         if let Err(e) = cfg.save() {
             eprintln!("Failed to save config: {e}");
         }
