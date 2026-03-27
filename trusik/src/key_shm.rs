@@ -64,7 +64,7 @@ unsafe fn get_state() -> Option<&'static SharedKeyState> {
             return None;
         }
         if !try_open() {
-            RETRY_COUNTDOWN = 120;
+            RETRY_COUNTDOWN = 4;
             return None;
         }
     }

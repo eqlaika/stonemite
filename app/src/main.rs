@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+mod auto_type;
 mod broadcast;
 mod character_cache;
 mod class_icons;

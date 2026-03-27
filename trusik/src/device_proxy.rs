@@ -20,6 +20,38 @@ pub fn eq_hwnd() -> isize {
 /// Spawned once to poll shm and signal the keyboard event.
 static SHM_THREAD_STARTED: std::sync::Once = std::sync::Once::new();
 
+/// Thread that watches shared-memory state and posts WM_ACTIVATEAPP(TRUE) to
+/// the EQ window when auto-login begins.  EQ's main loop only calls
+/// keyboard_process when an internal "active" flag ([obj+5E4h]) is set — that
+/// flag is driven by WM_ACTIVATEAPP.  By posting this message we trick EQ into
+/// running keyboard_process for background windows.
+fn wm_activate_thread() {
+    const WM_ACTIVATEAPP: u32 = 0x001C;
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn PostMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> i32;
+    }
+
+    let mut was_active = false;
+
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(16));
+
+        let active = unsafe { crate::key_shm::is_active() };
+        let hwnd = EQ_HWND.load(Ordering::Acquire);
+
+        if active && !was_active && hwnd != 0 {
+            // Shm just went active — tell EQ this window is foreground.
+            unsafe { PostMessageW(hwnd, WM_ACTIVATEAPP, 1, 0); }
+            crate::log::write(&format!(
+                "wm_activate: posted WM_ACTIVATEAPP(1) hwnd=0x{hwnd:X}"
+            ));
+        }
+        was_active = active;
+    }
+}
+
 /// Raw COM vtable for IDirectInputDevice8 (A or W).
 ///
 /// 3 IUnknown + 29 IDirectInputDevice8 = 32 entries.
@@ -262,6 +294,9 @@ unsafe extern "system" fn dev_unacquire(this: *mut DeviceProxy) -> HRESULT {
     method((*this).real)
 }
 
+/// Counter to throttle GetDeviceState logging.
+static GDS_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+
 unsafe extern "system" fn dev_get_device_state(
     this: *mut DeviceProxy,
     cbdata: u32,
@@ -272,6 +307,16 @@ unsafe extern "system" fn dev_get_device_state(
     let hr = method((*this).real, cbdata, lpvdata);
 
     if (*this).is_keyboard {
+        // Log first few calls to confirm EQ is polling.
+        let count = GDS_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+        if count < 5 {
+            let active = crate::key_shm::is_active();
+            crate::log::write(&format!(
+                "GetDeviceState: hr=0x{:08X} shm_active={active} cbdata={cbdata}",
+                hr.0 as u32
+            ));
+        }
+
         if hr.is_ok() {
             if crate::key_shm::should_suppress() {
                 std::ptr::write_bytes(lpvdata as *mut u8, 0, cbdata as usize);
@@ -319,6 +364,15 @@ unsafe extern "system" fn dev_get_device_data(
 
     if !(*this).is_keyboard {
         return method((*this).real, cbobjectdata, rgdod, pdwinout, flags);
+    }
+
+    // Log when active=true to confirm DI is polled during typing.
+    static GDD_ACTIVE_LOG: AtomicU32 = AtomicU32::new(0);
+    if crate::key_shm::is_active() {
+        let count = GDD_ACTIVE_LOG.fetch_add(1, Ordering::Relaxed);
+        if count < 5 {
+            crate::log::write(&format!("GetDeviceData: ACTIVE call #{count}"));
+        }
     }
 
     let original_capacity = if pdwinout.is_null() { 0u32 } else { *pdwinout };
@@ -427,6 +481,9 @@ unsafe extern "system" fn dev_set_event_notification(
                     let active = crate::key_shm::read_keys(&mut keys);
                     let any_keys = active && keys.iter().any(|&k| k != 0);
 
+                    // kbd_patch disabled — inline GFW hook handles the
+                    // foreground check by returning eq_hwnd.
+
                     if any_keys || (prev_any_keys && !any_keys) {
                         let h = KB_EVENT_HANDLE.load(Ordering::Acquire);
                         if h != 0 {
@@ -461,6 +518,14 @@ unsafe extern "system" fn dev_set_cooperative_level(
         crate::log::write(&format!(
             "SetCooperativeLevel: keyboard hwnd=0x{hwnd:X}"
         ));
+
+        // Start a thread that posts WM_KEYDOWN/WM_KEYUP to the EQ window
+        // Posts WM_ACTIVATEAPP(1) when shm becomes active so the game's
+        // "active" flag at [obj+5E4h] is set, allowing keyboard_process to run.
+        static WM_KEY_THREAD: std::sync::Once = std::sync::Once::new();
+        WM_KEY_THREAD.call_once(|| {
+            std::thread::spawn(wm_activate_thread);
+        });
 
         if actual_flags & DISCL_FOREGROUND != 0 {
             actual_flags = (actual_flags & !(DISCL_EXCLUSIVE | DISCL_FOREGROUND))

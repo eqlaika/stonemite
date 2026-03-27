@@ -7,7 +7,9 @@ use std::ffi::c_void;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::Foundation::{BOOL, HANDLE};
-use windows::Win32::System::Memory::{VirtualProtect, PAGE_PROTECTION_FLAGS, PAGE_READWRITE};
+use windows::Win32::System::Memory::{
+    VirtualProtect, PAGE_PROTECTION_FLAGS, PAGE_READWRITE, PAGE_EXECUTE_READWRITE,
+};
 
 use crate::log;
 
@@ -376,11 +378,15 @@ type GetAsyncKeyStateFn = unsafe extern "system" fn(i32) -> i16;
 type GetKeyStateFn = unsafe extern "system" fn(i32) -> i16;
 type GetKeyboardStateFn = unsafe extern "system" fn(*mut u8) -> BOOL;
 type GetForegroundWindowFn = unsafe extern "system" fn() -> isize;
+type GetFocusFn = unsafe extern "system" fn() -> isize;
+type GetActiveWindowFn = unsafe extern "system" fn() -> isize;
 
 static REAL_ASYNC: OnceLock<GetAsyncKeyStateFn> = OnceLock::new();
 static REAL_KEYSTATE: OnceLock<GetKeyStateFn> = OnceLock::new();
 static REAL_KBSTATE: OnceLock<GetKeyboardStateFn> = OnceLock::new();
 static REAL_GETFOREGROUNDWINDOW: OnceLock<GetForegroundWindowFn> = OnceLock::new();
+static REAL_GETFOCUS: OnceLock<GetFocusFn> = OnceLock::new();
+static REAL_GETACTIVEWINDOW: OnceLock<GetActiveWindowFn> = OnceLock::new();
 
 unsafe extern "system" fn hooked_get_async_key_state(vk: i32) -> i16 {
     if vk >= 0 && vk <= 255 {
@@ -436,12 +442,49 @@ unsafe extern "system" fn hooked_get_keyboard_state(buf: *mut u8) -> BOOL {
     ok
 }
 
+/// Counter to throttle GetForegroundWindow logging.
+static GFW_LOG_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 unsafe extern "system" fn hooked_get_foreground_window() -> isize {
+    let hwnd = crate::device_proxy::eq_hwnd();
+    let active = crate::key_shm::is_active();
+
+    // Log first few calls regardless to confirm the hook fires.
+    let count = GFW_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+    if count < 5 || (active && count < 10) {
+        crate::log::write(&format!(
+            "GFW hook: eq_hwnd=0x{hwnd:X} active={active} count={count}"
+        ));
+    }
+
+    if hwnd != 0 && active {
+        return hwnd;
+    }
+    if let Some(real) = REAL_GETFOREGROUNDWINDOW.get() {
+        real()
+    } else {
+        0
+    }
+}
+
+unsafe extern "system" fn hooked_get_focus() -> isize {
     let hwnd = crate::device_proxy::eq_hwnd();
     if hwnd != 0 && crate::key_shm::is_active() {
         return hwnd;
     }
-    if let Some(real) = REAL_GETFOREGROUNDWINDOW.get() {
+    if let Some(real) = REAL_GETFOCUS.get() {
+        real()
+    } else {
+        0
+    }
+}
+
+unsafe extern "system" fn hooked_get_active_window() -> isize {
+    let hwnd = crate::device_proxy::eq_hwnd();
+    if hwnd != 0 && crate::key_shm::is_active() {
+        return hwnd;
+    }
+    if let Some(real) = REAL_GETACTIVEWINDOW.get() {
         real()
     } else {
         0
@@ -464,27 +507,197 @@ pub unsafe fn install_keyboard_hooks() {
         let func: GetAsyncKeyStateFn = std::mem::transmute(real);
         let _ = REAL_ASYNC.set(func);
         hooked += 1;
+        log::write("iat_hook: hooked GetAsyncKeyState");
+    } else {
+        log::write("iat_hook: FAILED GetAsyncKeyState");
     }
 
     if let Some(real) = patch_iat(base, b"user32.dll", b"GetKeyState", hooked_get_key_state as *const c_void) {
         let func: GetKeyStateFn = std::mem::transmute(real);
         let _ = REAL_KEYSTATE.set(func);
         hooked += 1;
+        log::write("iat_hook: hooked GetKeyState");
+    } else {
+        log::write("iat_hook: FAILED GetKeyState");
     }
 
     if let Some(real) = patch_iat(base, b"user32.dll", b"GetKeyboardState", hooked_get_keyboard_state as *const c_void) {
         let func: GetKeyboardStateFn = std::mem::transmute(real);
         let _ = REAL_KBSTATE.set(func);
         hooked += 1;
+        log::write("iat_hook: hooked GetKeyboardState");
+    } else {
+        log::write("iat_hook: FAILED GetKeyboardState");
     }
 
-    if let Some(real) = patch_iat(base, b"user32.dll", b"GetForegroundWindow", hooked_get_foreground_window as *const c_void) {
+    // Try user32.dll first, then apiset redirects.
+    let fg_hook = patch_iat(base, b"user32.dll", b"GetForegroundWindow", hooked_get_foreground_window as *const c_void)
+        .or_else(|| patch_iat(base, b"api-ms-win-ntuser-ia-l1-1-0.dll", b"GetForegroundWindow", hooked_get_foreground_window as *const c_void));
+    if let Some(real) = fg_hook {
         let func: GetForegroundWindowFn = std::mem::transmute(real);
         let _ = REAL_GETFOREGROUNDWINDOW.set(func);
         hooked += 1;
+        log::write("iat_hook: hooked GetForegroundWindow");
+    } else {
+        log::write("iat_hook: FAILED GetForegroundWindow — background input will not work");
+    }
+
+    let focus_hook = patch_iat(base, b"user32.dll", b"GetFocus", hooked_get_focus as *const c_void);
+    if let Some(real) = focus_hook {
+        let func: GetFocusFn = std::mem::transmute(real);
+        let _ = REAL_GETFOCUS.set(func);
+        hooked += 1;
+        log::write("iat_hook: hooked GetFocus");
+    } else {
+        log::write("iat_hook: FAILED GetFocus (may not be imported)");
+    }
+
+    let active_hook = patch_iat(base, b"user32.dll", b"GetActiveWindow", hooked_get_active_window as *const c_void);
+    if let Some(real) = active_hook {
+        let func: GetActiveWindowFn = std::mem::transmute(real);
+        let _ = REAL_GETACTIVEWINDOW.set(func);
+        hooked += 1;
+        log::write("iat_hook: hooked GetActiveWindow");
+    } else {
+        log::write("iat_hook: FAILED GetActiveWindow (may not be imported)");
     }
 
     log::write(&format!("iat_hook: {hooked} keyboard function(s) hooked"));
+
+    // The IAT hook for GetForegroundWindow may not catch calls made through
+    // delay-loaded imports or GetProcAddress.  Install an inline hook on the
+    // actual function body so every call path is intercepted.
+    install_inline_gfw_hook();
+}
+
+// --- Inline hook on GetForegroundWindow function body ---
+//
+// The IAT hook only intercepts calls that go through our patched IAT entry.
+// EQ may resolve GetForegroundWindow via a different import descriptor or
+// through GetProcAddress.  An inline hook patches the *function itself* so
+// every call is intercepted regardless of how it was resolved.
+//
+// We call NtUserGetForegroundWindow (from win32u.dll) as the "real"
+// implementation, which avoids the need for a classic trampoline.
+
+type NtUserGfwFn = unsafe extern "system" fn() -> isize;
+static REAL_NT_GFW: OnceLock<NtUserGfwFn> = OnceLock::new();
+
+unsafe fn install_inline_gfw_hook() {
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+
+    // Resolve the real implementation from win32u.dll.
+    let win32u = match LoadLibraryW(windows::core::w!("win32u.dll")) {
+        Ok(h) => h,
+        Err(e) => {
+            log::write(&format!("inline_gfw: failed to load win32u.dll: {e}"));
+            return;
+        }
+    };
+    let nt_gfw = GetProcAddress(
+        win32u,
+        windows::core::PCSTR(b"NtUserGetForegroundWindow\0".as_ptr()),
+    );
+    let nt_gfw = match nt_gfw {
+        Some(p) => p,
+        None => {
+            log::write("inline_gfw: NtUserGetForegroundWindow not found");
+            return;
+        }
+    };
+    let _ = REAL_NT_GFW.set(std::mem::transmute(nt_gfw));
+
+    // Resolve the function we want to patch.
+    let user32 = match LoadLibraryW(windows::core::w!("user32.dll")) {
+        Ok(h) => h,
+        Err(e) => {
+            log::write(&format!("inline_gfw: failed to load user32.dll: {e}"));
+            return;
+        }
+    };
+    let gfw = GetProcAddress(
+        user32,
+        windows::core::PCSTR(b"GetForegroundWindow\0".as_ptr()),
+    );
+    let gfw_ptr = match gfw {
+        Some(p) => p as *mut u8,
+        None => {
+            log::write("inline_gfw: GetForegroundWindow not found");
+            return;
+        }
+    };
+
+    // Detour: mov rax, <hook_addr>; jmp rax  (12 bytes)
+    let hook_addr = inline_hooked_gfw as u64;
+
+    let mut old_protect = PAGE_PROTECTION_FLAGS(0);
+    if VirtualProtect(gfw_ptr as *const c_void, 12, PAGE_EXECUTE_READWRITE, &mut old_protect)
+        .is_err()
+    {
+        log::write("inline_gfw: VirtualProtect failed");
+        return;
+    }
+
+    *gfw_ptr = 0x48; // REX.W
+    *gfw_ptr.add(1) = 0xB8; // MOV RAX, imm64
+    std::ptr::copy_nonoverlapping(
+        &hook_addr as *const u64 as *const u8,
+        gfw_ptr.add(2),
+        8,
+    );
+    *gfw_ptr.add(10) = 0xFF; // JMP RAX
+    *gfw_ptr.add(11) = 0xE0;
+
+    let _ = VirtualProtect(gfw_ptr as *const c_void, 12, old_protect, &mut old_protect);
+
+    // Flush instruction cache so CPU sees the new code.
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn FlushInstructionCache(process: *mut c_void, addr: *const c_void, size: usize) -> i32;
+        fn GetCurrentProcess() -> *mut c_void;
+    }
+    FlushInstructionCache(GetCurrentProcess(), gfw_ptr as *const c_void, 12);
+
+    log::write(&format!(
+        "inline_gfw: patched GetForegroundWindow at {gfw_ptr:p}"
+    ));
+}
+
+/// Inline-hook replacement for GetForegroundWindow.
+unsafe extern "system" fn inline_hooked_gfw() -> isize {
+    let hwnd = crate::device_proxy::eq_hwnd();
+    let active = crate::key_shm::is_active();
+
+    // kbd_patch (JNE NOP) disabled — the inline GFW hook should be
+    // sufficient since it returns eq_hwnd, passing the cmp naturally.
+
+    static INLINE_GFW_LOG: std::sync::atomic::AtomicU32 =
+        std::sync::atomic::AtomicU32::new(0);
+    static INLINE_GFW_ACTIVE_LOG: std::sync::atomic::AtomicU32 =
+        std::sync::atomic::AtomicU32::new(0);
+    let count = INLINE_GFW_LOG.fetch_add(1, Ordering::Relaxed);
+    if count < 5 {
+        crate::log::write(&format!(
+            "inline_gfw: hwnd=0x{hwnd:X} active={active} #{count}"
+        ));
+    }
+    if active {
+        let ac = INLINE_GFW_ACTIVE_LOG.fetch_add(1, Ordering::Relaxed);
+        if ac < 5 {
+            crate::log::write(&format!(
+                "inline_gfw: ACTIVE hwnd=0x{hwnd:X} #{ac}"
+            ));
+        }
+    }
+
+    if hwnd != 0 && active {
+        return hwnd;
+    }
+    if let Some(real) = REAL_NT_GFW.get() {
+        real()
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]

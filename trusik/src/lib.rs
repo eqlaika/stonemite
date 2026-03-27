@@ -1,8 +1,10 @@
 mod device_proxy;
 mod di8_proxy;
 mod iat_hook;
+mod kbd_patch;
 mod key_shm;
 mod log;
+mod login_input;
 pub mod shm;
 
 use std::ffi::c_void;
@@ -66,6 +68,16 @@ extern "system" fn DllMain(_hinst: HINSTANCE, reason: u32, _reserved: *mut c_voi
         // Install IAT hook for CreateFileW.
         unsafe { iat_hook::install() };
 
+        // Install keyboard state hooks early so auto-login can inject
+        // keystrokes via shared memory before DirectInput is initialized.
+        unsafe { iat_hook::install_keyboard_hooks() };
+
+        // Prepare the keyboard_process foreground-check patch.
+        unsafe { kbd_patch::init() };
+
+        // Create event that the main app waits on before auto-typing.
+        login_input::create_event();
+
         log::write("DllMain: ready");
     }
 
@@ -90,6 +102,7 @@ pub unsafe extern "system" fn DirectInput8Create(
     };
 
     log::write("DirectInput8Create called");
+    login_input::signal_ready();
 
     let hr = unsafe { real_create(hinst, dwversion, riidltf, ppvout, punkouter) };
     if hr.is_err() {
