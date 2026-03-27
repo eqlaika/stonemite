@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.1
+
+- Require Windows 10 or later in installer
+- Update README for v0.4.0 features
+
 ## v0.4.0
 
 - Auto-login: automatically enter credentials on the EQ login screen with encrypted password storage and server selection
