@@ -141,14 +141,21 @@ fn type_password(pid: u32, password: &str, shm: Shm) -> Result<(), String> {
         type_char(ptr, ch, i, pid);
     }
 
-    // Press Enter to submit.
+    // Press Enter to submit login.
     let enter_scan = vk_to_scan(0x0D);
-    debug_log(&format!("auto_type: pressing Enter scan={enter_scan:#04x} pid={pid}"));
+    debug_log(&format!("auto_type: pressing Enter (login) scan={enter_scan:#04x} pid={pid}"));
     press_scancode(ptr, enter_scan, false);
 
-    // Give trusik time to poll and inject the Enter key-up before we
-    // deactivate the shm.
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    // Wait for the server select screen to appear, then press Enter
+    // repeatedly to confirm the pre-selected server.
+    debug_log(&format!("auto_type: waiting 2s for server select pid={pid}"));
+    std::thread::sleep(std::time::Duration::from_millis(2000));
+
+    for i in 0..3 {
+        debug_log(&format!("auto_type: pressing Enter (server select {}) pid={pid}", i + 1));
+        press_scancode(ptr, enter_scan, false);
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+    }
 
     debug_log(&format!("auto_type: done, deactivating shm pid={pid}"));
 
