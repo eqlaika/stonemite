@@ -131,6 +131,11 @@ fn type_password(pid: u32, password: &str, shm: Shm) -> Result<(), String> {
         ));
     }
 
+    // Give trusik's wm_activate_thread time to post WM_ACTIVATEAPP(1) and
+    // EQ time to process it.  Background windows need this message to
+    // enable keyboard_process before keystrokes arrive.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
     // Type each character.
     for (i, ch) in password.chars().enumerate() {
         type_char(ptr, ch, i, pid);
