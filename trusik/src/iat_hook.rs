@@ -668,9 +668,6 @@ unsafe extern "system" fn inline_hooked_gfw() -> isize {
     let hwnd = crate::device_proxy::eq_hwnd();
     let active = crate::key_shm::is_active();
 
-    // kbd_patch (JNE NOP) disabled — the inline GFW hook should be
-    // sufficient since it returns eq_hwnd, passing the cmp naturally.
-
     static INLINE_GFW_LOG: std::sync::atomic::AtomicU32 =
         std::sync::atomic::AtomicU32::new(0);
     static INLINE_GFW_ACTIVE_LOG: std::sync::atomic::AtomicU32 =

@@ -141,6 +141,10 @@ fn type_password(pid: u32, password: &str, shm: Shm) -> Result<(), String> {
     debug_log(&format!("auto_type: pressing Enter scan={enter_scan:#04x} pid={pid}"));
     press_scancode(ptr, enter_scan, false);
 
+    // Give trusik time to poll and inject the Enter key-up before we
+    // deactivate the shm.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
     debug_log(&format!("auto_type: done, deactivating shm pid={pid}"));
 
     // Deactivate and clean up.

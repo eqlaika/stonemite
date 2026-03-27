@@ -1,7 +1,6 @@
 mod device_proxy;
 mod di8_proxy;
 mod iat_hook;
-mod kbd_patch;
 mod key_shm;
 mod log;
 mod login_input;
@@ -72,9 +71,6 @@ extern "system" fn DllMain(_hinst: HINSTANCE, reason: u32, _reserved: *mut c_voi
         // keystrokes via shared memory before DirectInput is initialized.
         unsafe { iat_hook::install_keyboard_hooks() };
 
-        // Prepare the keyboard_process foreground-check patch.
-        unsafe { kbd_patch::init() };
-
         // Create event that the main app waits on before auto-typing.
         login_input::create_event();
 
@@ -115,13 +111,6 @@ pub unsafe extern "system" fn DirectInput8Create(
     let proxy = di8_proxy::DI8Proxy::new(real_di8);
     let proxy_ptr = Box::into_raw(Box::new(proxy));
     unsafe { *ppvout = proxy_ptr as *mut c_void };
-
-    // Install keyboard IAT hooks (once).
-    use std::sync::Once;
-    static IAT_KB_ONCE: Once = Once::new();
-    IAT_KB_ONCE.call_once(|| {
-        unsafe { iat_hook::install_keyboard_hooks() };
-    });
 
     log::write("DirectInput8Create: wrapped in proxy");
     hr
