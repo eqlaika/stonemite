@@ -30,8 +30,10 @@ struct SharedKeyState {
 const MAGIC: u32 = 0x53544D54; // "STMT"
 const SHM_SIZE: usize = std::mem::size_of::<SharedKeyState>();
 
-/// Delay between each keystroke (press-to-press).
-const KEYSTROKE_DELAY_MS: u64 = 50;
+/// How long to hold each key down.
+const KEY_DOWN_MS: u64 = 50;
+/// Delay after releasing a key before pressing the next one.
+const KEY_UP_MS: u64 = 50;
 /// Maximum time to wait for DirectInput to initialize (ms).
 const DI_WAIT_TIMEOUT_MS: u32 = 30_000;
 
@@ -134,7 +136,7 @@ fn type_password(pid: u32, password: &str, shm: Shm) -> Result<(), String> {
     // Give trusik's wm_activate_thread time to post WM_ACTIVATEAPP(1) and
     // EQ time to process it.  Background windows need this message to
     // enable keyboard_process before keystrokes arrive.
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    std::thread::sleep(std::time::Duration::from_millis(200));
 
     // Type each character.
     for (i, ch) in password.chars().enumerate() {
@@ -274,7 +276,7 @@ fn press_scancode(ptr: *mut SharedKeyState, scan: u8, shift: bool) {
             "auto_type: key down scan={scan:#04x} seq={seq}"
         ));
 
-        std::thread::sleep(std::time::Duration::from_millis(KEYSTROKE_DELAY_MS));
+        std::thread::sleep(std::time::Duration::from_millis(KEY_DOWN_MS));
 
         // Release key.
         std::ptr::write_volatile(&mut (*ptr).keys[scan as usize], 0x00);
@@ -285,6 +287,11 @@ fn press_scancode(ptr: *mut SharedKeyState, scan: u8, shift: bool) {
             std::ptr::write_volatile(&mut (*ptr).keys[shift_scan as usize], 0x00);
             bump_seq(ptr);
         }
+
+        // Give EQ time to see the release before the next key press.
+        // Without this, repeated characters (same scan code) can be missed
+        // if EQ doesn't poll between the release and re-press.
+        std::thread::sleep(std::time::Duration::from_millis(KEY_UP_MS));
     }
 }
 
