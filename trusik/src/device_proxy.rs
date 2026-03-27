@@ -481,9 +481,6 @@ unsafe extern "system" fn dev_set_event_notification(
                     let active = crate::key_shm::read_keys(&mut keys);
                     let any_keys = active && keys.iter().any(|&k| k != 0);
 
-                    // kbd_patch disabled — inline GFW hook handles the
-                    // foreground check by returning eq_hwnd.
-
                     if any_keys || (prev_any_keys && !any_keys) {
                         let h = KB_EVENT_HANDLE.load(Ordering::Acquire);
                         if h != 0 {
@@ -519,11 +516,10 @@ unsafe extern "system" fn dev_set_cooperative_level(
             "SetCooperativeLevel: keyboard hwnd=0x{hwnd:X}"
         ));
 
-        // Start a thread that posts WM_KEYDOWN/WM_KEYUP to the EQ window
         // Posts WM_ACTIVATEAPP(1) when shm becomes active so the game's
-        // "active" flag at [obj+5E4h] is set, allowing keyboard_process to run.
-        static WM_KEY_THREAD: std::sync::Once = std::sync::Once::new();
-        WM_KEY_THREAD.call_once(|| {
+        // "active" flag is set, allowing keyboard_process to run.
+        static WM_ACTIVATE_THREAD: std::sync::Once = std::sync::Once::new();
+        WM_ACTIVATE_THREAD.call_once(|| {
             std::thread::spawn(wm_activate_thread);
         });
 
