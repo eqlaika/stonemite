@@ -6,9 +6,9 @@
 
 EverQuest multiboxing tool for Windows.
 
-> **Note:** Stonemite works best with EQ's borderless fullscreen mode, added in the March 2026 patch.
+> **Note:** Requires Windows 10 or later. Stonemite works best with EQ's borderless fullscreen mode, added in the March 2026 patch.
 
-Stonemite makes multiboxing EQ easy — PiP overlays with click-to-swap, swap hotkeys, key broadcasting, automatic character detection, and a drag-and-drop layout editor. No subscription, no setup wizard.
+Stonemite makes multiboxing EQ easy — PiP overlays with click-to-swap, swap hotkeys, key broadcasting, auto-login, automatic character detection, and a drag-and-drop layout editor. No subscription, no setup wizard.
 
 ## Install
 
@@ -33,14 +33,14 @@ Target: `x86_64-pc-windows-msvc`
 ## Release
 
 ```
-just release 0.2.0
+just release 0.4.0
 ```
 
-This bumps the version in `Cargo.toml`, builds a release binary, and packages it into `dist/stonemite-x86_64-pc-windows-msvc.zip`. Then:
+This bumps the version in `Cargo.toml`, builds a release binary, and packages both `dist/stonemite-x86_64-pc-windows-msvc.zip` and `dist/stonemite-0.4.0-setup.exe`. Requires [Inno Setup 6](https://jrsoftware.org/isdl.php). Then:
 
-1. Commit and tag: `git add -A && git commit -m "Release v0.2.0" && git tag v0.2.0`
+1. Commit and tag: `git add -A && git commit -m "Release v0.4.0" && git tag v0.4.0`
 2. Push: `git push && git push --tags`
-3. Create a GitHub release for the tag and upload the zip
+3. Create a GitHub release: `gh release create v0.4.0 dist/stonemite-x86_64-pc-windows-msvc.zip dist/stonemite-0.4.0-setup.exe --title 'v0.4.0' --notes-file dist/release-notes.md`
 
 The app checks for updates against [eqlaika/stonemite](https://github.com/eqlaika/stonemite) GitHub releases via the `self_update` crate.
 
@@ -54,12 +54,13 @@ The app checks for updates against [eqlaika/stonemite](https://github.com/eqlaik
 | **Setup** | Run the installer, done | Inner Space install, wizard pages, character slots, window layout configs |
 | **PiP overlays** | Native DWM thumbnails, click-to-swap, drag-to-reorder | Video FX regions routed through Inner Space |
 | **Character labels** | Auto-detected | Manual per-character setup |
+| **Auto-login** | Encrypted credentials, automatic server select, one-click launch | Not available |
 | **Input broadcasting** | Key broadcasting with whitelist/blacklist filtering | Full key/mouse broadcasting and round-robin |
 | **Window management** | Auto-detects EQ windows, z-order stacking | Window layouts with snapping and resizing |
 | **Resource usage** | ~5 MB single exe | Inner Space + ISBoxer addon |
 | **Updates** | One-click from system tray | Manual download through Inner Space |
 
-**When to use Stonemite:** You want multiboxing that just works — PiP overlays, swap hotkeys, key broadcasting, and character detection with zero setup. Launch it and go.
+**When to use Stonemite:** You want multiboxing that just works — PiP overlays, swap hotkeys, key broadcasting, auto-login, and character detection with zero setup. Launch it and go.
 
 **When to use ISBoxer:** You need mouse broadcasting, round-robin input, or you're already comfortable with the Inner Space ecosystem.
 
@@ -93,7 +94,7 @@ No personal information, EQ character names, or config details are collected. Te
 
 ## Disclaimer
 
-Stonemite uses standard Windows DWM thumbnail APIs to display copies of your game windows — the same mechanism Windows uses for taskbar previews and Alt-Tab. The optional character detection feature uses a lightweight DLL proxy to read log file names and identify which character is on each window.
+Stonemite uses standard Windows DWM thumbnail APIs to display copies of your game windows — the same mechanism Windows uses for taskbar previews and Alt-Tab. The DLL proxy handles character detection (reading log file names), key broadcasting (forwarding keystrokes to background windows), and auto-login (typing credentials into the game client).
 
 Use Stonemite at your own risk. The author is not responsible for any account actions including suspensions, bans, or other consequences resulting from its use.
 

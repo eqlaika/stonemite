@@ -11,6 +11,7 @@ OutputDir=dist
 OutputBaseFilename=stonemite-{#AppVersion}-setup
 Compression=lzma2
 SolidCompression=yes
+MinVersion=10.0
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 SetupIconFile=app\assets\app.ico
