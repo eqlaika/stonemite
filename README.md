@@ -96,6 +96,8 @@ No personal information, EQ character names, or config details are collected. Te
 
 Stonemite uses standard Windows DWM thumbnail APIs to display copies of your game windows — the same mechanism Windows uses for taskbar previews and Alt-Tab. The DLL proxy handles character detection (reading log file names), key broadcasting (forwarding keystrokes to background windows), and auto-login (typing credentials into the game client).
 
+Stonemite is substantially less invasive than [ISBoxer](https://isboxer.com/multiboxing/is-isboxer-allowed), which injects into the rendering pipeline and intercepts DirectX calls, and has been widely used for years without bans. Stonemite's DLL proxy only intercepts DirectInput to read log paths and forward keystrokes. It does not touch rendering, read or modify game memory, or sniff network traffic.
+
 Use Stonemite at your own risk. The author is not responsible for any account actions including suspensions, bans, or other consequences resulting from its use.
 
 ## License
