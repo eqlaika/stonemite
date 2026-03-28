@@ -26,7 +26,6 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 
 use crate::{character_cache, config, eq_characters, eq_windows, log_watcher, trusik_shm};
 use crate::eq_windows::EqWindow;
@@ -1488,51 +1487,22 @@ unsafe fn swap_to(pip_index: usize) {
     apply_alt_tab_hiding(s);
 
     if let Some(w) = s.eq_windows.iter().find(|w| w.pid == new_active_pid) {
-        // Probe whether target and current foreground can process messages.
-        // If either is unresponsive (e.g. EQ zoning), SetWindowPos /
-        // SetForegroundWindow would block our UI thread, so run on a
-        // background thread instead. A 50ms WM_NULL round-trip is enough
-        // to tell — responsive windows reply in <1ms.
-        let fg = GetForegroundWindow();
-        let target_ok = SendMessageTimeoutW(
-            w.hwnd, WM_NULL, WPARAM(0), LPARAM(0),
-            SMTO_ABORTIFHUNG | SMTO_BLOCK, 50, None,
-        ).0 != 0 || windows::Win32::Foundation::GetLastError().is_ok();
-        let fg_ok = fg.is_invalid() || SendMessageTimeoutW(
-            fg, WM_NULL, WPARAM(0), LPARAM(0),
-            SMTO_ABORTIFHUNG | SMTO_BLOCK, 50, None,
-        ).0 != 0 || windows::Win32::Foundation::GetLastError().is_ok();
+        // SWP_ASYNCWINDOWPOS posts the z-order change instead of sending
+        // synchronous WM_WINDOWPOSCHANGING/CHANGED — won't block on a
+        // hung target (e.g. EQ zoning). SetForegroundWindow is already
+        // async for cross-thread calls (posts activation, changes input
+        // queue routing immediately in kernel mode). No AttachThreadInput
+        // — that converts the async call to synchronous.
+        let _ = SetWindowPos(w.hwnd, HWND_TOP, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS);
+        let _ = SetForegroundWindow(w.hwnd);
 
-        if target_ok && fg_ok {
-            // Both responsive — swap synchronously so the window is
-            // immediately active (no eaten first-click).
-            let our_tid = GetCurrentThreadId();
-            let fg_tid = GetWindowThreadProcessId(fg, None);
-            let attached = !fg.is_invalid() && fg_tid != 0
-                && AttachThreadInput(our_tid, fg_tid, true).as_bool();
-            let _ = SetWindowPos(w.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-            let _ = SetForegroundWindow(w.hwnd);
-            if attached {
-                let _ = AttachThreadInput(our_tid, fg_tid, false);
-            }
-        } else {
-            // At least one window is hung — run on a background thread
-            // so the overlay stays responsive.
-            let target = w.hwnd.0 as usize;
-            let fg_raw = fg.0 as usize;
-            std::thread::spawn(move || {
-                let target = HWND(target as *mut _);
-                let fg = HWND(fg_raw as *mut _);
-                let fg_tid = GetWindowThreadProcessId(fg, None);
-                let our_tid = GetCurrentThreadId();
-                let attached = !fg.is_invalid() && fg_tid != 0
-                    && AttachThreadInput(our_tid, fg_tid, true).as_bool();
-                let _ = SetWindowPos(target, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-                let _ = SetForegroundWindow(target);
-                if attached {
-                    let _ = AttachThreadInput(our_tid, fg_tid, false);
-                }
-            });
+        // If the target is hung, SWP_ASYNCWINDOWPOS can't take effect
+        // until it processes messages. Make it visible immediately by
+        // pushing the old active window to the bottom instead.
+        if let Some(old) = s.eq_windows.iter().find(|w| w.pid == old_active_pid) {
+            let _ = SetWindowPos(old.hwnd, HWND_BOTTOM, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
     }
 
