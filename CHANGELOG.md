@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.2
+
+- Fixed auto-login failing after a self-update. The trusik input DLL (dinput8.dll) is now embedded in stonemite.exe and written out on launch, so it can no longer be left stale by an exe-only update. Previously a self-update replaced only stonemite.exe and left an old dinput8.dll behind, breaking the pre-login DirectInput handshake (auto-login timed out; in-game key broadcasting was unaffected).
+
 ## v0.4.1
 
 - Require Windows 10 or later in installer

@@ -10,13 +10,13 @@ default:
 
 # Build debug
 build:
-    cargo build -p stonemite
     cargo build -p trusik
+    cargo build -p stonemite
 
 # Build release
 build-release:
-    cargo build --release -p stonemite
     cargo build --release -p trusik
+    cargo build --release -p stonemite
 
 # Get current version from Cargo.toml
 version:
