@@ -9,10 +9,10 @@ use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows::Win32::System::Memory::{
     CreateFileMappingW, MapViewOfFile, FILE_MAP_WRITE, PAGE_READWRITE,
 };
-use windows::Win32::System::Threading::{OpenEventW, WaitForSingleObject, SYNCHRONIZATION_SYNCHRONIZE};
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    MapVirtualKeyW, VkKeyScanW, MAPVK_VK_TO_VSC,
+use windows::Win32::System::Threading::{
+    OpenEventW, WaitForSingleObject, SYNCHRONIZATION_SYNCHRONIZE,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW, VkKeyScanW, MAPVK_VK_TO_VSC};
 
 use crate::overlay::debug_log;
 
@@ -54,7 +54,9 @@ pub fn spawn(pid: u32, password: String) {
     let shm = match open_or_create_shm(pid) {
         Ok((handle, ptr)) => Shm { handle, ptr },
         Err(e) => {
-            debug_log(&format!("auto_type: failed to create shm for pid={pid}: {e}"));
+            debug_log(&format!(
+                "auto_type: failed to create shm for pid={pid}: {e}"
+            ));
             return;
         }
     };
@@ -67,7 +69,9 @@ pub fn spawn(pid: u32, password: String) {
             cleanup_shm(shm);
             return;
         }
-        debug_log(&format!("auto_type: DI ready, starting type_password pid={pid}"));
+        debug_log(&format!(
+            "auto_type: DI ready, starting type_password pid={pid}"
+        ));
 
         // Brief pause to let DI fully settle.
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -89,7 +93,9 @@ fn wait_for_di_ready(pid: u32) -> bool {
 
     loop {
         if start.elapsed() > timeout {
-            debug_log(&format!("auto_type: timed out waiting for DI event pid={pid}"));
+            debug_log(&format!(
+                "auto_type: timed out waiting for DI event pid={pid}"
+            ));
             return false;
         }
 
@@ -106,7 +112,9 @@ fn wait_for_di_ready(pid: u32) -> bool {
                 let remaining = timeout.saturating_sub(start.elapsed());
                 debug_log(&format!("auto_type: found DI event, waiting pid={pid}"));
                 let result = unsafe { WaitForSingleObject(h, remaining.as_millis() as u32) };
-                unsafe { let _ = CloseHandle(h); }
+                unsafe {
+                    let _ = CloseHandle(h);
+                }
                 return result.0 == 0; // WAIT_OBJECT_0
             }
             Err(_) => {
@@ -145,16 +153,23 @@ fn type_password(pid: u32, password: &str, shm: Shm) -> Result<(), String> {
 
     // Press Enter to submit login.
     let enter_scan = vk_to_scan(0x0D);
-    debug_log(&format!("auto_type: pressing Enter (login) scan={enter_scan:#04x} pid={pid}"));
+    debug_log(&format!(
+        "auto_type: pressing Enter (login) scan={enter_scan:#04x} pid={pid}"
+    ));
     press_scancode(ptr, enter_scan, false);
 
     // Wait for the server select screen to appear, then press Enter
     // repeatedly to confirm the pre-selected server.
-    debug_log(&format!("auto_type: waiting 2s for server select pid={pid}"));
+    debug_log(&format!(
+        "auto_type: waiting 2s for server select pid={pid}"
+    ));
     std::thread::sleep(std::time::Duration::from_millis(2000));
 
     for i in 0..3 {
-        debug_log(&format!("auto_type: pressing Enter (server select {}) pid={pid}", i + 1));
+        debug_log(&format!(
+            "auto_type: pressing Enter (server select {}) pid={pid}",
+            i + 1
+        ));
         press_scancode(ptr, enter_scan, false);
         std::thread::sleep(std::time::Duration::from_millis(1000));
     }
@@ -236,7 +251,9 @@ fn vk_to_scan(vk: u32) -> u8 {
 fn type_char(ptr: *mut SharedKeyState, ch: char, index: usize, pid: u32) {
     let result = unsafe { VkKeyScanW(ch as u16) };
     if result == -1i16 {
-        debug_log(&format!("auto_type: no VK mapping for char[{index}]='{ch}' pid={pid}"));
+        debug_log(&format!(
+            "auto_type: no VK mapping for char[{index}]='{ch}' pid={pid}"
+        ));
         return;
     }
     let vk = (result & 0xFF) as u32;
@@ -272,9 +289,7 @@ fn press_scancode(ptr: *mut SharedKeyState, scan: u8, shift: bool) {
         bump_seq(ptr);
 
         let seq = std::ptr::read_volatile(&(*ptr).seq);
-        debug_log(&format!(
-            "auto_type: key down scan={scan:#04x} seq={seq}"
-        ));
+        debug_log(&format!("auto_type: key down scan={scan:#04x} seq={seq}"));
 
         std::thread::sleep(std::time::Duration::from_millis(KEY_DOWN_MS));
 

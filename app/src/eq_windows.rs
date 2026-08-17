@@ -1,7 +1,9 @@
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use windows::Win32::Foundation::{CloseHandle, BOOL, HMODULE, HWND, LPARAM, RECT, TRUE};
-use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
+};
 use windows::Win32::System::ProcessStatus::K32GetModuleFileNameExW;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -95,9 +97,7 @@ pub fn get_monitor_work_area(reference_hwnd: Option<HWND>) -> RECT {
             return info.rcWork;
         }
         // Fallback: primary monitor via SystemMetrics.
-        use windows::Win32::UI::WindowsAndMessaging::{
-            GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
-        };
+        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
         RECT {
             left: 0,
             top: 0,

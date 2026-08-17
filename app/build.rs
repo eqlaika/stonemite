@@ -19,8 +19,7 @@ fn main() {
     let dll_src = profile_dir.join("dinput8.dll");
     let dll_dst = out_dir.join("dinput8.dll");
     if dll_src.exists() {
-        std::fs::copy(&dll_src, &dll_dst)
-            .expect("failed to copy trusik dinput8.dll into OUT_DIR");
+        std::fs::copy(&dll_src, &dll_dst).expect("failed to copy trusik dinput8.dll into OUT_DIR");
     } else {
         // Allow building the app alone (rust-analyzer, `cargo check`) without
         // the trusik DLL present. deploy() treats an empty payload as

@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use windows::core::{GUID, HRESULT};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Threading::SetEvent;
@@ -44,7 +44,9 @@ fn wm_activate_thread() {
 
         if active && !was_active && hwnd != 0 {
             // Shm just went active — tell EQ this window is foreground.
-            unsafe { PostMessageW(hwnd, WM_ACTIVATEAPP, 1, 0); }
+            unsafe {
+                PostMessageW(hwnd, WM_ACTIVATEAPP, 1, 0);
+            }
             crate::log::write(&format!(
                 "wm_activate: posted WM_ACTIVATEAPP(1) hwnd=0x{hwnd:X}"
             ));
@@ -59,7 +61,9 @@ fn wm_activate_thread() {
             // clobber real activation state.
             let fg = unsafe { GetForegroundWindow() };
             if fg != hwnd {
-                unsafe { PostMessageW(hwnd, WM_ACTIVATEAPP, 0, 0); }
+                unsafe {
+                    PostMessageW(hwnd, WM_ACTIVATEAPP, 0, 0);
+                }
                 crate::log::write(&format!(
                     "wm_activate: posted WM_ACTIVATEAPP(0) hwnd=0x{hwnd:X}"
                 ));
@@ -84,29 +88,20 @@ struct IDirectInputDevice8Vtbl {
     get_capabilities: unsafe extern "system" fn(*mut DeviceProxy, *mut c_void) -> HRESULT,
     enum_objects:
         unsafe extern "system" fn(*mut DeviceProxy, *mut c_void, *mut c_void, u32) -> HRESULT,
-    get_property:
-        unsafe extern "system" fn(*mut DeviceProxy, *const GUID, *mut c_void) -> HRESULT,
-    set_property:
-        unsafe extern "system" fn(*mut DeviceProxy, *const GUID, *mut c_void) -> HRESULT,
+    get_property: unsafe extern "system" fn(*mut DeviceProxy, *const GUID, *mut c_void) -> HRESULT,
+    set_property: unsafe extern "system" fn(*mut DeviceProxy, *const GUID, *mut c_void) -> HRESULT,
     acquire: unsafe extern "system" fn(*mut DeviceProxy) -> HRESULT,
     unacquire: unsafe extern "system" fn(*mut DeviceProxy) -> HRESULT,
     get_device_state: unsafe extern "system" fn(*mut DeviceProxy, u32, *mut c_void) -> HRESULT,
-    get_device_data: unsafe extern "system" fn(
-        *mut DeviceProxy,
-        u32,
-        *mut c_void,
-        *mut u32,
-        u32,
-    ) -> HRESULT,
+    get_device_data:
+        unsafe extern "system" fn(*mut DeviceProxy, u32, *mut c_void, *mut u32, u32) -> HRESULT,
     set_data_format: unsafe extern "system" fn(*mut DeviceProxy, *const c_void) -> HRESULT,
     set_event_notification: unsafe extern "system" fn(*mut DeviceProxy, isize) -> HRESULT,
     set_cooperative_level: unsafe extern "system" fn(*mut DeviceProxy, isize, u32) -> HRESULT,
-    get_object_info:
-        unsafe extern "system" fn(*mut DeviceProxy, *mut c_void, u32, u32) -> HRESULT,
+    get_object_info: unsafe extern "system" fn(*mut DeviceProxy, *mut c_void, u32, u32) -> HRESULT,
     get_device_info: unsafe extern "system" fn(*mut DeviceProxy, *mut c_void) -> HRESULT,
     run_control_panel: unsafe extern "system" fn(*mut DeviceProxy, isize, u32) -> HRESULT,
-    initialize:
-        unsafe extern "system" fn(*mut DeviceProxy, isize, u32, *const GUID) -> HRESULT,
+    initialize: unsafe extern "system" fn(*mut DeviceProxy, isize, u32, *const GUID) -> HRESULT,
     create_effect: unsafe extern "system" fn(
         *mut DeviceProxy,
         *const GUID,
@@ -296,8 +291,7 @@ unsafe extern "system" fn dev_set_property(
 }
 
 unsafe extern "system" fn dev_acquire(this: *mut DeviceProxy) -> HRESULT {
-    let method: unsafe extern "system" fn(*mut c_void) -> HRESULT =
-        real_method((*this).real, 7);
+    let method: unsafe extern "system" fn(*mut c_void) -> HRESULT = real_method((*this).real, 7);
     let hr = method((*this).real);
     if hr.is_err() && (*this).is_keyboard && crate::key_shm::is_active() {
         return HRESULT(0); // DI_OK
@@ -306,8 +300,7 @@ unsafe extern "system" fn dev_acquire(this: *mut DeviceProxy) -> HRESULT {
 }
 
 unsafe extern "system" fn dev_unacquire(this: *mut DeviceProxy) -> HRESULT {
-    let method: unsafe extern "system" fn(*mut c_void) -> HRESULT =
-        real_method((*this).real, 8);
+    let method: unsafe extern "system" fn(*mut c_void) -> HRESULT = real_method((*this).real, 8);
     method((*this).real)
 }
 
@@ -371,13 +364,8 @@ unsafe extern "system" fn dev_get_device_data(
     pdwinout: *mut u32,
     flags: u32,
 ) -> HRESULT {
-    let method: unsafe extern "system" fn(
-        *mut c_void,
-        u32,
-        *mut c_void,
-        *mut u32,
-        u32,
-    ) -> HRESULT = real_method((*this).real, 10);
+    let method: unsafe extern "system" fn(*mut c_void, u32, *mut c_void, *mut u32, u32) -> HRESULT =
+        real_method((*this).real, 10);
 
     if !(*this).is_keyboard {
         return method((*this).real, cbobjectdata, rgdod, pdwinout, flags);
@@ -529,9 +517,7 @@ unsafe extern "system" fn dev_set_cooperative_level(
         const DISCL_BACKGROUND: u32 = 0x08;
 
         EQ_HWND.store(hwnd, Ordering::Release);
-        crate::log::write(&format!(
-            "SetCooperativeLevel: keyboard hwnd=0x{hwnd:X}"
-        ));
+        crate::log::write(&format!("SetCooperativeLevel: keyboard hwnd=0x{hwnd:X}"));
 
         // Posts WM_ACTIVATEAPP(1) when shm becomes active so the game's
         // "active" flag is set, allowing keyboard_process to run.
@@ -665,8 +651,7 @@ unsafe extern "system" fn dev_escape(this: *mut DeviceProxy, pesc: *mut c_void) 
 }
 
 unsafe extern "system" fn dev_poll(this: *mut DeviceProxy) -> HRESULT {
-    let method: unsafe extern "system" fn(*mut c_void) -> HRESULT =
-        real_method((*this).real, 25);
+    let method: unsafe extern "system" fn(*mut c_void) -> HRESULT = real_method((*this).real, 25);
     method((*this).real)
 }
 
@@ -727,12 +712,8 @@ unsafe extern "system" fn dev_build_action_map(
     username: *const c_void,
     flags: u32,
 ) -> HRESULT {
-    let method: unsafe extern "system" fn(
-        *mut c_void,
-        *mut c_void,
-        *const c_void,
-        u32,
-    ) -> HRESULT = real_method((*this).real, 29);
+    let method: unsafe extern "system" fn(*mut c_void, *mut c_void, *const c_void, u32) -> HRESULT =
+        real_method((*this).real, 29);
     method((*this).real, lpdiactionformat, username, flags)
 }
 
@@ -742,12 +723,8 @@ unsafe extern "system" fn dev_set_action_map(
     username: *const c_void,
     flags: u32,
 ) -> HRESULT {
-    let method: unsafe extern "system" fn(
-        *mut c_void,
-        *mut c_void,
-        *const c_void,
-        u32,
-    ) -> HRESULT = real_method((*this).real, 30);
+    let method: unsafe extern "system" fn(*mut c_void, *mut c_void, *const c_void, u32) -> HRESULT =
+        real_method((*this).real, 30);
     method((*this).real, lpdiactionformat, username, flags)
 }
 

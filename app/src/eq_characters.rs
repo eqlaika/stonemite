@@ -31,7 +31,9 @@ pub fn find_active_characters(eq_dir: &Path, max_age: Duration) -> Vec<CharCandi
 
         // Check modification time.
         let Ok(meta) = entry.metadata() else { continue };
-        let Ok(modified) = meta.modified() else { continue };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
         if now.duration_since(modified).unwrap_or(max_age) > max_age {
             continue;
         }

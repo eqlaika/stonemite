@@ -34,9 +34,8 @@ extern "system" fn DllMain(_hinst: HINSTANCE, reason: u32, _reserved: *mut c_voi
         log::write("DllMain: PROCESS_ATTACH");
 
         // Load the real dinput8.dll from System32.
-        let real_dll = unsafe {
-            LoadLibraryW(windows::core::w!("C:\\Windows\\System32\\dinput8.dll"))
-        };
+        let real_dll =
+            unsafe { LoadLibraryW(windows::core::w!("C:\\Windows\\System32\\dinput8.dll")) };
         let real_dll = match real_dll {
             Ok(h) => h,
             Err(_) => {
@@ -47,8 +46,7 @@ extern "system" fn DllMain(_hinst: HINSTANCE, reason: u32, _reserved: *mut c_voi
         log::write("DllMain: loaded real dinput8.dll");
 
         // Resolve the real DirectInput8Create.
-        let proc =
-            unsafe { GetProcAddress(real_dll, PCSTR(b"DirectInput8Create\0".as_ptr())) };
+        let proc = unsafe { GetProcAddress(real_dll, PCSTR(b"DirectInput8Create\0".as_ptr())) };
         let proc = match proc {
             Some(p) => p,
             None => {
@@ -102,7 +100,10 @@ pub unsafe extern "system" fn DirectInput8Create(
 
     let hr = unsafe { real_create(hinst, dwversion, riidltf, ppvout, punkouter) };
     if hr.is_err() {
-        log::write(&format!("DirectInput8Create: real call failed (0x{:08X})", hr.0));
+        log::write(&format!(
+            "DirectInput8Create: real call failed (0x{:08X})",
+            hr.0
+        ));
         return hr;
     }
 

@@ -76,14 +76,14 @@ unsafe extern "system" fn crash_handler(info: *mut ExceptionPointers) -> i32 {
                 buf: *mut MemoryBasicInfo,
                 len: usize,
             ) -> usize;
-            fn GetModuleFileNameW(
-                module: *mut std::ffi::c_void,
-                buf: *mut u16,
-                size: u32,
-            ) -> u32;
+            fn GetModuleFileNameW(module: *mut std::ffi::c_void, buf: *mut u16, size: u32) -> u32;
         }
         let mut mbi = std::mem::zeroed::<MemoryBasicInfo>();
-        if VirtualQuery(rip as *const _, &mut mbi, std::mem::size_of::<MemoryBasicInfo>()) != 0
+        if VirtualQuery(
+            rip as *const _,
+            &mut mbi,
+            std::mem::size_of::<MemoryBasicInfo>(),
+        ) != 0
             && !mbi.allocation_base.is_null()
         {
             let mut name_buf = [0u16; 260];
@@ -98,8 +98,14 @@ unsafe extern "system" fn crash_handler(info: *mut ExceptionPointers) -> i32 {
 
         let msg = format!(
             "CRASH: code={:#010x} rip={:#018x} rsp={:#018x} addr={:#018x} module={}",
-            code, rip, ctx.rsp,
-            if record.number_parameters >= 2 { record.exception_information[1] } else { 0 },
+            code,
+            rip,
+            ctx.rsp,
+            if record.number_parameters >= 2 {
+                record.exception_information[1]
+            } else {
+                0
+            },
             mod_name,
         );
         overlay::debug_log(&msg);
@@ -137,12 +143,29 @@ fn main() {
             ) -> *mut std::ffi::c_void;
         }
         const NAME: &[u16] = &[
-            b'G' as u16, b'l' as u16, b'o' as u16, b'b' as u16, b'a' as u16, b'l' as u16,
-            b'\\' as u16, b'S' as u16, b't' as u16, b'o' as u16, b'n' as u16, b'e' as u16,
-            b'm' as u16, b'i' as u16, b't' as u16, b'e' as u16, 0,
+            b'G' as u16,
+            b'l' as u16,
+            b'o' as u16,
+            b'b' as u16,
+            b'a' as u16,
+            b'l' as u16,
+            b'\\' as u16,
+            b'S' as u16,
+            b't' as u16,
+            b'o' as u16,
+            b'n' as u16,
+            b'e' as u16,
+            b'm' as u16,
+            b'i' as u16,
+            b't' as u16,
+            b'e' as u16,
+            0,
         ];
         let h = CreateMutexW(std::ptr::null(), 1, NAME.as_ptr());
-        if h.is_null() || windows::Win32::Foundation::GetLastError() == windows::Win32::Foundation::ERROR_ALREADY_EXISTS {
+        if h.is_null()
+            || windows::Win32::Foundation::GetLastError()
+                == windows::Win32::Foundation::ERROR_ALREADY_EXISTS
+        {
             return;
         }
         h

@@ -69,13 +69,17 @@ pub fn create() {
         std::ptr::write_volatile(&mut (*ptr).pid, pid);
 
         let _ = SHM_PTR.set(SendPtr(ptr));
-        log::write(&format!("shm: created Local\\Stonemite_{pid} ({SHM_SIZE} bytes)"));
+        log::write(&format!(
+            "shm: created Local\\Stonemite_{pid} ({SHM_SIZE} bytes)"
+        ));
     }
 }
 
 /// Write the detected character name and server into shared memory.
 pub fn write_character(character: &str, server: &str) {
-    let Some(SendPtr(ptr)) = SHM_PTR.get() else { return };
+    let Some(SendPtr(ptr)) = SHM_PTR.get() else {
+        return;
+    };
     let ptr = *ptr;
     if ptr.is_null() {
         return;

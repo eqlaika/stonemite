@@ -4,11 +4,11 @@
 //! and report the character name + server via shared memory.
 
 use std::ffi::c_void;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use windows::Win32::Foundation::{BOOL, HANDLE};
 use windows::Win32::System::Memory::{
-    VirtualProtect, PAGE_PROTECTION_FLAGS, PAGE_READWRITE, PAGE_EXECUTE_READWRITE,
+    VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS, PAGE_READWRITE,
 };
 
 use crate::log;
@@ -227,8 +227,7 @@ unsafe fn dump_imports(base: *const u8, target_dll: &[u8]) {
                 while *p != 0 {
                     if (*p & (1u64 << 63)) == 0 {
                         let hint_name_ptr = base.add(*p as usize);
-                        let fn_name =
-                            std::ffi::CStr::from_ptr(hint_name_ptr.add(2) as *const i8);
+                        let fn_name = std::ffi::CStr::from_ptr(hint_name_ptr.add(2) as *const i8);
                         let name_str = fn_name.to_string_lossy();
                         let name_lower = name_str.to_ascii_lowercase();
                         if name_lower.contains("file") || name_lower.contains("write") {
@@ -243,8 +242,7 @@ unsafe fn dump_imports(base: *const u8, target_dll: &[u8]) {
                 while *p != 0 {
                     if (*p & (1u32 << 31)) == 0 {
                         let hint_name_ptr = base.add(*p as usize);
-                        let fn_name =
-                            std::ffi::CStr::from_ptr(hint_name_ptr.add(2) as *const i8);
+                        let fn_name = std::ffi::CStr::from_ptr(hint_name_ptr.add(2) as *const i8);
                         let name_str = fn_name.to_string_lossy();
                         let name_lower = name_str.to_ascii_lowercase();
                         if name_lower.contains("file") || name_lower.contains("write") {
@@ -309,8 +307,7 @@ unsafe fn patch_iat(
                 while *orig != 0 {
                     if (*orig & (1u64 << 63)) == 0 {
                         let hint_name_ptr = base.add(*orig as usize);
-                        let fn_name =
-                            std::ffi::CStr::from_ptr(hint_name_ptr.add(2) as *const i8);
+                        let fn_name = std::ffi::CStr::from_ptr(hint_name_ptr.add(2) as *const i8);
                         if fn_name.to_bytes() == target_fn {
                             let original = *thunk as *const c_void;
                             let mut old_protect = PAGE_PROTECTION_FLAGS(0);
@@ -340,8 +337,7 @@ unsafe fn patch_iat(
                 while *orig != 0 {
                     if (*orig & (1u32 << 31)) == 0 {
                         let hint_name_ptr = base.add(*orig as usize);
-                        let fn_name =
-                            std::ffi::CStr::from_ptr(hint_name_ptr.add(2) as *const i8);
+                        let fn_name = std::ffi::CStr::from_ptr(hint_name_ptr.add(2) as *const i8);
                         if fn_name.to_bytes() == target_fn {
                             let original = *thunk as *const c_void;
                             let mut old_protect = PAGE_PROTECTION_FLAGS(0);
@@ -503,7 +499,12 @@ pub unsafe fn install_keyboard_hooks() {
 
     let mut hooked = 0u32;
 
-    if let Some(real) = patch_iat(base, b"user32.dll", b"GetAsyncKeyState", hooked_get_async_key_state as *const c_void) {
+    if let Some(real) = patch_iat(
+        base,
+        b"user32.dll",
+        b"GetAsyncKeyState",
+        hooked_get_async_key_state as *const c_void,
+    ) {
         let func: GetAsyncKeyStateFn = std::mem::transmute(real);
         let _ = REAL_ASYNC.set(func);
         hooked += 1;
@@ -512,7 +513,12 @@ pub unsafe fn install_keyboard_hooks() {
         log::write("iat_hook: FAILED GetAsyncKeyState");
     }
 
-    if let Some(real) = patch_iat(base, b"user32.dll", b"GetKeyState", hooked_get_key_state as *const c_void) {
+    if let Some(real) = patch_iat(
+        base,
+        b"user32.dll",
+        b"GetKeyState",
+        hooked_get_key_state as *const c_void,
+    ) {
         let func: GetKeyStateFn = std::mem::transmute(real);
         let _ = REAL_KEYSTATE.set(func);
         hooked += 1;
@@ -521,7 +527,12 @@ pub unsafe fn install_keyboard_hooks() {
         log::write("iat_hook: FAILED GetKeyState");
     }
 
-    if let Some(real) = patch_iat(base, b"user32.dll", b"GetKeyboardState", hooked_get_keyboard_state as *const c_void) {
+    if let Some(real) = patch_iat(
+        base,
+        b"user32.dll",
+        b"GetKeyboardState",
+        hooked_get_keyboard_state as *const c_void,
+    ) {
         let func: GetKeyboardStateFn = std::mem::transmute(real);
         let _ = REAL_KBSTATE.set(func);
         hooked += 1;
@@ -531,8 +542,20 @@ pub unsafe fn install_keyboard_hooks() {
     }
 
     // Try user32.dll first, then apiset redirects.
-    let fg_hook = patch_iat(base, b"user32.dll", b"GetForegroundWindow", hooked_get_foreground_window as *const c_void)
-        .or_else(|| patch_iat(base, b"api-ms-win-ntuser-ia-l1-1-0.dll", b"GetForegroundWindow", hooked_get_foreground_window as *const c_void));
+    let fg_hook = patch_iat(
+        base,
+        b"user32.dll",
+        b"GetForegroundWindow",
+        hooked_get_foreground_window as *const c_void,
+    )
+    .or_else(|| {
+        patch_iat(
+            base,
+            b"api-ms-win-ntuser-ia-l1-1-0.dll",
+            b"GetForegroundWindow",
+            hooked_get_foreground_window as *const c_void,
+        )
+    });
     if let Some(real) = fg_hook {
         let func: GetForegroundWindowFn = std::mem::transmute(real);
         let _ = REAL_GETFOREGROUNDWINDOW.set(func);
@@ -542,7 +565,12 @@ pub unsafe fn install_keyboard_hooks() {
         log::write("iat_hook: FAILED GetForegroundWindow — background input will not work");
     }
 
-    let focus_hook = patch_iat(base, b"user32.dll", b"GetFocus", hooked_get_focus as *const c_void);
+    let focus_hook = patch_iat(
+        base,
+        b"user32.dll",
+        b"GetFocus",
+        hooked_get_focus as *const c_void,
+    );
     if let Some(real) = focus_hook {
         let func: GetFocusFn = std::mem::transmute(real);
         let _ = REAL_GETFOCUS.set(func);
@@ -552,7 +580,12 @@ pub unsafe fn install_keyboard_hooks() {
         log::write("iat_hook: FAILED GetFocus (may not be imported)");
     }
 
-    let active_hook = patch_iat(base, b"user32.dll", b"GetActiveWindow", hooked_get_active_window as *const c_void);
+    let active_hook = patch_iat(
+        base,
+        b"user32.dll",
+        b"GetActiveWindow",
+        hooked_get_active_window as *const c_void,
+    );
     if let Some(real) = active_hook {
         let func: GetActiveWindowFn = std::mem::transmute(real);
         let _ = REAL_GETACTIVEWINDOW.set(func);
@@ -631,8 +664,13 @@ unsafe fn install_inline_gfw_hook() {
     let hook_addr = inline_hooked_gfw as u64;
 
     let mut old_protect = PAGE_PROTECTION_FLAGS(0);
-    if VirtualProtect(gfw_ptr as *const c_void, 12, PAGE_EXECUTE_READWRITE, &mut old_protect)
-        .is_err()
+    if VirtualProtect(
+        gfw_ptr as *const c_void,
+        12,
+        PAGE_EXECUTE_READWRITE,
+        &mut old_protect,
+    )
+    .is_err()
     {
         log::write("inline_gfw: VirtualProtect failed");
         return;
@@ -640,11 +678,7 @@ unsafe fn install_inline_gfw_hook() {
 
     *gfw_ptr = 0x48; // REX.W
     *gfw_ptr.add(1) = 0xB8; // MOV RAX, imm64
-    std::ptr::copy_nonoverlapping(
-        &hook_addr as *const u64 as *const u8,
-        gfw_ptr.add(2),
-        8,
-    );
+    std::ptr::copy_nonoverlapping(&hook_addr as *const u64 as *const u8, gfw_ptr.add(2), 8);
     *gfw_ptr.add(10) = 0xFF; // JMP RAX
     *gfw_ptr.add(11) = 0xE0;
 
@@ -668,8 +702,7 @@ unsafe extern "system" fn inline_hooked_gfw() -> isize {
     let hwnd = crate::device_proxy::eq_hwnd();
     let active = crate::key_shm::is_active();
 
-    static INLINE_GFW_LOG: std::sync::atomic::AtomicU32 =
-        std::sync::atomic::AtomicU32::new(0);
+    static INLINE_GFW_LOG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     static INLINE_GFW_ACTIVE_LOG: std::sync::atomic::AtomicU32 =
         std::sync::atomic::AtomicU32::new(0);
     let count = INLINE_GFW_LOG.fetch_add(1, Ordering::Relaxed);
@@ -681,9 +714,7 @@ unsafe extern "system" fn inline_hooked_gfw() -> isize {
     if active {
         let ac = INLINE_GFW_ACTIVE_LOG.fetch_add(1, Ordering::Relaxed);
         if ac < 5 {
-            crate::log::write(&format!(
-                "inline_gfw: ACTIVE hwnd=0x{hwnd:X} #{ac}"
-            ));
+            crate::log::write(&format!("inline_gfw: ACTIVE hwnd=0x{hwnd:X} #{ac}"));
         }
     }
 

@@ -29,13 +29,8 @@ struct IDirectInput8Vtbl {
         *mut *mut c_void,
         *mut c_void,
     ) -> HRESULT,
-    enum_devices: unsafe extern "system" fn(
-        *mut DI8Proxy,
-        u32,
-        *mut c_void,
-        *mut c_void,
-        u32,
-    ) -> HRESULT,
+    enum_devices:
+        unsafe extern "system" fn(*mut DI8Proxy, u32, *mut c_void, *mut c_void, u32) -> HRESULT,
     get_device_status: unsafe extern "system" fn(*mut DI8Proxy, *const GUID) -> HRESULT,
     run_control_panel: unsafe extern "system" fn(*mut DI8Proxy, isize, u32) -> HRESULT,
     initialize: unsafe extern "system" fn(*mut DI8Proxy, isize, u32) -> HRESULT,
@@ -182,7 +177,10 @@ unsafe extern "system" fn di8_enum_devices(
     method(real, dev_type, callback, pvref, flags)
 }
 
-unsafe extern "system" fn di8_get_device_status(this: *mut DI8Proxy, rguid: *const GUID) -> HRESULT {
+unsafe extern "system" fn di8_get_device_status(
+    this: *mut DI8Proxy,
+    rguid: *const GUID,
+) -> HRESULT {
     let real = (*this).real;
     let method: unsafe extern "system" fn(*mut c_void, *const GUID) -> HRESULT =
         real_method(real, 5);

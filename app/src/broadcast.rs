@@ -10,9 +10,7 @@ use windows::Win32::Foundation::{CloseHandle, HANDLE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Memory::{
     CreateFileMappingW, MapViewOfFile, FILE_MAP_WRITE, PAGE_READWRITE,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    MapVirtualKeyW, MAPVK_VK_TO_VSC,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, SetWindowsHookExW,
     UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
@@ -376,11 +374,7 @@ fn combined_key_value(broadcast: bool, targeted: bool) -> u8 {
 
 /// Low-level keyboard hook callback.
 /// Converts VK to DIK scan code, writes to all background target shm regions.
-unsafe extern "system" fn ll_keyboard_proc(
-    code: i32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let Some(s) = state().as_mut() else {
         return CallNextHookEx(HHOOK(std::ptr::null_mut()), code, wparam, lparam);
     };

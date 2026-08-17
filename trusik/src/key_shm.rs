@@ -30,14 +30,11 @@ unsafe fn try_open() -> bool {
     let name = format!("Local\\DI8_{pid}\0");
     let wide: Vec<u16> = name.encode_utf16().collect();
 
-    let handle = match OpenFileMappingW(
-        FILE_MAP_READ.0,
-        false,
-        windows::core::PCWSTR(wide.as_ptr()),
-    ) {
-        Ok(h) => h,
-        Err(_) => return false,
-    };
+    let handle =
+        match OpenFileMappingW(FILE_MAP_READ.0, false, windows::core::PCWSTR(wide.as_ptr())) {
+            Ok(h) => h,
+            Err(_) => return false,
+        };
 
     let view = MapViewOfFile(handle, FILE_MAP_READ, 0, 0, SHM_SIZE);
     let ptr = view.Value as *const SharedKeyState;

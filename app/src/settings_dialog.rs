@@ -93,9 +93,11 @@ pub fn run_standalone() {
             .with_min_inner_size([480.0, 300.0])
             .with_maximize_button(false)
             .with_icon(load_app_icon())
-            .with_position(cfg.settings_position
-                .map(|p| egui::pos2(p[0], p[1]))
-                .unwrap_or_else(|| centered_position(480.0, 400.0))),
+            .with_position(
+                cfg.settings_position
+                    .map(|p| egui::pos2(p[0], p[1]))
+                    .unwrap_or_else(|| centered_position(480.0, 400.0)),
+            ),
         ..Default::default()
     };
 
@@ -129,10 +131,9 @@ struct AccountRow {
 fn configure_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     if let Some(data) = load_system_font() {
-        fonts.font_data.insert(
-            "system".to_owned(),
-            egui::FontData::from_owned(data).into(),
-        );
+        fonts
+            .font_data
+            .insert("system".to_owned(), egui::FontData::from_owned(data).into());
         fonts
             .families
             .entry(egui::FontFamily::Proportional)
@@ -145,18 +146,15 @@ fn configure_fonts(ctx: &egui::Context) {
 fn configure_style(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
 
-    style.text_styles.insert(
-        egui::TextStyle::Body,
-        egui::FontId::proportional(12.0),
-    );
-    style.text_styles.insert(
-        egui::TextStyle::Button,
-        egui::FontId::proportional(12.0),
-    );
-    style.text_styles.insert(
-        egui::TextStyle::Heading,
-        egui::FontId::proportional(12.0),
-    );
+    style
+        .text_styles
+        .insert(egui::TextStyle::Body, egui::FontId::proportional(12.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Button, egui::FontId::proportional(12.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Heading, egui::FontId::proportional(12.0));
 
     style.spacing.item_spacing = egui::vec2(6.0, 5.0);
     style.spacing.button_padding = egui::vec2(16.0, 4.0);
@@ -195,10 +193,8 @@ fn configure_style(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
-const FILTER_MODE_OPTIONS: &[(&str, &str)] = &[
-    ("Blacklist", "blacklist"),
-    ("Whitelist", "whitelist"),
-];
+const FILTER_MODE_OPTIONS: &[(&str, &str)] =
+    &[("Blacklist", "blacklist"), ("Whitelist", "whitelist")];
 
 struct SettingsApp {
     tab: Tab,
@@ -241,8 +237,12 @@ impl SettingsApp {
             .unwrap_or(0);
 
         let mut swap_hotkeys = [
-            "Ctrl+F1".to_string(), "Ctrl+F2".to_string(), "Ctrl+F3".to_string(),
-            "Ctrl+F4".to_string(), "Ctrl+F5".to_string(), "Ctrl+F6".to_string(),
+            "Ctrl+F1".to_string(),
+            "Ctrl+F2".to_string(),
+            "Ctrl+F3".to_string(),
+            "Ctrl+F4".to_string(),
+            "Ctrl+F5".to_string(),
+            "Ctrl+F6".to_string(),
         ];
         for (i, s) in cfg.swap_hotkeys.iter().enumerate().take(6) {
             swap_hotkeys[i] = s.clone();
@@ -266,13 +266,23 @@ impl SettingsApp {
             hide_from_alt_tab: cfg.hide_from_alt_tab,
             toast_enabled: cfg.toast_enabled,
             toast_height: cfg.toast_height.unwrap_or(64),
-            toast_duration_tenths: cfg.toast_duration.map(|d| (d * 10.0).round() as u32).unwrap_or(20),
+            toast_duration_tenths: cfg
+                .toast_duration
+                .map(|d| (d * 10.0).round() as u32)
+                .unwrap_or(20),
             auto_update_check: cfg.auto_update_check,
             update_check_interval_days: cfg.update_check_interval_days,
             server_index: {
                 let ini_server = cfg.read_server_from_ini().unwrap_or_default();
-                let server = if ini_server.is_empty() { &cfg.server } else { &ini_server };
-                SERVER_OPTIONS.iter().position(|s| *s == server).unwrap_or(0)
+                let server = if ini_server.is_empty() {
+                    &cfg.server
+                } else {
+                    &ini_server
+                };
+                SERVER_OPTIONS
+                    .iter()
+                    .position(|s| *s == server)
+                    .unwrap_or(0)
             },
             accounts: cfg
                 .accounts
@@ -327,15 +337,13 @@ impl eframe::App for SettingsApp {
                 });
             });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            match self.tab {
-                Tab::General => self.general_tab(ui),
-                Tab::Accounts => self.accounts_tab(ui),
-                Tab::PiP => self.pip_tab(ui),
-                Tab::Hotkeys => self.hotkeys_tab(ui),
-                Tab::Broadcasting => self.broadcasting_tab(ui),
-                Tab::About => self.about_tab(ui),
-            }
+        egui::CentralPanel::default().show(ctx, |ui| match self.tab {
+            Tab::General => self.general_tab(ui),
+            Tab::Accounts => self.accounts_tab(ui),
+            Tab::PiP => self.pip_tab(ui),
+            Tab::Hotkeys => self.hotkeys_tab(ui),
+            Tab::Broadcasting => self.broadcasting_tab(ui),
+            Tab::About => self.about_tab(ui),
         });
     }
 }
@@ -370,21 +378,24 @@ impl SettingsApp {
             ui.horizontal(|ui| {
                 ui.label("Height:");
                 ui.scope(|ui| {
-                    ui.style_mut().visuals.widgets.inactive.bg_fill =
-                        egui::Color32::from_gray(220);
+                    ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(220);
                     ui.add(egui::Slider::new(&mut self.toast_height, 24..=128).suffix(" px"));
                 });
             });
             ui.horizontal(|ui| {
                 ui.label("Duration:");
                 ui.scope(|ui| {
-                    ui.style_mut().visuals.widgets.inactive.bg_fill =
-                        egui::Color32::from_gray(220);
+                    ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(220);
                     ui.add(
                         egui::Slider::new(&mut self.toast_duration_tenths, 5..=100)
                             .custom_formatter(|v, _| format!("{:.1} s", v / 10.0))
                             .custom_parser(|s| {
-                                s.trim().trim_end_matches('s').trim().parse::<f64>().ok().map(|v| v * 10.0)
+                                s.trim()
+                                    .trim_end_matches('s')
+                                    .trim()
+                                    .parse::<f64>()
+                                    .ok()
+                                    .map(|v| v * 10.0)
                             }),
                     );
                 });
@@ -396,16 +407,24 @@ impl SettingsApp {
             ui.horizontal(|ui| {
                 ui.label("Check every:");
                 ui.scope(|ui| {
-                    ui.style_mut().visuals.widgets.inactive.bg_fill =
-                        egui::Color32::from_gray(220);
+                    ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(220);
                     ui.add(
                         egui::Slider::new(&mut self.update_check_interval_days, 1..=30)
                             .custom_formatter(|v, _| {
                                 let d = v as u32;
-                                if d == 1 { "1 day".to_string() } else { format!("{d} days") }
+                                if d == 1 {
+                                    "1 day".to_string()
+                                } else {
+                                    format!("{d} days")
+                                }
                             })
                             .custom_parser(|s| {
-                                s.trim().trim_end_matches("days").trim_end_matches("day").trim().parse::<f64>().ok()
+                                s.trim()
+                                    .trim_end_matches("days")
+                                    .trim_end_matches("day")
+                                    .trim()
+                                    .parse::<f64>()
+                                    .ok()
                             }),
                     );
                 });
@@ -418,7 +437,11 @@ impl SettingsApp {
 
         section(ui, "Server", |ui| {
             let selected = SERVER_OPTIONS[self.server_index];
-            let display = if selected.is_empty() { "None" } else { selected };
+            let display = if selected.is_empty() {
+                "None"
+            } else {
+                selected
+            };
             egui::ComboBox::from_id_salt("server")
                 .selected_text(display)
                 .width(240.0)
@@ -455,7 +478,11 @@ impl SettingsApp {
                                     .password(!account.show_password)
                                     .desired_width(200.0),
                             );
-                            let toggle_label = if account.show_password { "Hide" } else { "Show" };
+                            let toggle_label = if account.show_password {
+                                "Hide"
+                            } else {
+                                "Show"
+                            };
                             if ui.button(toggle_label).clicked() {
                                 account.show_password = !account.show_password;
                             }
@@ -504,16 +531,14 @@ impl SettingsApp {
             ui.horizontal(|ui| {
                 ui.label("Height:");
                 ui.scope(|ui| {
-                    ui.style_mut().visuals.widgets.inactive.bg_fill =
-                        egui::Color32::from_gray(220);
+                    ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(220);
                     ui.add(egui::Slider::new(&mut self.label_height, 24..=64).suffix(" px"));
                 });
             });
             ui.horizontal(|ui| {
                 ui.label("Opacity:");
                 ui.scope(|ui| {
-                    ui.style_mut().visuals.widgets.inactive.bg_fill =
-                        egui::Color32::from_gray(220);
+                    ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(220);
                     ui.add(egui::Slider::new(&mut self.label_opacity, 10..=100).suffix("%"));
                 });
             });
@@ -522,7 +547,9 @@ impl SettingsApp {
         section(ui, "Hide overlay hotkey", |ui| {
             ui.label("Toggle PiP overlay visibility while EQ is focused");
             ui.horizontal(|ui| {
-                if let Some(combo) = hotkey_capture_button(ui, &self.hide_hotkey, &mut self.capturing_hotkey) {
+                if let Some(combo) =
+                    hotkey_capture_button(ui, &self.hide_hotkey, &mut self.capturing_hotkey)
+                {
                     self.hide_hotkey = combo;
                 }
             });
@@ -537,7 +564,9 @@ impl SettingsApp {
                 ui.horizontal(|ui| {
                     ui.label(format!("Window {}:", slot + 1));
                     let mut capturing = self.capturing_swap_hotkey == Some(slot);
-                    if let Some(combo) = hotkey_capture_button(ui, &self.swap_hotkeys[slot], &mut capturing) {
+                    if let Some(combo) =
+                        hotkey_capture_button(ui, &self.swap_hotkeys[slot], &mut capturing)
+                    {
                         self.swap_hotkeys[slot] = combo;
                     }
                     // Sync the per-slot capturing state back.
@@ -557,7 +586,11 @@ impl SettingsApp {
         section(ui, "Broadcast toggle hotkey", |ui| {
             ui.label("Toggle key broadcasting on/off");
             ui.horizontal(|ui| {
-                if let Some(combo) = hotkey_capture_button(ui, &self.broadcast_hotkey, &mut self.capturing_broadcast_hotkey) {
+                if let Some(combo) = hotkey_capture_button(
+                    ui,
+                    &self.broadcast_hotkey,
+                    &mut self.capturing_broadcast_hotkey,
+                ) {
                     self.broadcast_hotkey = combo;
                 }
             });
@@ -598,7 +631,8 @@ impl SettingsApp {
                 [w as usize, h as usize],
                 &rgba.into_raw(),
             );
-            ui.ctx().load_texture("logo", color_image, egui::TextureOptions::LINEAR)
+            ui.ctx()
+                .load_texture("logo", color_image, egui::TextureOptions::LINEAR)
         });
 
         let logo_size = egui::vec2(48.0, 48.0);
@@ -626,7 +660,8 @@ impl SettingsApp {
                 [w as usize, h as usize],
                 &rgba.into_raw(),
             );
-            ui.ctx().load_texture("avatar", color_image, egui::TextureOptions::LINEAR)
+            ui.ctx()
+                .load_texture("avatar", color_image, egui::TextureOptions::LINEAR)
         });
 
         let avatar_size = egui::vec2(48.0, 48.0);
@@ -641,14 +676,13 @@ impl SettingsApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
                 let (rect, _) = ui.allocate_exact_size(avatar_size, egui::Sense::hover());
                 let rounding = egui::CornerRadius::same(6);
-                ui.painter().add(egui::epaint::RectShape::filled(
-                    rect,
-                    rounding,
-                    egui::Color32::WHITE,
-                ).with_texture(
-                    avatar.id(),
-                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                ));
+                ui.painter().add(
+                    egui::epaint::RectShape::filled(rect, rounding, egui::Color32::WHITE)
+                        .with_texture(
+                            avatar.id(),
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        ),
+                );
             });
         });
 
@@ -730,25 +764,60 @@ impl SettingsApp {
 fn egui_key_to_config_name(key: &egui::Key) -> Option<&'static str> {
     use egui::Key::*;
     match key {
-        F1 => Some("F1"),   F2 => Some("F2"),   F3 => Some("F3"),   F4 => Some("F4"),
-        F5 => Some("F5"),   F6 => Some("F6"),   F7 => Some("F7"),   F8 => Some("F8"),
-        F9 => Some("F9"),   F10 => Some("F10"), F11 => Some("F11"), F12 => Some("F12"),
+        F1 => Some("F1"),
+        F2 => Some("F2"),
+        F3 => Some("F3"),
+        F4 => Some("F4"),
+        F5 => Some("F5"),
+        F6 => Some("F6"),
+        F7 => Some("F7"),
+        F8 => Some("F8"),
+        F9 => Some("F9"),
+        F10 => Some("F10"),
+        F11 => Some("F11"),
+        F12 => Some("F12"),
         Insert => Some("Insert"),
         Delete => Some("Delete"),
         Home => Some("Home"),
         End => Some("End"),
         PageUp => Some("PageUp"),
         PageDown => Some("PageDown"),
-        A => Some("A"), B => Some("B"), C => Some("C"), D => Some("D"),
-        E => Some("E"), F => Some("F"), G => Some("G"), H => Some("H"),
-        I => Some("I"), J => Some("J"), K => Some("K"), L => Some("L"),
-        M => Some("M"), N => Some("N"), O => Some("O"), P => Some("P"),
-        Q => Some("Q"), R => Some("R"), S => Some("S"), T => Some("T"),
-        U => Some("U"), V => Some("V"), W => Some("W"), X => Some("X"),
-        Y => Some("Y"), Z => Some("Z"),
-        Num0 => Some("0"), Num1 => Some("1"), Num2 => Some("2"), Num3 => Some("3"),
-        Num4 => Some("4"), Num5 => Some("5"), Num6 => Some("6"), Num7 => Some("7"),
-        Num8 => Some("8"), Num9 => Some("9"),
+        A => Some("A"),
+        B => Some("B"),
+        C => Some("C"),
+        D => Some("D"),
+        E => Some("E"),
+        F => Some("F"),
+        G => Some("G"),
+        H => Some("H"),
+        I => Some("I"),
+        J => Some("J"),
+        K => Some("K"),
+        L => Some("L"),
+        M => Some("M"),
+        N => Some("N"),
+        O => Some("O"),
+        P => Some("P"),
+        Q => Some("Q"),
+        R => Some("R"),
+        S => Some("S"),
+        T => Some("T"),
+        U => Some("U"),
+        V => Some("V"),
+        W => Some("W"),
+        X => Some("X"),
+        Y => Some("Y"),
+        Z => Some("Z"),
+        Num0 => Some("0"),
+        Num1 => Some("1"),
+        Num2 => Some("2"),
+        Num3 => Some("3"),
+        Num4 => Some("4"),
+        Num5 => Some("5"),
+        Num6 => Some("6"),
+        Num7 => Some("7"),
+        Num8 => Some("8"),
+        Num9 => Some("9"),
         Space => Some("Space"),
         Tab => Some("Tab"),
         Minus => Some("Minus"),
@@ -769,13 +838,23 @@ fn egui_key_to_config_name(key: &egui::Key) -> Option<&'static str> {
 
 /// Render a hotkey capture button. When `capturing` is true, waits for a key
 /// combo (Escape cancels). Returns `Some(combo)` when a combo is captured.
-fn hotkey_capture_button(ui: &mut egui::Ui, current_value: &str, capturing: &mut bool) -> Option<String> {
+fn hotkey_capture_button(
+    ui: &mut egui::Ui,
+    current_value: &str,
+    capturing: &mut bool,
+) -> Option<String> {
     if *capturing {
         let mods = ui.input(|i| i.modifiers);
         let mut parts = Vec::new();
-        if mods.ctrl { parts.push("Ctrl"); }
-        if mods.alt { parts.push("Alt"); }
-        if mods.shift { parts.push("Shift"); }
+        if mods.ctrl {
+            parts.push("Ctrl");
+        }
+        if mods.alt {
+            parts.push("Alt");
+        }
+        if mods.shift {
+            parts.push("Shift");
+        }
 
         let label = if parts.is_empty() {
             "Press a key combo...".to_string()
@@ -788,15 +867,27 @@ fn hotkey_capture_button(ui: &mut egui::Ui, current_value: &str, capturing: &mut
 
         let pressed = ui.input(|i| {
             i.events.iter().find_map(|e| {
-                if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = e
+                {
                     if *key == egui::Key::Escape {
                         return Some(None);
                     }
                     egui_key_to_config_name(key).map(|name| {
                         let mut combo = Vec::new();
-                        if modifiers.ctrl { combo.push("Ctrl"); }
-                        if modifiers.alt { combo.push("Alt"); }
-                        if modifiers.shift { combo.push("Shift"); }
+                        if modifiers.ctrl {
+                            combo.push("Ctrl");
+                        }
+                        if modifiers.alt {
+                            combo.push("Alt");
+                        }
+                        if modifiers.shift {
+                            combo.push("Shift");
+                        }
                         combo.push(name);
                         Some(combo.join("+"))
                     })
@@ -820,7 +911,11 @@ fn hotkey_capture_button(ui: &mut egui::Ui, current_value: &str, capturing: &mut
         }
         None
     } else {
-        let label = if current_value.is_empty() { "None" } else { current_value };
+        let label = if current_value.is_empty() {
+            "None"
+        } else {
+            current_value
+        };
         if ui.button(label).clicked() {
             *capturing = true;
         }
@@ -843,19 +938,27 @@ fn load_app_icon() -> egui::IconData {
     let mut best = (0usize, 0u32);
     for i in 0..count {
         let off = 6 + i * 16;
-        let w = if ico_data[off] == 0 { 256 } else { ico_data[off] as u32 };
+        let w = if ico_data[off] == 0 {
+            256
+        } else {
+            ico_data[off] as u32
+        };
         if w > best.1 {
             best = (i, w);
         }
     }
     let entry_off = 6 + best.0 * 16;
     let data_size = u32::from_le_bytes([
-        ico_data[entry_off + 8], ico_data[entry_off + 9],
-        ico_data[entry_off + 10], ico_data[entry_off + 11],
+        ico_data[entry_off + 8],
+        ico_data[entry_off + 9],
+        ico_data[entry_off + 10],
+        ico_data[entry_off + 11],
     ]) as usize;
     let data_offset = u32::from_le_bytes([
-        ico_data[entry_off + 12], ico_data[entry_off + 13],
-        ico_data[entry_off + 14], ico_data[entry_off + 15],
+        ico_data[entry_off + 12],
+        ico_data[entry_off + 13],
+        ico_data[entry_off + 14],
+        ico_data[entry_off + 15],
     ]) as usize;
     let png_data = &ico_data[data_offset..data_offset + data_size];
 
@@ -868,7 +971,11 @@ fn load_app_icon() -> egui::IconData {
             height: h,
         };
     }
-    egui::IconData { rgba: vec![0; 4], width: 1, height: 1 }
+    egui::IconData {
+        rgba: vec![0; 4],
+        width: 1,
+        height: 1,
+    }
 }
 
 fn load_system_font() -> Option<Vec<u8>> {

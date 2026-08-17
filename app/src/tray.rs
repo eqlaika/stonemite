@@ -1,17 +1,16 @@
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
-};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS,
 };
+use windows::Win32::UI::Shell::{
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconFromResourceEx, CreateMenu, CreatePopupMenu, CreateWindowExW,
-    DefWindowProcW, DestroyIcon, DestroyWindow, GetCursorPos, GetMessageW, KillTimer,
-    MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
-    LR_DEFAULTCOLOR, MSG, PostMessageW, PostQuitMessage, RegisterClassW,
-    SetForegroundWindow, SetTimer, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW,
+    DefWindowProcW, DestroyIcon, DestroyWindow, GetCursorPos, GetMessageW, KillTimer, PostMessageW,
+    PostQuitMessage, RegisterClassW, SetForegroundWindow, SetTimer, TrackPopupMenu, CS_HREDRAW,
+    CS_VREDRAW, LR_DEFAULTCOLOR, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
     TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_TIMER,
     WM_USER, WNDCLASSW, WS_EX_TOOLWINDOW,
 };
@@ -47,10 +46,18 @@ unsafe fn load_icon_from_ico(
         let h = if h == 0 { 256 } else { h };
 
         if w == desired_size && h == desired_size {
-            let data_size =
-                u32::from_le_bytes([ico_data[offset + 8], ico_data[offset + 9], ico_data[offset + 10], ico_data[offset + 11]]) as usize;
-            let data_offset =
-                u32::from_le_bytes([ico_data[offset + 12], ico_data[offset + 13], ico_data[offset + 14], ico_data[offset + 15]]) as usize;
+            let data_size = u32::from_le_bytes([
+                ico_data[offset + 8],
+                ico_data[offset + 9],
+                ico_data[offset + 10],
+                ico_data[offset + 11],
+            ]) as usize;
+            let data_offset = u32::from_le_bytes([
+                ico_data[offset + 12],
+                ico_data[offset + 13],
+                ico_data[offset + 14],
+                ico_data[offset + 15],
+            ]) as usize;
 
             if data_offset + data_size > ico_data.len() {
                 return None;
@@ -241,10 +248,14 @@ unsafe extern "system" fn wnd_proc(
                 ID_LAUNCH_EQ => launch_eq(None, None),
                 ID_LOGIN_ALL => {
                     let cfg = config::Config::load();
-                    let accounts: Vec<(String, Option<String>)> = cfg.accounts.iter().map(|a| {
-                        let pw = crate::crypt::decrypt(&a.password).ok();
-                        (a.username.clone(), pw)
-                    }).collect();
+                    let accounts: Vec<(String, Option<String>)> = cfg
+                        .accounts
+                        .iter()
+                        .map(|a| {
+                            let pw = crate::crypt::decrypt(&a.password).ok();
+                            (a.username.clone(), pw)
+                        })
+                        .collect();
                     std::thread::spawn(move || {
                         for (username, password) in &accounts {
                             launch_eq(Some(username), password.as_deref());
@@ -302,14 +313,30 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     let overlay_label = format!("Show overlay\t{}\0", cfg.hide_hotkey);
     let overlay_wide: Vec<u16> = overlay_label.encode_utf16().collect();
-    let check_flag = if overlay::is_visible() { MF_CHECKED } else { MF_UNCHECKED };
-    let _ = AppendMenuW(menu, MF_STRING | check_flag, ID_SHOW_OVERLAY as usize,
-        windows::core::PCWSTR(overlay_wide.as_ptr()));
+    let check_flag = if overlay::is_visible() {
+        MF_CHECKED
+    } else {
+        MF_UNCHECKED
+    };
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | check_flag,
+        ID_SHOW_OVERLAY as usize,
+        windows::core::PCWSTR(overlay_wide.as_ptr()),
+    );
 
-    let edit_label = if overlay::is_edit_mode() { "Lock layout\0" } else { "Edit layout\0" };
+    let edit_label = if overlay::is_edit_mode() {
+        "Lock layout\0"
+    } else {
+        "Edit layout\0"
+    };
     let edit_wide: Vec<u16> = edit_label.encode_utf16().collect();
-    let _ = AppendMenuW(menu, MF_STRING, ID_EDIT_MODE as usize,
-        windows::core::PCWSTR(edit_wide.as_ptr()));
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING,
+        ID_EDIT_MODE as usize,
+        windows::core::PCWSTR(edit_wide.as_ptr()),
+    );
 
     // Broadcasting toggle (only shown if trusik is enabled).
     if cfg.trusik {
@@ -319,16 +346,29 @@ unsafe fn show_context_menu(hwnd: HWND) {
             format!("Broadcasting: off\t{}\0", cfg.broadcast_hotkey)
         };
         let bc_wide: Vec<u16> = bc_label.encode_utf16().collect();
-        let bc_flag = if broadcast::is_active() { MF_CHECKED } else { MF_UNCHECKED };
-        let _ = AppendMenuW(menu, MF_STRING | bc_flag, ID_BROADCAST_TOGGLE as usize,
-            windows::core::PCWSTR(bc_wide.as_ptr()));
+        let bc_flag = if broadcast::is_active() {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING | bc_flag,
+            ID_BROADCAST_TOGGLE as usize,
+            windows::core::PCWSTR(bc_wide.as_ptr()),
+        );
     }
 
     if cfg.accounts.is_empty() {
         let _ = AppendMenuW(menu, MF_STRING, ID_LAUNCH_EQ as usize, w!("Launch EQ"));
     } else {
         let login_menu = CreateMenu().expect("Failed to create login submenu");
-        let _ = AppendMenuW(login_menu, MF_STRING, ID_LOGIN_ALL as usize, w!("Login all accounts"));
+        let _ = AppendMenuW(
+            login_menu,
+            MF_STRING,
+            ID_LOGIN_ALL as usize,
+            w!("Login all accounts"),
+        );
         let _ = AppendMenuW(login_menu, MF_SEPARATOR, 0, None);
         for (i, account) in cfg.accounts.iter().enumerate() {
             let label = format!("{}\0", account.username);
@@ -347,23 +387,42 @@ unsafe fn show_context_menu(hwnd: HWND) {
             ID_CONFIGURE_ACCOUNTS as usize,
             w!("Configure accounts..."),
         );
-        let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, login_menu.0 as usize, w!("Login"));
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING | MF_POPUP,
+            login_menu.0 as usize,
+            w!("Login"),
+        );
     }
     let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS as usize, w!("Settings..."));
     let update_label = format!("Check for updates\tv{}\0", updater::current_version());
     let update_wide: Vec<u16> = update_label.encode_utf16().collect();
-    let _ = AppendMenuW(menu, MF_STRING, ID_CHECK_UPDATE as usize,
-        windows::core::PCWSTR(update_wide.as_ptr()));
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING,
+        ID_CHECK_UPDATE as usize,
+        windows::core::PCWSTR(update_wide.as_ptr()),
+    );
     let _ = AppendMenuW(menu, MF_STRING, ID_EXIT as usize, w!("Exit"));
 
     let mut pt = Default::default();
     let _ = GetCursorPos(&mut pt);
     let _ = SetForegroundWindow(hwnd);
-    let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, None);
+    let _ = TrackPopupMenu(
+        menu,
+        TPM_LEFTALIGN | TPM_BOTTOMALIGN,
+        pt.x,
+        pt.y,
+        0,
+        hwnd,
+        None,
+    );
 }
 
 unsafe fn do_update_check(hwnd: HWND) {
-    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONINFORMATION, MB_ICONERROR};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK,
+    };
 
     match updater::check_and_update() {
         updater::UpdateResult::UpToDate => {
@@ -374,11 +433,17 @@ unsafe fn do_update_check(hwnd: HWND) {
                 MB_OK | MB_ICONINFORMATION,
             );
         }
-        updater::UpdateResult::Updated { version: ver, notes } => {
+        updater::UpdateResult::Updated {
+            version: ver,
+            notes,
+        } => {
             let msg = if notes.is_empty() {
                 format!("Updated to v{}! Stonemite will now restart.\0", ver)
             } else {
-                format!("Updated to v{}! Stonemite will now restart.\n\n{}\0", ver, notes)
+                format!(
+                    "Updated to v{}! Stonemite will now restart.\n\n{}\0",
+                    ver, notes
+                )
             };
             let msg_wide: Vec<u16> = msg.encode_utf16().collect();
             MessageBoxW(
@@ -450,21 +515,37 @@ fn update_version_from_wparam(wparam: WPARAM) -> String {
 unsafe fn register_hotkeys(hwnd: HWND, cfg: &config::Config) {
     if let Some((mods, vk)) = cfg.hide_hotkey_vk() {
         if RegisterHotKey(hwnd, HOTKEY_HIDE_OVERLAY, HOT_KEY_MODIFIERS(mods), vk).is_err() {
-            eprintln!("Failed to register hide overlay hotkey: {}", cfg.hide_hotkey);
+            eprintln!(
+                "Failed to register hide overlay hotkey: {}",
+                cfg.hide_hotkey
+            );
         }
     }
     if cfg.trusik {
         if let Some((mods, vk)) = cfg.broadcast_hotkey_vk() {
             if RegisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE, HOT_KEY_MODIFIERS(mods), vk).is_err() {
-                eprintln!("Failed to register broadcast hotkey: {}", cfg.broadcast_hotkey);
+                eprintln!(
+                    "Failed to register broadcast hotkey: {}",
+                    cfg.broadcast_hotkey
+                );
             }
         }
     }
     for i in 0..MAX_SWAP_HOTKEYS {
         if let Some((mods, vk)) = cfg.swap_hotkey_vk(i) {
-            if RegisterHotKey(hwnd, HOTKEY_SWAP_BASE + i as i32, HOT_KEY_MODIFIERS(mods), vk).is_err() {
-                eprintln!("Failed to register swap hotkey {}: {}", i + 1,
-                    cfg.swap_hotkeys.get(i).map(|s| s.as_str()).unwrap_or("?"));
+            if RegisterHotKey(
+                hwnd,
+                HOTKEY_SWAP_BASE + i as i32,
+                HOT_KEY_MODIFIERS(mods),
+                vk,
+            )
+            .is_err()
+            {
+                eprintln!(
+                    "Failed to register swap hotkey {}: {}",
+                    i + 1,
+                    cfg.swap_hotkeys.get(i).map(|s| s.as_str()).unwrap_or("?")
+                );
             }
         }
     }

@@ -36,7 +36,8 @@ pub fn send_app_start(config: &Config) {
 fn os_version_string() -> String {
     let ver = windows::Win32::System::SystemInformation::GetVersionExW;
     unsafe {
-        let mut info: windows::Win32::System::SystemInformation::OSVERSIONINFOW = std::mem::zeroed();
+        let mut info: windows::Win32::System::SystemInformation::OSVERSIONINFOW =
+            std::mem::zeroed();
         info.dwOSVersionInfoSize = std::mem::size_of_val(&info) as u32;
         #[allow(deprecated)]
         let _ = ver(&mut info);

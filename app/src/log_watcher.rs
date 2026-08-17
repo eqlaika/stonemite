@@ -172,7 +172,11 @@ fn parse_zone_name(s: &str) -> Option<&str> {
     // Zone name ends at the short name in parens, or end of string.
     let end = rest.rfind('(').unwrap_or(rest.len());
     let name = rest[..end].trim();
-    if name.is_empty() { None } else { Some(name) }
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 /// Extract zone short name from `ZONE: ... (shortname)`.
@@ -280,11 +284,7 @@ impl LogTailer {
         }
     }
 
-    pub fn poll(
-        &mut self,
-        eq_dir: &Path,
-        active_chars: &[(String, String)],
-    ) -> LogPollResult {
+    pub fn poll(&mut self, eq_dir: &Path, active_chars: &[(String, String)]) -> LogPollResult {
         let logs_dir = eq_dir.join("Logs");
         let mut class_updates = Vec::new();
         let mut pet_updates = Vec::new();
@@ -342,7 +342,9 @@ impl LogTailer {
 
             let text = String::from_utf8_lossy(&buf);
             for line in text.lines() {
-                let Some(log_line) = LogLine::parse(line) else { continue };
+                let Some(log_line) = LogLine::parse(line) else {
+                    continue;
+                };
                 process_log_line(
                     log_line.body,
                     &mut file_state.who_state,
@@ -387,8 +389,7 @@ fn process_log_line(
             }
         }
         WhoParseState::InBlock => {
-            if (body.contains("There is") || body.contains("There are"))
-                && body.contains("player")
+            if (body.contains("There is") || body.contains("There are")) && body.contains("player")
             {
                 *who_state = WhoParseState::Idle;
                 return;

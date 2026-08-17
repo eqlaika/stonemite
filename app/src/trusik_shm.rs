@@ -22,14 +22,11 @@ pub fn read_character(pid: u32) -> Option<(String, String)> {
         let name = format!("Local\\Stonemite_{pid}\0");
         let wide: Vec<u16> = name.encode_utf16().collect();
 
-        let handle = match OpenFileMappingW(
-            FILE_MAP_READ.0,
-            false,
-            windows::core::PCWSTR(wide.as_ptr()),
-        ) {
-            Ok(h) => h,
-            Err(_) => return None,
-        };
+        let handle =
+            match OpenFileMappingW(FILE_MAP_READ.0, false, windows::core::PCWSTR(wide.as_ptr())) {
+                Ok(h) => h,
+                Err(_) => return None,
+            };
 
         let view = MapViewOfFile(handle, FILE_MAP_READ, 0, 0, SHM_SIZE);
         let ptr = view.Value as *const CharacterInfo;

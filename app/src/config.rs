@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_EQ_DIR: &str =
-    r"C:\Users\Public\Daybreak Game Company\Installed Games\EverQuest";
+pub const DEFAULT_EQ_DIR: &str = r"C:\Users\Public\Daybreak Game Company\Installed Games\EverQuest";
 
 /// Screen edge where the PiP strip is anchored.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -278,8 +277,8 @@ impl Config {
             ));
         };
         std::fs::create_dir_all(&dir)?;
-        let contents =
-            toml::to_string_pretty(self).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let contents = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         std::fs::write(dir.join("config.toml"), contents)
     }
 
@@ -337,9 +336,18 @@ impl Config {
 pub fn parse_vk_name(name: &str) -> Option<u32> {
     match name.trim().to_uppercase().as_str() {
         // Function keys
-        "F1" => Some(0x70),  "F2" => Some(0x71),  "F3" => Some(0x72),  "F4" => Some(0x73),
-        "F5" => Some(0x74),  "F6" => Some(0x75),  "F7" => Some(0x76),  "F8" => Some(0x77),
-        "F9" => Some(0x78),  "F10" => Some(0x79), "F11" => Some(0x7A), "F12" => Some(0x7B),
+        "F1" => Some(0x70),
+        "F2" => Some(0x71),
+        "F3" => Some(0x72),
+        "F4" => Some(0x73),
+        "F5" => Some(0x74),
+        "F6" => Some(0x75),
+        "F7" => Some(0x76),
+        "F8" => Some(0x77),
+        "F9" => Some(0x78),
+        "F10" => Some(0x79),
+        "F11" => Some(0x7A),
+        "F12" => Some(0x7B),
         // Navigation
         "INSERT" => Some(0x2D),
         "DELETE" => Some(0x2E),
@@ -351,17 +359,43 @@ pub fn parse_vk_name(name: &str) -> Option<u32> {
         "PAUSE" => Some(0x13),
         "SCROLLLOCK" | "SCROLL_LOCK" => Some(0x91),
         // Letters
-        "A" => Some(0x41), "B" => Some(0x42), "C" => Some(0x43), "D" => Some(0x44),
-        "E" => Some(0x45), "F" => Some(0x46), "G" => Some(0x47), "H" => Some(0x48),
-        "I" => Some(0x49), "J" => Some(0x4A), "K" => Some(0x4B), "L" => Some(0x4C),
-        "M" => Some(0x4D), "N" => Some(0x4E), "O" => Some(0x4F), "P" => Some(0x50),
-        "Q" => Some(0x51), "R" => Some(0x52), "S" => Some(0x53), "T" => Some(0x54),
-        "U" => Some(0x55), "V" => Some(0x56), "W" => Some(0x57), "X" => Some(0x58),
-        "Y" => Some(0x59), "Z" => Some(0x5A),
+        "A" => Some(0x41),
+        "B" => Some(0x42),
+        "C" => Some(0x43),
+        "D" => Some(0x44),
+        "E" => Some(0x45),
+        "F" => Some(0x46),
+        "G" => Some(0x47),
+        "H" => Some(0x48),
+        "I" => Some(0x49),
+        "J" => Some(0x4A),
+        "K" => Some(0x4B),
+        "L" => Some(0x4C),
+        "M" => Some(0x4D),
+        "N" => Some(0x4E),
+        "O" => Some(0x4F),
+        "P" => Some(0x50),
+        "Q" => Some(0x51),
+        "R" => Some(0x52),
+        "S" => Some(0x53),
+        "T" => Some(0x54),
+        "U" => Some(0x55),
+        "V" => Some(0x56),
+        "W" => Some(0x57),
+        "X" => Some(0x58),
+        "Y" => Some(0x59),
+        "Z" => Some(0x5A),
         // Digits
-        "0" => Some(0x30), "1" => Some(0x31), "2" => Some(0x32), "3" => Some(0x33),
-        "4" => Some(0x34), "5" => Some(0x35), "6" => Some(0x36), "7" => Some(0x37),
-        "8" => Some(0x38), "9" => Some(0x39),
+        "0" => Some(0x30),
+        "1" => Some(0x31),
+        "2" => Some(0x32),
+        "3" => Some(0x33),
+        "4" => Some(0x34),
+        "5" => Some(0x35),
+        "6" => Some(0x36),
+        "7" => Some(0x37),
+        "8" => Some(0x38),
+        "9" => Some(0x39),
         // Other
         "SPACE" => Some(0x20),
         "TAB" => Some(0x09),
@@ -408,7 +442,9 @@ fn write_ini_value(path: &Path, section: &str, key: &str, value: &str) {
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
     // Find the section.
-    let section_pos = lines.iter().position(|l| l.trim().eq_ignore_ascii_case(&section_header));
+    let section_pos = lines
+        .iter()
+        .position(|l| l.trim().eq_ignore_ascii_case(&section_header));
 
     if let Some(sec_idx) = section_pos {
         // Find existing key in this section.
