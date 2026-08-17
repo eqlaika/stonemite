@@ -33,14 +33,14 @@ Target: `x86_64-pc-windows-msvc`
 ## Release
 
 ```
-just release 0.4.0
+just release 0.5.0
 ```
 
-This bumps the version in `Cargo.toml`, builds a release binary, and packages both `dist/stonemite-x86_64-pc-windows-msvc.zip` and `dist/stonemite-0.4.0-setup.exe`. Requires [Inno Setup 6](https://jrsoftware.org/isdl.php). Then:
+This bumps the version in `Cargo.toml`, builds a release binary, and packages both `dist/stonemite-x86_64-pc-windows-msvc.zip` and `dist/stonemite-0.5.0-setup.exe`. Requires [Inno Setup 6](https://jrsoftware.org/isdl.php). Then:
 
-1. Commit and tag: `git add -A && git commit -m "Release v0.4.0" && git tag v0.4.0`
+1. Commit and tag: `git add -A && git commit -m "Release v0.5.0" && git tag v0.5.0`
 2. Push: `git push && git push --tags`
-3. Create a GitHub release: `gh release create v0.4.0 dist/stonemite-x86_64-pc-windows-msvc.zip dist/stonemite-0.4.0-setup.exe --title 'v0.4.0' --notes-file dist/release-notes.md`
+3. Create a GitHub release: `gh release create v0.5.0 dist/stonemite-x86_64-pc-windows-msvc.zip dist/stonemite-0.5.0-setup.exe --title 'v0.5.0' --notes-file dist/release-notes.md`
 
 The app checks for updates against [eqlaika/stonemite](https://github.com/eqlaika/stonemite) GitHub releases via the `self_update` crate.
 

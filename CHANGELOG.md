@@ -1,8 +1,14 @@
 # Changelog
 
-## v0.4.2
+## v0.5.0
 
-- Fixed auto-login failing after a self-update. The trusik input DLL (dinput8.dll) is now embedded in stonemite.exe and written out on launch, so it can no longer be left stale by an exe-only update. Previously a self-update replaced only stonemite.exe and left an old dinput8.dll behind, breaking the pre-login DirectInput handshake (auto-login timed out; in-game key broadcasting was unaffected).
+- Added the opt-in trushar WebSocket API for Stream Deck plugins and other integrations, with live client state, exact-client activation, broadcast control, and bounded targeted text/key input
+- Added authenticated LAN support for trusted networks; localhost remains the safe default
+- Added **Local integrations** to Settings and the installer, disabled by default, with an offer to restart immediately after changing it
+- Report targeted input readiness separately for each EQ client after its compatible trusik proxy acknowledges the shared-memory channel
+- Refresh character and server identity when the same EQ process changes characters or servers
+- Fixed auto-login failing after a self-update by embedding the matching trusik input DLL in stonemite.exe
+- Hardened release builds against missing or invalid embedded trusik DLLs and removed the redundant loose DLL from release packages
 
 ## v0.4.1
 
