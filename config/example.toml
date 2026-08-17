@@ -48,3 +48,18 @@ pip_edge = "right"
 
 # Anonymous usage telemetry (set to false to disable)
 # telemetry = true
+
+# Generic trushar control/state and targeted-input WebSocket API. Enabling the
+# server opts into all operations; targeted input also requires trusik = true.
+# These settings require restart.
+# The safe default is enabled on IPv4 loopback only; no token is needed for a
+# native localhost client that sends no Origin header.
+# [trushar]
+# enabled = true
+# bind = "127.0.0.1:19720"
+
+# LAN access is explicit. A wildcard or non-loopback bind requires a nonempty
+# shared token or startup fails closed. Use only on a trusted network: ws://
+# authenticates the client but does not encrypt the token or EQ state.
+# bind = "0.0.0.0:19720"
+# auth_token = "replace-with-a-long-random-token"

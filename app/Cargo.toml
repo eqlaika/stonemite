@@ -18,6 +18,9 @@ eframe = "0.31"
 image = { version = "0.25", default-features = false, features = ["png"] }
 rfd = "0.15"
 base64 = "0.22"
+trushar = { path = "../trushar" }
+futures-util = "0.3"
+tokio = { version = "1", features = ["sync", "time"] }
 
 [dependencies.windows]
 version = "0.58"

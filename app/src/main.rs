@@ -5,6 +5,7 @@ mod broadcast;
 mod character_cache;
 mod class_icons;
 mod config;
+mod control;
 mod crypt;
 mod eq_characters;
 mod eq_windows;

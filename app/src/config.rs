@@ -39,6 +39,38 @@ pub struct Account {
     pub password: String,
 }
 
+/// Generic WebSocket control/state API configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrusharConfig {
+    /// Start the server with the tray application.
+    #[serde(default = "default_trushar_enabled")]
+    pub enabled: bool,
+    /// Numeric socket address. Non-loopback/wildcard binds require auth_token.
+    #[serde(default = "default_trushar_bind")]
+    pub bind: String,
+    /// Shared bearer token. Required for LAN exposure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
+}
+
+impl Default for TrusharConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_trushar_enabled(),
+            bind: default_trushar_bind(),
+            auth_token: None,
+        }
+    }
+}
+
+fn default_trushar_enabled() -> bool {
+    true
+}
+
+fn default_trushar_bind() -> String {
+    trushar::server::DEFAULT_BIND.to_owned()
+}
+
 /// Top-level configuration persisted to %APPDATA%\Stonemite\config.toml.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -119,6 +151,9 @@ pub struct Config {
     /// EverQuest server name for auto-login (written to eqlsPlayerData.ini).
     #[serde(default)]
     pub server: String,
+    /// Generic WebSocket control/state API. Edited manually in config.toml.
+    #[serde(default)]
+    pub trushar: TrusharConfig,
 }
 
 fn default_hide_hotkey() -> String {
@@ -194,6 +229,7 @@ impl Default for Config {
             telemetry_id: None,
             accounts: Vec::new(),
             server: String::new(),
+            trushar: TrusharConfig::default(),
         }
     }
 }
@@ -429,4 +465,18 @@ fn read_ini_value(path: &Path, section: &str, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_config_gets_safe_trushar_defaults() {
+        let config: Config = toml::from_str("eq_dir = 'C:\\EverQuest'").unwrap();
+
+        assert!(config.trushar.enabled);
+        assert_eq!(config.trushar.bind, "127.0.0.1:19720");
+        assert_eq!(config.trushar.auth_token, None);
+    }
 }

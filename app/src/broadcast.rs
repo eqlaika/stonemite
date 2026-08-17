@@ -40,6 +40,9 @@ struct ProcessShm {
     pid: u32,
     handle: HANDLE,
     ptr: *mut SharedKeyState,
+    broadcast_keys: [bool; 256],
+    targeted_keys: [bool; 256],
+    targeted_active: bool,
 }
 
 impl Drop for ProcessShm {
@@ -141,14 +144,20 @@ fn passes_filter(s: &BroadcastState, scan: u8) -> bool {
 
 /// Cleanup the broadcast engine. Call before exit.
 pub fn cleanup() {
-    set_active(false);
+    let _ = set_active(false);
     *state() = None;
 }
 
 /// Toggle broadcasting on/off.
-pub fn toggle() {
+pub fn toggle() -> Result<bool, String> {
     let currently_active = is_active();
-    set_active(!currently_active);
+    set_active(!currently_active)?;
+    Ok(!currently_active)
+}
+
+/// Returns whether the broadcast engine was initialized and can be enabled.
+pub fn is_available() -> bool {
+    state().is_some()
 }
 
 /// Returns whether broadcasting is currently active.
@@ -157,34 +166,47 @@ pub fn is_active() -> bool {
 }
 
 /// Enable or disable broadcasting.
-pub fn set_active(active: bool) {
-    let Some(s) = state().as_mut() else { return };
+pub fn set_active(active: bool) -> Result<(), String> {
+    let Some(s) = state().as_mut() else {
+        return Err("broadcast engine is unavailable".to_owned());
+    };
+    if s.broadcasting == active {
+        return Ok(());
+    }
     unsafe {
         if active && s.hook.0.is_null() {
             let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(ll_keyboard_proc), None, 0);
             match hook {
                 Ok(h) => s.hook = h,
                 Err(e) => {
-                    eprintln!("Failed to install keyboard hook: {e}");
-                    return;
+                    return Err(format!("failed to install keyboard hook: {e}"));
                 }
             }
         } else if !active && !s.hook.0.is_null() {
-            let _ = UnhookWindowsHookEx(s.hook);
+            UnhookWindowsHookEx(s.hook)
+                .map_err(|error| format!("failed to remove keyboard hook: {error}"))?;
             s.hook = HHOOK(std::ptr::null_mut());
-            // Clear all keys in all targets.
-            for shm in s.targets.values() {
-                std::ptr::write_bytes(&mut (*shm.ptr).keys as *mut u8, 0, 256);
-                std::ptr::write_volatile(&mut (*shm.ptr).seq, (*shm.ptr).seq.wrapping_add(1));
+            // Clear the physical-broadcast source while preserving any
+            // target-specific input sequence in progress.
+            for shm in s.targets.values_mut() {
+                for scan in 0..255 {
+                    shm.broadcast_keys[scan] = false;
+                    write_combined_key(shm, scan);
+                }
             }
         }
         s.broadcasting = active;
         // Write active flag to all shm regions.
-        let flag = if active { 1u32 } else { 0u32 };
         for shm in s.targets.values() {
+            let flag = if active || shm.targeted_active {
+                1u32
+            } else {
+                0u32
+            };
             std::ptr::write_volatile(&mut (*shm.ptr).active, flag);
         }
     }
+    Ok(())
 }
 
 /// Update the set of target processes. Called from overlay poll.
@@ -274,7 +296,82 @@ unsafe fn create_shm(pid: u32) -> Option<ProcessShm> {
         pid,
         handle,
         ptr,
+        broadcast_keys: [false; 256],
+        targeted_keys: [false; 256],
+        targeted_active: false,
     })
+}
+
+/// Activate direct input for one loaded process without enabling broadcasting.
+/// All functions in this group are called only by the Win32 owner thread.
+pub fn begin_targeted_input(pid: u32) -> Result<(), String> {
+    let Some(s) = state().as_mut() else {
+        return Err("targeted input is unavailable because trusik is disabled".to_owned());
+    };
+    let Some(shm) = s.targets.get_mut(&pid) else {
+        return Err("target process has no trusik shared-memory target".to_owned());
+    };
+    if shm.targeted_active {
+        return Err("target process already has an input sequence in progress".to_owned());
+    }
+    shm.targeted_active = true;
+    unsafe {
+        std::ptr::write_volatile(&mut (*shm.ptr).active, 1);
+    }
+    Ok(())
+}
+
+pub fn set_targeted_key(pid: u32, scan: u8, pressed: bool) -> Result<(), String> {
+    if scan == 0 || scan == 255 {
+        return Err("invalid DirectInput scan code".to_owned());
+    }
+    let Some(s) = state().as_mut() else {
+        return Err("targeted input is unavailable because trusik is disabled".to_owned());
+    };
+    let Some(shm) = s.targets.get_mut(&pid) else {
+        return Err("target process disappeared during input delivery".to_owned());
+    };
+    if !shm.targeted_active {
+        return Err("targeted input sequence is not active".to_owned());
+    }
+    unsafe {
+        shm.targeted_keys[scan as usize] = pressed;
+        write_combined_key(shm, scan as usize);
+    }
+    Ok(())
+}
+
+pub fn finish_targeted_input(pid: u32) {
+    let Some(s) = state().as_mut() else { return };
+    let broadcasting = s.broadcasting;
+    let Some(shm) = s.targets.get_mut(&pid) else {
+        return;
+    };
+    unsafe {
+        for scan in 0..255 {
+            if shm.targeted_keys[scan] {
+                shm.targeted_keys[scan] = false;
+                write_combined_key(shm, scan);
+            }
+        }
+        shm.targeted_active = false;
+        std::ptr::write_volatile(&mut (*shm.ptr).active, if broadcasting { 1 } else { 0 });
+    }
+}
+
+unsafe fn write_combined_key(shm: &ProcessShm, scan: usize) {
+    let value = combined_key_value(shm.broadcast_keys[scan], shm.targeted_keys[scan]);
+    std::ptr::write_volatile(&mut (*shm.ptr).keys[scan], value);
+    let seq = std::ptr::read_volatile(&(*shm.ptr).seq);
+    std::ptr::write_volatile(&mut (*shm.ptr).seq, seq.wrapping_add(1));
+}
+
+fn combined_key_value(broadcast: bool, targeted: bool) -> u8 {
+    if broadcast || targeted {
+        0x80
+    } else {
+        0x00
+    }
 }
 
 /// Low-level keyboard hook callback.
@@ -299,13 +396,14 @@ unsafe extern "system" fn ll_keyboard_proc(
             if s.eq_was_foreground {
                 s.eq_was_foreground = false;
                 let active_pid = s.active_pid;
-                for (&pid, shm) in s.targets.iter() {
+                for (&pid, shm) in s.targets.iter_mut() {
                     if Some(pid) == active_pid {
                         continue;
                     }
-                    std::ptr::write_bytes(&mut (*shm.ptr).keys as *mut u8, 0, 256);
-                    let seq = std::ptr::read_volatile(&(*shm.ptr).seq);
-                    std::ptr::write_volatile(&mut (*shm.ptr).seq, seq.wrapping_add(1));
+                    for scan in 0..255 {
+                        shm.broadcast_keys[scan] = false;
+                        write_combined_key(shm, scan);
+                    }
                 }
             }
             return CallNextHookEx(s.hook, code, wparam, lparam);
@@ -322,16 +420,67 @@ unsafe extern "system" fn ll_keyboard_proc(
             let value: u8 = if pressed { 0x80 } else { 0x00 };
 
             let active_pid = s.active_pid;
-            for (&pid, shm) in s.targets.iter() {
+            for (&pid, shm) in s.targets.iter_mut() {
                 // Only broadcast to background windows (not the active one).
                 if Some(pid) == active_pid {
                     continue;
                 }
-                std::ptr::write_volatile(&mut (*shm.ptr).keys[scan as usize], value);
-                let seq = std::ptr::read_volatile(&(*shm.ptr).seq);
-                std::ptr::write_volatile(&mut (*shm.ptr).seq, seq.wrapping_add(1));
+                shm.broadcast_keys[scan as usize] = value != 0;
+                write_combined_key(shm, scan as usize);
             }
         }
     }
     CallNextHookEx(s.hook, code, wparam, lparam)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broadcast_and_targeted_sources_cannot_release_each_other() {
+        assert_eq!(combined_key_value(false, false), 0x00);
+        assert_eq!(combined_key_value(true, false), 0x80);
+        assert_eq!(combined_key_value(false, true), 0x80);
+        assert_eq!(combined_key_value(true, true), 0x80);
+    }
+
+    #[test]
+    fn targeted_input_drives_only_the_selected_shared_memory_mapping() {
+        let target_pid = 0x7fff_ff01;
+        let other_pid = 0x7fff_ff02;
+        *state() = Some(BroadcastState {
+            targets: HashMap::new(),
+            active_pid: None,
+            hook: HHOOK(std::ptr::null_mut()),
+            broadcasting: false,
+            eq_pids: Vec::new(),
+            eq_was_foreground: false,
+            filter_mode: FilterMode::Blacklist,
+            filter_scancodes: Vec::new(),
+        });
+        update_targets(&[target_pid, other_pid], None);
+
+        begin_targeted_input(target_pid).unwrap();
+        set_targeted_key(target_pid, 0x1e, true).unwrap();
+        let broadcast_state = state().as_ref().unwrap();
+        let target = &broadcast_state.targets[&target_pid];
+        let other = &broadcast_state.targets[&other_pid];
+        unsafe {
+            assert_eq!(std::ptr::read_volatile(&(*target.ptr).active), 1);
+            assert_eq!(std::ptr::read_volatile(&(*target.ptr).keys[0x1e]), 0x80);
+            assert_eq!(std::ptr::read_volatile(&(*other.ptr).active), 0);
+            assert_eq!(std::ptr::read_volatile(&(*other.ptr).keys[0x1e]), 0x00);
+        }
+
+        set_targeted_key(target_pid, 0x1e, false).unwrap();
+        finish_targeted_input(target_pid);
+        let broadcast_state = state().as_ref().unwrap();
+        let target = &broadcast_state.targets[&target_pid];
+        unsafe {
+            assert_eq!(std::ptr::read_volatile(&(*target.ptr).active), 0);
+            assert_eq!(std::ptr::read_volatile(&(*target.ptr).keys[0x1e]), 0x00);
+        }
+        *state() = None;
+    }
 }

@@ -709,6 +709,7 @@ impl SettingsApp {
             toast_height: Some(self.toast_height),
             toast_duration: Some(self.toast_duration_tenths as f32 / 10.0),
             server: SERVER_OPTIONS[self.server_index].to_string(),
+            trushar: existing.trushar,
         };
         cfg.write_server_to_ini();
         if let Err(e) = cfg.save() {

@@ -1,4 +1,4 @@
 [workspace]
-members = ["app", "trusik"]
+members = ["app", "trusik", "trushar"]
 exclude = ["tools/mkicon"]
 resolver = "2"

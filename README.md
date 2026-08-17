@@ -82,6 +82,14 @@ Stonemite is open source. The encryption code is in [`app/src/crypt.rs`](app/src
 
 Config lives at `%APPDATA%\Stonemite\config.toml`. See [config/example.toml](config/example.toml) for options.
 
+## trushar control API
+
+Stonemite includes `trushar`, a generic, persistent WebSocket control/state API for native local or LAN clients. It is independent of any particular controller hardware or UI. By default it listens only at `ws://127.0.0.1:19720/trushar/v1`, sends a complete current-state snapshot as soon as a client connects, pushes later snapshots whenever known state changes, and supports bounded text/key delivery to one exact loaded client through trusik shared memory.
+
+Enabling `trushar` opts into the complete API, including targeted input. LAN binding is manual and requires a shared bearer token. The current server intentionally uses plaintext `ws://`; a token authenticates access but does not encrypt traffic, so LAN mode is appropriate only on a trusted network or encrypted tunnel. Browser-originated connections are rejected unless authenticated, including on loopback.
+
+See [docs/trushar-protocol.md](docs/trushar-protocol.md) for configuration, protocol messages, identifier/error semantics, limits, and exact hardware-free validation commands.
+
 ## Telemetry
 
 Stonemite sends a single anonymous ping on each launch to help me understand if anyone is using the app. The payload contains only:

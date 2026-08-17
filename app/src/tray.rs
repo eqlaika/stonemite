@@ -18,6 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::broadcast;
 use crate::config;
+use crate::control;
 use crate::overlay;
 use crate::settings_dialog;
 use crate::updater;
@@ -157,12 +158,20 @@ unsafe fn run_inner() {
     }
     let _ = Shell_NotifyIconW(NIM_ADD, &nid);
 
+    // The dispatcher is now ready. The dedicated runtime thread is joined
+    // before this Win32 window and the overlay/broadcast owner state go away.
+    let trushar_config = config::Config::load().trushar;
+    let trushar_server = control::start(hwnd, &trushar_config);
+
     // Message loop.
     let mut msg = MSG::default();
     while GetMessageW(&mut msg, None, 0, 0).as_bool() {
         let _ = windows::Win32::UI::WindowsAndMessaging::TranslateMessage(&msg);
         let _ = windows::Win32::UI::WindowsAndMessaging::DispatchMessageW(&msg);
     }
+
+    drop(trushar_server);
+    control::stop();
 
     // Cleanup tray icon.
     let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
@@ -192,7 +201,13 @@ unsafe extern "system" fn wnd_proc(
         WM_TIMER => {
             if wparam.0 == TIMER_POLL_EQ {
                 overlay::poll();
+            } else if wparam.0 == control::TIMER_CONTROL_INPUT {
+                control::advance_input();
             }
+            LRESULT(0)
+        }
+        x if x == control::WM_CONTROL_COMMAND => {
+            control::drain_commands();
             LRESULT(0)
         }
         WM_TRAY => {
@@ -208,13 +223,7 @@ unsafe extern "system" fn wnd_proc(
             if id == HOTKEY_HIDE_OVERLAY && overlay::is_eq_active() {
                 overlay::toggle_hidden();
             } else if id == HOTKEY_BROADCAST_TOGGLE {
-                broadcast::toggle();
-                overlay::refresh_broadcast_label();
-                overlay::show_toast(if broadcast::is_active() {
-                    "Key broadcasting enabled"
-                } else {
-                    "Key broadcasting disabled"
-                });
+                control::toggle_broadcast_on_ui(true);
             } else if id >= HOTKEY_SWAP_BASE && id < HOTKEY_SWAP_BASE + MAX_SWAP_HOTKEYS as i32 {
                 let slot = (id - HOTKEY_SWAP_BASE) as usize + 1; // 1-based window number
                 overlay::swap_to_number(slot);
@@ -227,13 +236,7 @@ unsafe extern "system" fn wnd_proc(
                 ID_SHOW_OVERLAY => overlay::toggle_hidden(),
                 ID_EDIT_MODE => overlay::toggle_edit_mode(),
                 ID_BROADCAST_TOGGLE => {
-                    broadcast::toggle();
-                    overlay::refresh_broadcast_label();
-                    overlay::show_toast(if broadcast::is_active() {
-                        "Key broadcasting enabled"
-                    } else {
-                        "Key broadcasting disabled"
-                    });
+                    control::toggle_broadcast_on_ui(true);
                 }
                 ID_LAUNCH_EQ => launch_eq(None, None),
                 ID_LOGIN_ALL => {

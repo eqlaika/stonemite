@@ -302,6 +302,38 @@ fn state_unguarded() -> &'static mut Option<OverlayState> {
     unsafe { &mut *OVERLAY.0.get() }
 }
 
+fn publish_control_state(s: &OverlayState) {
+    let sources = s
+        .eq_windows
+        .iter()
+        .map(|window| trushar::control::SourceClient {
+            private_key: u64::from(window.pid),
+            character: window.character.clone(),
+            server: window.server.clone(),
+            class_code: window.class.clone(),
+            window_number: window.number,
+            active: s.active_pid == Some(window.pid),
+            // The existing swap model supports the active client and at most
+            // MAX_PIPS clients in pip_order. Extra discovered windows remain
+            // visible in state but are explicitly not advertised as activatable.
+            activatable: s.active_pid == Some(window.pid) || s.pip_order.contains(&window.pid),
+        })
+        .collect();
+    crate::control::publish(
+        sources,
+        trushar::control::BroadcastState {
+            available: crate::broadcast::is_available(),
+            enabled: crate::broadcast::is_active(),
+        },
+    );
+}
+
+/// Publish the current owner-thread state. Never call from the server thread.
+pub fn publish_control_snapshot() {
+    let Some(s) = state().as_ref() else { return };
+    publish_control_state(s);
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -854,6 +886,7 @@ unsafe fn poll_inner_guarded() {
         }
         apply_alt_tab_hiding(s);
         update_visibility(s);
+        publish_control_state(s);
         return;
     }
 
@@ -949,6 +982,7 @@ unsafe fn poll_inner_guarded() {
     apply_alt_tab_hiding(s);
     rebuild_thumbnails(s);
     update_visibility(s);
+    publish_control_state(s);
 }
 
 /// Check trusik shared memory for each EQ window that doesn't have a character yet.
@@ -1441,9 +1475,13 @@ unsafe extern "system" fn foreground_event_proc(
                 rebuild_thumbnails(s);
             }
         }
+        // Keep broadcast suppression synchronized with WinEvent foreground
+        // changes immediately instead of waiting for the next process poll.
+        crate::broadcast::set_active_pid(fg_pid);
     }
 
     update_visibility(s);
+    publish_control_state(s);
     IN_OVERLAY.set(false);
 }
 
@@ -1454,26 +1492,68 @@ unsafe extern "system" fn foreground_event_proc(
 /// Swap to the window with the given stable number (1-based).
 /// Called from hotkey handlers.
 pub unsafe fn swap_to_number(number: usize) {
-    let Some(s) = state().as_ref() else { return };
-    // If the window with this number is already active, do nothing.
-    if let Some(active_pid) = s.active_pid {
-        if s.eq_windows.iter().any(|w| w.pid == active_pid && w.number == number) {
-            return;
-        }
+    let target_pid = state()
+        .as_ref()
+        .and_then(|s| s.eq_windows.iter().find(|w| w.number == number).map(|w| w.pid));
+    if let Some(target_pid) = target_pid {
+        let _ = activate_pid(target_pid);
     }
-    // Find the pip_index for the window with this number.
-    let target_pid = s.eq_windows.iter().find(|w| w.number == number).map(|w| w.pid);
-    let Some(target) = target_pid else { return };
-    let Some(pip_index) = s.pip_order.iter().position(|&p| p == target) else { return };
-    let _ = s;
-    swap_to(pip_index);
 }
 
-unsafe fn swap_to(pip_index: usize) {
-    let Some(s) = state().as_mut() else { return };
+/// Authoritative semantic activation operation used by local UI and trushar.
+pub unsafe fn activate_pid(
+    target_pid: u32,
+) -> Result<trushar::control::CommandOutcome, trushar::control::ControlError> {
+    let Some(s) = state().as_ref() else {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::InternalError,
+            "overlay is unavailable",
+        ));
+    };
+    let Some(target_window) = s.eq_windows.iter().find(|window| window.pid == target_pid) else {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::TargetDisappeared,
+            "the target is no longer loaded",
+        ));
+    };
+    if s.active_pid == Some(target_pid) {
+        return Ok(trushar::control::CommandOutcome::Activated {
+            status: trushar::control::ActivationStatus::AlreadyActive,
+            foreground_confirmed: GetForegroundWindow() == target_window.hwnd,
+        });
+    }
+    let Some(pip_index) = s.pip_order.iter().position(|pid| *pid == target_pid) else {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::ActivationFailed,
+            "the loaded client is outside the supported activation set",
+        ));
+    };
+    let _ = s;
+    swap_to(pip_index)
+}
 
-    if pip_index >= s.pip_order.len() { return; }
-    let Some(old_active_pid) = s.active_pid else { return };
+unsafe fn swap_to(
+    pip_index: usize,
+) -> Result<trushar::control::CommandOutcome, trushar::control::ControlError> {
+    let Some(s) = state().as_mut() else {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::InternalError,
+            "overlay is unavailable",
+        ));
+    };
+
+    if pip_index >= s.pip_order.len() {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::TargetDisappeared,
+            "the target disappeared before activation",
+        ));
+    }
+    let Some(old_active_pid) = s.active_pid else {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::ActivationFailed,
+            "there is no active EQ client to exchange",
+        ));
+    };
     let new_active_pid = s.pip_order[pip_index];
 
     s.pip_order[pip_index] = old_active_pid;
@@ -1516,9 +1596,22 @@ unsafe fn swap_to(pip_index: usize) {
             None => format!("Swapped to #{}", w.number),
         }
     } else {
-        return;
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::TargetDisappeared,
+            "the target disappeared during activation",
+        ));
     };
     show_toast_inner(s, &toast_label);
+    let foreground_confirmed = s
+        .eq_windows
+        .iter()
+        .find(|window| window.pid == new_active_pid)
+        .is_some_and(|window| GetForegroundWindow() == window.hwnd);
+    publish_control_state(s);
+    Ok(trushar::control::CommandOutcome::Activated {
+        status: trushar::control::ActivationStatus::Activated,
+        foreground_confirmed,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1673,9 +1766,10 @@ unsafe fn handle_menu_command(cmd_id: u32) {
     let Some(s) = state().as_mut() else { return };
 
     if cmd_id == IDM_BROADCAST_TOGGLE {
-        crate::broadcast::toggle();
+        let _ = crate::broadcast::toggle();
         update_active_label(s);
         update_visibility(s);
+        publish_control_state(s);
     } else if cmd_id == IDM_HIDE_OVERLAY {
         s.hidden_by_user = true;
         update_visibility(s);
@@ -1716,6 +1810,7 @@ unsafe fn handle_char_assign(s: &mut OverlayState, cmd_id: u32) {
     }
 
     rebuild_thumbnails(s);
+    publish_control_state(s);
 }
 
 unsafe fn handle_number_assign(s: &mut OverlayState, new_number: usize) {
@@ -1741,6 +1836,7 @@ unsafe fn handle_number_assign(s: &mut OverlayState, new_number: usize) {
     }
 
     rebuild_thumbnails(s);
+    publish_control_state(s);
 }
 
 unsafe fn handle_edge_assign(s: &mut OverlayState, cmd_id: u32) {
@@ -2888,13 +2984,14 @@ unsafe extern "system" fn pip_wnd_proc(
                             s.pip_order.swap(drag.from_index, to_index);
                             rebuild_thumbnails(s);
                             update_visibility(s);
+                            publish_control_state(s);
                         }
                     }
                 } else {
                     // Simple click → activate window.
                     let idx = drag.from_index;
                     let _ = s; // release borrow before swap_to re-borrows state
-                    swap_to(idx);
+                    let _ = swap_to(idx);
                 }
             }
 
