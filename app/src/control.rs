@@ -75,6 +75,8 @@ struct UiState {
     hub: Arc<StateHub>,
     tray_hwnd: HWND,
     active_input: Option<ActiveInput>,
+    pairing: Option<trushar::server::PairingHandle>,
+    pairing_auth_token: Option<String>,
 }
 
 struct UiCell(UnsafeCell<Option<UiState>>);
@@ -207,18 +209,25 @@ pub fn start(hwnd: HWND, config: &crate::config::TrusharConfig) -> Option<Server
         hub: hub.clone(),
         tray_hwnd: hwnd,
         active_input: None,
+        pairing: None,
+        pairing_auth_token: None,
     });
     crate::overlay::publish_control_snapshot();
 
     if !config.enabled {
         return None;
     }
-    let bind = match config.bind.parse() {
+    let bind: std::net::SocketAddr = match config.bind.parse() {
         Ok(bind) => bind,
         Err(error) => {
             report_start_failure(&format!("invalid bind address: {error}"));
             return None;
         }
+    };
+    let pairing_auth_token = if bind.ip().is_loopback() {
+        None
+    } else {
+        config.auth_token.clone()
     };
     let server_config = ServerConfig {
         bind,
@@ -230,12 +239,40 @@ pub fn start(hwnd: HWND, config: &crate::config::TrusharConfig) -> Option<Server
         hub,
     });
     match ServerHandle::start(server_config, controller) {
-        Ok(server) => Some(server),
+        Ok(server) => {
+            if let Some(state) = ui().as_mut() {
+                state.pairing = Some(server.pairing_handle());
+                state.pairing_auth_token = pairing_auth_token;
+            }
+            Some(server)
+        }
         Err(error) => {
             report_start_failure(&error.to_string());
             None
         }
     }
+}
+
+pub fn begin_pairing(code: u32) -> bool {
+    let Some(state) = ui().as_ref() else {
+        return false;
+    };
+    let (Some(pairing), Some(auth_token)) = (&state.pairing, &state.pairing_auth_token) else {
+        return false;
+    };
+    pairing.begin(code, auth_token.clone())
+}
+
+pub fn cancel_pairing() {
+    if let Some(pairing) = ui().as_ref().and_then(|state| state.pairing.as_ref()) {
+        pairing.cancel();
+    }
+}
+
+pub fn pairing_is_open() -> bool {
+    ui().as_ref()
+        .and_then(|state| state.pairing.as_ref())
+        .is_some_and(trushar::server::PairingHandle::is_open)
 }
 
 fn report_start_failure(detail: &str) {

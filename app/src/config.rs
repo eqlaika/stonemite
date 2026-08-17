@@ -39,7 +39,7 @@ pub struct Account {
 }
 
 /// Generic WebSocket control/state API configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TrusharConfig {
     /// Start the server with the tray application.
     #[serde(default = "default_trushar_enabled")]
@@ -50,6 +50,20 @@ pub struct TrusharConfig {
     /// Shared bearer token. Required for LAN exposure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
+}
+
+impl std::fmt::Debug for TrusharConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TrusharConfig")
+            .field("enabled", &self.enabled)
+            .field("bind", &self.bind)
+            .field(
+                "auth_token",
+                &self.auth_token.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
 }
 
 impl Default for TrusharConfig {
@@ -536,5 +550,17 @@ mod tests {
         assert_eq!(config.eq_dir, DEFAULT_EQ_DIR);
         assert_eq!(config.trushar.bind, "127.0.0.1:19720");
         assert_eq!(config.trushar.auth_token, None);
+    }
+
+    #[test]
+    fn debug_output_redacts_the_integration_credential() {
+        let config = TrusharConfig {
+            enabled: true,
+            bind: "0.0.0.0:19720".into(),
+            auth_token: Some("do-not-print-this".into()),
+        };
+        let debug = format!("{config:?}");
+        assert!(debug.contains("[redacted]"));
+        assert!(!debug.contains("do-not-print-this"));
     }
 }

@@ -1,15 +1,16 @@
 use crate::control::{ControlError, Controller, ErrorCode};
 use crate::protocol::{
-    data_frame_policy, decode_client_message, ClientMessage, DataFramePolicy, ServerMessage,
-    Success, MAX_TEXT_MESSAGE_SIZE,
+    data_frame_policy, decode_client_message, decode_pairing_request, ClientMessage,
+    DataFramePolicy, ServerMessage, Success, MAX_TEXT_MESSAGE_SIZE,
 };
 use futures_util::stream::FuturesUnordered;
 use futures_util::{SinkExt, StreamExt};
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{mpsc as std_mpsc, Arc};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
@@ -23,13 +24,16 @@ use tokio_tungstenite::{accept_hdr_async_with_config, WebSocketStream};
 
 pub const DEFAULT_BIND: &str = "127.0.0.1:19720";
 pub const ENDPOINT_PATH: &str = "/trushar/v1";
+pub const PAIRING_ENDPOINT_PATH: &str = "/trushar/v1/pair";
+pub const PAIRING_CODE_TTL: Duration = Duration::from_secs(5 * 60);
+const MAX_PAIRING_ATTEMPTS: u8 = 5;
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const CONNECTION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_IN_FLIGHT_COMMANDS: usize = 16;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct ServerConfig {
     pub bind: SocketAddr,
     /// Required for non-loopback binds. Never included in protocol messages or diagnostics.
@@ -63,6 +67,100 @@ impl ServerConfig {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct PairingHandle {
+    inner: Arc<Mutex<PairingState>>,
+}
+
+#[derive(Default)]
+struct PairingState {
+    next_session_id: u64,
+    session: Option<PairingSession>,
+}
+
+struct PairingSession {
+    id: u64,
+    code: String,
+    auth_token: String,
+    expires_at: Instant,
+    failed_attempts: u8,
+}
+
+enum PairingAttempt {
+    Paired(String),
+    Failed,
+}
+
+impl PairingHandle {
+    pub fn begin(&self, code: u32, auth_token: String) -> bool {
+        if code > 999_999 || auth_token.trim().is_empty() {
+            return false;
+        }
+        self.begin_until(code, auth_token, Instant::now() + PAIRING_CODE_TTL);
+        true
+    }
+
+    fn begin_until(&self, code: u32, auth_token: String, expires_at: Instant) {
+        let mut state = self.inner.lock().expect("pairing state poisoned");
+        state.next_session_id = state.next_session_id.wrapping_add(1).max(1);
+        let id = state.next_session_id;
+        state.session = Some(PairingSession {
+            id,
+            code: format!("{code:06}"),
+            auth_token,
+            expires_at,
+            failed_attempts: 0,
+        });
+    }
+
+    pub fn cancel(&self) {
+        self.inner.lock().expect("pairing state poisoned").session = None;
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.session_id().is_some()
+    }
+
+    fn session_id(&self) -> Option<u64> {
+        let mut state = self.inner.lock().expect("pairing state poisoned");
+        if state
+            .session
+            .as_ref()
+            .is_some_and(|session| Instant::now() >= session.expires_at)
+        {
+            state.session = None;
+        }
+        state.session.as_ref().map(|session| session.id)
+    }
+
+    fn attempt(&self, session_id: u64, supplied_code: &str) -> PairingAttempt {
+        let mut state = self.inner.lock().expect("pairing state poisoned");
+        let Some(session) = state.session.as_ref() else {
+            return PairingAttempt::Failed;
+        };
+        if Instant::now() >= session.expires_at {
+            state.session = None;
+            return PairingAttempt::Failed;
+        }
+        if session.id != session_id {
+            return PairingAttempt::Failed;
+        }
+        if !constant_time_eq(supplied_code, &session.code) {
+            let exhausted = {
+                let session = state.session.as_mut().expect("pairing session disappeared");
+                session.failed_attempts = session.failed_attempts.saturating_add(1);
+                session.failed_attempts >= MAX_PAIRING_ATTEMPTS
+            };
+            if exhausted {
+                state.session = None;
+            }
+            return PairingAttempt::Failed;
+        }
+        let session = state.session.take().expect("pairing session disappeared");
+        PairingAttempt::Paired(session.auth_token)
+    }
+}
+
 #[derive(Debug)]
 pub enum StartError {
     InvalidConfiguration(String),
@@ -89,6 +187,7 @@ impl std::error::Error for StartError {}
 pub struct ServerHandle {
     local_addr: SocketAddr,
     shutdown: watch::Sender<bool>,
+    pairing: PairingHandle,
     thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -100,15 +199,20 @@ impl ServerHandle {
         config.validate()?;
         let (shutdown, shutdown_rx) = watch::channel(false);
         let (startup_tx, startup_rx) = std_mpsc::sync_channel(1);
+        let pairing = PairingHandle::default();
+        let server_pairing = pairing.clone();
         let thread = thread::Builder::new()
             .name("trushar-server".into())
-            .spawn(move || server_thread(config, controller, shutdown_rx, startup_tx))
+            .spawn(move || {
+                server_thread(config, controller, server_pairing, shutdown_rx, startup_tx)
+            })
             .map_err(|error| StartError::Runtime(error.to_string()))?;
 
         match startup_rx.recv_timeout(START_TIMEOUT) {
             Ok(Ok(local_addr)) => Ok(Self {
                 local_addr,
                 shutdown,
+                pairing,
                 thread: Some(thread),
             }),
             Ok(Err(error)) => {
@@ -125,6 +229,10 @@ impl ServerHandle {
 
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    pub fn pairing_handle(&self) -> PairingHandle {
+        self.pairing.clone()
     }
 
     pub fn shutdown(mut self) {
@@ -148,6 +256,7 @@ impl Drop for ServerHandle {
 fn server_thread(
     config: ServerConfig,
     controller: Arc<dyn Controller>,
+    pairing: PairingHandle,
     shutdown: watch::Receiver<bool>,
     startup: std_mpsc::SyncSender<Result<SocketAddr, StartError>>,
 ) {
@@ -162,12 +271,13 @@ fn server_thread(
             return;
         }
     };
-    runtime.block_on(run_server(config, controller, shutdown, startup));
+    runtime.block_on(run_server(config, controller, pairing, shutdown, startup));
 }
 
 async fn run_server(
     config: ServerConfig,
     controller: Arc<dyn Controller>,
+    pairing: PairingHandle,
     mut shutdown: watch::Receiver<bool>,
     startup: std_mpsc::SyncSender<Result<SocketAddr, StartError>>,
 ) {
@@ -210,9 +320,10 @@ async fn run_server(
                     Ok((stream, peer)) => {
                         let config = config.clone();
                         let controller = controller.clone();
+                        let pairing = pairing.clone();
                         let shutdown = shutdown.clone();
                         connections.spawn(async move {
-                            serve_connection(stream, peer, config, controller, shutdown).await;
+                            serve_connection(stream, peer, config, controller, pairing, shutdown).await;
                         });
                     }
                     Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
@@ -237,11 +348,21 @@ async fn serve_connection(
     _peer: SocketAddr,
     config: ServerConfig,
     controller: Arc<dyn Controller>,
+    pairing: PairingHandle,
     shutdown: watch::Receiver<bool>,
 ) {
     let handshake_config = config.clone();
+    let handshake_pairing = pairing.clone();
+    let pairing_session_id = Arc::new(AtomicU64::new(0));
+    let callback_pairing_session_id = pairing_session_id.clone();
     let callback = move |request: &Request, response: Response| {
-        authorize_upgrade(request, response, &handshake_config)
+        authorize_upgrade(
+            request,
+            response,
+            &handshake_config,
+            &handshake_pairing,
+            &callback_pairing_session_id,
+        )
     };
     let websocket_config = WebSocketConfig::default()
         .read_buffer_size(4 * 1024)
@@ -258,7 +379,12 @@ async fn serve_connection(
         Ok(Ok(websocket)) => websocket,
         _ => return,
     };
-    connection_loop(websocket, controller, shutdown).await;
+    let pairing_session_id = pairing_session_id.load(Ordering::SeqCst);
+    if pairing_session_id != 0 {
+        pairing_loop(websocket, pairing, pairing_session_id, shutdown).await;
+    } else {
+        connection_loop(websocket, controller, shutdown).await;
+    }
 }
 
 #[allow(clippy::result_large_err)] // Signature is fixed by Tungstenite's Callback trait.
@@ -266,7 +392,27 @@ fn authorize_upgrade(
     request: &Request,
     response: Response,
     config: &ServerConfig,
+    pairing: &PairingHandle,
+    pairing_session_id: &AtomicU64,
 ) -> Result<Response, ErrorResponse> {
+    if request.uri().path() == PAIRING_ENDPOINT_PATH {
+        if request.headers().contains_key(header::ORIGIN) {
+            return Err(handshake_error(
+                StatusCode::FORBIDDEN,
+                Some(ErrorCode::Unauthorized),
+                "Browser-originated pairing is not allowed",
+            ));
+        }
+        let Some(session_id) = pairing.session_id() else {
+            return Err(handshake_error(
+                StatusCode::FORBIDDEN,
+                Some(ErrorCode::Unauthorized),
+                "pairing is not currently available",
+            ));
+        };
+        pairing_session_id.store(session_id, Ordering::SeqCst);
+        return Ok(response);
+    }
     if request.uri().path() != ENDPOINT_PATH {
         return Err(handshake_error(
             StatusCode::NOT_FOUND,
@@ -340,6 +486,63 @@ type CommandFuture = futures_util::future::BoxFuture<
     'static,
     (String, Result<crate::control::CommandOutcome, ControlError>),
 >;
+
+async fn pairing_loop(
+    mut websocket: WebSocketStream<TcpStream>,
+    pairing: PairingHandle,
+    pairing_session_id: u64,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let incoming = tokio::select! {
+        changed = shutdown.changed() => {
+            if changed.is_err() || *shutdown.borrow() {
+                graceful_close(&mut websocket, CloseCode::Away, "server shutting down").await;
+            }
+            return;
+        }
+        incoming = tokio::time::timeout(HANDSHAKE_TIMEOUT, websocket.next()) => incoming,
+    };
+    let request = match incoming {
+        Ok(Some(Ok(message))) if message.is_text() => message
+            .to_text()
+            .ok()
+            .and_then(|text| decode_pairing_request(text).ok()),
+        _ => None,
+    };
+    let response = match request {
+        Some(request) => match pairing.attempt(pairing_session_id, request.code()) {
+            PairingAttempt::Paired(auth_token) => ServerMessage::paired(auth_token),
+            PairingAttempt::Failed => ServerMessage::error(
+                None,
+                ControlError::new(
+                    ErrorCode::Unauthorized,
+                    "pairing code is invalid, expired, or no longer available",
+                ),
+            ),
+        },
+        None => ServerMessage::error(
+            None,
+            ControlError::new(ErrorCode::MalformedRequest, "invalid pairing request"),
+        ),
+    };
+    let paired = matches!(response, ServerMessage::Paired { .. });
+    if send_message(&mut websocket, &response).await.is_ok() {
+        graceful_close(
+            &mut websocket,
+            if paired {
+                CloseCode::Normal
+            } else {
+                CloseCode::Policy
+            },
+            if paired {
+                "pairing complete"
+            } else {
+                "pairing failed"
+            },
+        )
+        .await;
+    }
+}
 
 async fn connection_loop(
     mut websocket: WebSocketStream<TcpStream>,
@@ -647,5 +850,61 @@ mod tests {
         assert!(constant_time_eq("abc", "abc"));
         assert!(!constant_time_eq("abc", "abd"));
         assert!(!constant_time_eq("abc", "abcd"));
+    }
+
+    #[test]
+    fn pairing_codes_are_six_digit_single_use_and_attempt_limited() {
+        let pairing = PairingHandle::default();
+        assert!(pairing.begin(4_271, "long-secret".into()));
+        assert!(pairing.is_open());
+        let first_session = pairing.session_id().unwrap();
+        for _ in 0..4 {
+            assert!(matches!(
+                pairing.attempt(first_session, "999999"),
+                PairingAttempt::Failed
+            ));
+        }
+        assert!(matches!(
+            pairing.attempt(first_session, "004271"),
+            PairingAttempt::Paired(ref token) if token == "long-secret"
+        ));
+        assert!(!pairing.is_open());
+        assert!(matches!(
+            pairing.attempt(first_session, "004271"),
+            PairingAttempt::Failed
+        ));
+
+        assert!(pairing.begin(111_111, "old-secret".into()));
+        let replaced_session = pairing.session_id().unwrap();
+        assert!(pairing.begin(123_456, "replacement-secret".into()));
+        let second_session = pairing.session_id().unwrap();
+        assert_ne!(replaced_session, second_session);
+        assert!(matches!(
+            pairing.attempt(replaced_session, "123456"),
+            PairingAttempt::Failed
+        ));
+        assert!(pairing.is_open());
+        for _ in 0..MAX_PAIRING_ATTEMPTS {
+            assert!(matches!(
+                pairing.attempt(second_session, "000000"),
+                PairingAttempt::Failed
+            ));
+        }
+        assert!(!pairing.is_open());
+    }
+
+    #[test]
+    fn expired_pairing_codes_close_the_gate() {
+        let pairing = PairingHandle::default();
+        pairing.begin_until(
+            123_456,
+            "secret".into(),
+            Instant::now() - Duration::from_secs(1),
+        );
+        assert!(!pairing.is_open());
+        assert!(matches!(
+            pairing.attempt(1, "123456"),
+            PairingAttempt::Failed
+        ));
     }
 }

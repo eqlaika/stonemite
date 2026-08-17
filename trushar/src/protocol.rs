@@ -109,6 +109,37 @@ impl ClientMessage {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PairingRequest {
+    Pair { version: u16, code: String },
+}
+
+impl PairingRequest {
+    fn validate(&self) -> Result<(), ControlError> {
+        let Self::Pair { version, code } = self;
+        if *version != PROTOCOL_VERSION {
+            return Err(ControlError::new(
+                crate::control::ErrorCode::UnsupportedProtocolVersion,
+                format!("protocol version {version} is unsupported; expected {PROTOCOL_VERSION}"),
+            ));
+        }
+        if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(ControlError::new(
+                crate::control::ErrorCode::InvalidArgument,
+                "pairing code must contain exactly six digits",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn code(&self) -> &str {
+        match self {
+            Self::Pair { code, .. } => code,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WireKeyStroke {
     pub keys: Vec<String>,
@@ -222,6 +253,10 @@ pub enum ServerMessage {
         request_id: Option<String>,
         error: WireError,
     },
+    Paired {
+        version: u16,
+        auth_token: String,
+    },
 }
 
 impl ServerMessage {
@@ -246,6 +281,13 @@ impl ServerMessage {
             version: PROTOCOL_VERSION,
             request_id,
             error: error.into(),
+        }
+    }
+
+    pub fn paired(auth_token: String) -> Self {
+        Self::Paired {
+            version: PROTOCOL_VERSION,
+            auth_token,
         }
     }
 }
@@ -417,6 +459,23 @@ pub struct DecodeError {
     pub error: ControlError,
 }
 
+pub fn decode_pairing_request(text: &str) -> Result<PairingRequest, ControlError> {
+    if text.len() > MAX_TEXT_MESSAGE_SIZE {
+        return Err(ControlError::new(
+            crate::control::ErrorCode::MalformedRequest,
+            "text message exceeds the 16384-byte limit",
+        ));
+    }
+    let request: PairingRequest = serde_json::from_str(text).map_err(|_| {
+        ControlError::new(
+            crate::control::ErrorCode::MalformedRequest,
+            "pairing request has an unknown type or invalid fields",
+        )
+    })?;
+    request.validate()?;
+    Ok(request)
+}
+
 pub fn decode_client_message(text: &str) -> Result<ClientMessage, DecodeError> {
     if text.len() > MAX_TEXT_MESSAGE_SIZE {
         return Err(DecodeError {
@@ -479,6 +538,25 @@ mod tests {
     {
         let json = serde_json::to_string(value).unwrap();
         assert_eq!(*value, serde_json::from_str(&json).unwrap());
+    }
+
+    #[test]
+    fn pairing_requests_validate_six_digit_codes() {
+        let request = PairingRequest::Pair {
+            version: 1,
+            code: "004271".into(),
+        };
+        round_trip(&request);
+        assert_eq!(
+            decode_pairing_request(r#"{"type":"pair","version":1,"code":"004271"}"#).unwrap(),
+            request
+        );
+        assert_eq!(
+            decode_pairing_request(r#"{"type":"pair","version":1,"code":"4271"}"#)
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidArgument
+        );
     }
 
     #[test]
@@ -589,6 +667,7 @@ mod tests {
                 Some("four".into()),
                 ControlError::new(ErrorCode::ClientNotFound, "not found"),
             ),
+            ServerMessage::paired("secret-token".into()),
         ];
         for message in messages {
             round_trip(&message);

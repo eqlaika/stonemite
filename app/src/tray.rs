@@ -311,6 +311,20 @@ unsafe extern "system" fn wnd_proc(
             request_restart();
             LRESULT(0)
         }
+        x if x == settings_dialog::WM_BEGIN_PAIRING => {
+            LRESULT(if control::begin_pairing(wparam.0 as u32) {
+                1
+            } else {
+                0
+            })
+        }
+        x if x == settings_dialog::WM_CANCEL_PAIRING => {
+            control::cancel_pairing();
+            LRESULT(0)
+        }
+        x if x == settings_dialog::WM_PAIRING_STATUS => {
+            LRESULT(if control::pairing_is_open() { 1 } else { 0 })
+        }
         WM_DESTROY => {
             unregister_hotkeys(hwnd);
             let _ = KillTimer(hwnd, TIMER_POLL_EQ);

@@ -3,7 +3,7 @@
 ## v0.5.0
 
 - Added the opt-in trushar WebSocket API for Stream Deck plugins and other integrations, with live client state, exact-client activation, broadcast control, and bounded targeted text/key input
-- Added authenticated LAN support for trusted networks; localhost remains the safe default
+- Added authenticated LAN support for trusted networks with five-minute, single-use six-digit device pairing; localhost remains the safe default
 - Added **Local integrations** to Settings and the installer, disabled by default, with an offer to restart immediately after changing it
 - Report targeted input readiness separately for each EQ client after its compatible trusik proxy acknowledges the shared-memory channel
 - Refresh character and server identity when the same EQ process changes characters or servers

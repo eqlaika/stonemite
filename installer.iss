@@ -28,7 +28,7 @@ Name: "{userstartup}\Stonemite"; Filename: "{app}\stonemite.exe"; Tasks: autosta
 
 [Tasks]
 Name: "autostart"; Description: "Start Stonemite when Windows starts"; Flags: unchecked
-Name: "integrations"; Description: "Enable local integrations (for Stream Deck plugins)"; Flags: unchecked
+Name: "integrations"; Description: "Enable integrations for apps on this PC"; Flags: unchecked
 Name: "notelemetry"; Description: "Disable anonymous usage telemetry"; Flags: unchecked
 
 [Run]

@@ -1,9 +1,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use windows::core::w;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, PostMessageW, SetForegroundWindow, WM_USER,
+    FindWindowW, PostMessageW, SendMessageTimeoutW, SetForegroundWindow, SMTO_ABORTIFHUNG, WM_USER,
 };
 
 use eframe::egui;
@@ -15,6 +16,12 @@ use crate::crypt;
 pub const WM_SETTINGS_CHANGED: u32 = WM_USER + 100;
 /// Custom message asking the tray application to shut down and relaunch.
 pub const WM_RESTART_REQUESTED: u32 = WM_USER + 101;
+/// Synchronous request to open a five-minute pairing window for a six-digit code.
+pub const WM_BEGIN_PAIRING: u32 = WM_USER + 102;
+/// Request to close any active pairing window.
+pub const WM_CANCEL_PAIRING: u32 = WM_USER + 103;
+/// Synchronous query for whether the current pairing window is still open.
+pub const WM_PAIRING_STATUS: u32 = WM_USER + 104;
 
 const PIP_EDGE_OPTIONS: &[(&str, PipEdge)] = &[
     ("Right", PipEdge::Right),
@@ -221,6 +228,14 @@ struct SettingsApp {
     update_check_interval_days: u32,
     trushar_enabled: bool,
     initial_trushar_enabled: bool,
+    trushar_lan_enabled: bool,
+    trushar_bind: String,
+    initial_trushar_bind: String,
+    trushar_auth_token: Option<String>,
+    initial_trushar_auth_token: Option<String>,
+    pairing_code: Option<(u32, Instant)>,
+    next_pairing_status_check: Option<Instant>,
+    pairing_error: Option<String>,
     server_index: usize,
     accounts: Vec<AccountRow>,
     last_position: Option<[f32; 2]>,
@@ -239,6 +254,19 @@ impl SettingsApp {
             .iter()
             .position(|(_, v)| *v == cfg.broadcast_filter_mode)
             .unwrap_or(0);
+
+        let trushar_lan_enabled = trushar_lan_enabled(&cfg.trushar.bind);
+        let trushar_auth_token = if trushar_lan_enabled
+            && cfg
+                .trushar
+                .auth_token
+                .as_ref()
+                .is_none_or(|token| token.trim().is_empty())
+        {
+            Some(generate_auth_token())
+        } else {
+            cfg.trushar.auth_token.clone()
+        };
 
         let mut swap_hotkeys = [
             "Ctrl+F1".to_string(),
@@ -278,6 +306,14 @@ impl SettingsApp {
             update_check_interval_days: cfg.update_check_interval_days,
             trushar_enabled: cfg.trushar.enabled,
             initial_trushar_enabled: cfg.trushar.enabled,
+            trushar_lan_enabled,
+            trushar_bind: cfg.trushar.bind.clone(),
+            initial_trushar_bind: cfg.trushar.bind.clone(),
+            trushar_auth_token,
+            initial_trushar_auth_token: cfg.trushar.auth_token.clone(),
+            pairing_code: None,
+            next_pairing_status_check: None,
+            pairing_error: None,
             server_index: {
                 let ini_server = cfg.read_server_from_ini().unwrap_or_default();
                 let server = if ini_server.is_empty() {
@@ -306,9 +342,21 @@ impl SettingsApp {
     }
 }
 
+impl Drop for SettingsApp {
+    fn drop(&mut self) {
+        if self.pairing_code.is_some() {
+            cancel_pairing();
+        }
+    }
+}
+
 impl eframe::App for SettingsApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         configure_style(ctx);
+        self.expire_pairing_code();
+        if self.pairing_code.is_some() {
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
 
         if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
             self.last_position = Some([rect.min.x, rect.min.y]);
@@ -337,13 +385,14 @@ impl eframe::App for SettingsApp {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if ui.button("  Save  ").clicked() {
-                        let integrations_changed =
-                            self.trushar_enabled != self.initial_trushar_enabled;
+                        let integrations_changed = self.integrations_changed();
                         let saved = self.save_config();
-                        if saved && integrations_changed && offer_restart() {
-                            request_tray_restart();
+                        if saved {
+                            if integrations_changed && offer_restart() {
+                                request_tray_restart();
+                            }
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
             });
@@ -361,90 +410,148 @@ impl eframe::App for SettingsApp {
 
 impl SettingsApp {
     fn general_tab(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.add_space(4.0);
 
-        section(ui, "EverQuest directory", |ui| {
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.eq_dir)
-                        .desired_width(ui.available_width() - 88.0),
-                );
-                if ui.button("Browse...").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .set_directory(&self.eq_dir)
-                        .pick_folder()
+            section(ui, "EverQuest directory", |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.eq_dir)
+                            .desired_width(ui.available_width() - 88.0),
+                    );
+                    if ui.button("Browse...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_directory(&self.eq_dir)
+                            .pick_folder()
+                        {
+                            self.eq_dir = path.display().to_string();
+                        }
+                    }
+                });
+            });
+
+            section(ui, "EQ windows", |ui| {
+                ui.checkbox(&mut self.hide_from_alt_tab, "Hide from Alt-Tab");
+            });
+
+            section(ui, "Integrations", |ui| {
+                ui.checkbox(&mut self.trushar_enabled, "Enable integrations");
+                ui.label("Allows trusted apps such as Stream Deck plugins to control Stonemite.");
+
+                ui.add_enabled_ui(self.trushar_enabled, |ui| {
+                    ui.add_space(2.0);
+                    ui.label("Access:");
+                    let previous = self.trushar_lan_enabled;
+                    ui.radio_value(&mut self.trushar_lan_enabled, false, "This PC only");
+                    ui.radio_value(
+                        &mut self.trushar_lan_enabled,
+                        true,
+                        "Devices on my local network",
+                    );
+                    if self.trushar_lan_enabled != previous {
+                        self.apply_lan_access();
+                    }
+                });
+
+                if self.trushar_enabled && self.trushar_lan_enabled {
+                    ui.add_space(2.0);
+                    ui.label("Only pair devices you trust on a private network.");
+                    ui.label("On first restart, allow Private networks if Windows asks.");
+                    let pairing_config_saved = !self.integrations_changed();
+                    if ui
+                        .add_enabled(pairing_config_saved, egui::Button::new("Pair a device"))
+                        .clicked()
                     {
-                        self.eq_dir = path.display().to_string();
+                        self.start_pairing();
+                    }
+                    if !pairing_config_saved {
+                        ui.label("Save and restart before pairing a device.");
+                    }
+                    if let Some((code, expires_at)) = self.pairing_code {
+                        let remaining = expires_at.saturating_duration_since(Instant::now());
+                        ui.group(|ui| {
+                            ui.label(format!(
+                                "In Ikkinz, connect to {} and enter:",
+                                integration_address(&self.trushar_bind)
+                            ));
+                            ui.label(
+                                egui::RichText::new(format_pairing_code(code))
+                                    .monospace()
+                                    .size(24.0)
+                                    .strong(),
+                            );
+                            ui.label(format!(
+                                "Expires in {}:{:02}",
+                                remaining.as_secs() / 60,
+                                remaining.as_secs() % 60
+                            ));
+                        });
+                    }
+                    if let Some(error) = &self.pairing_error {
+                        ui.colored_label(egui::Color32::from_rgb(180, 35, 35), error);
                     }
                 }
+                ui.label("Changes to integration access require a restart.");
             });
-        });
 
-        section(ui, "EQ windows", |ui| {
-            ui.checkbox(&mut self.hide_from_alt_tab, "Hide from Alt-Tab");
-        });
-
-        section(ui, "Integrations", |ui| {
-            ui.checkbox(&mut self.trushar_enabled, "Enable local integrations");
-            ui.label(
-                "Allows trusted apps such as Stream Deck plugins to control Stonemite. Requires restart.",
-            );
-        });
-
-        section(ui, "Toast notifications", |ui| {
-            ui.checkbox(&mut self.toast_enabled, "Enabled");
-            ui.horizontal(|ui| {
-                ui.label("Height:");
-                ui.scope(|ui| {
-                    ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(220);
-                    ui.add(egui::Slider::new(&mut self.toast_height, 24..=128).suffix(" px"));
+            section(ui, "Toast notifications", |ui| {
+                ui.checkbox(&mut self.toast_enabled, "Enabled");
+                ui.horizontal(|ui| {
+                    ui.label("Height:");
+                    ui.scope(|ui| {
+                        ui.style_mut().visuals.widgets.inactive.bg_fill =
+                            egui::Color32::from_gray(220);
+                        ui.add(egui::Slider::new(&mut self.toast_height, 24..=128).suffix(" px"));
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Duration:");
+                    ui.scope(|ui| {
+                        ui.style_mut().visuals.widgets.inactive.bg_fill =
+                            egui::Color32::from_gray(220);
+                        ui.add(
+                            egui::Slider::new(&mut self.toast_duration_tenths, 5..=100)
+                                .custom_formatter(|v, _| format!("{:.1} s", v / 10.0))
+                                .custom_parser(|s| {
+                                    s.trim()
+                                        .trim_end_matches('s')
+                                        .trim()
+                                        .parse::<f64>()
+                                        .ok()
+                                        .map(|v| v * 10.0)
+                                }),
+                        );
+                    });
                 });
             });
-            ui.horizontal(|ui| {
-                ui.label("Duration:");
-                ui.scope(|ui| {
-                    ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(220);
-                    ui.add(
-                        egui::Slider::new(&mut self.toast_duration_tenths, 5..=100)
-                            .custom_formatter(|v, _| format!("{:.1} s", v / 10.0))
-                            .custom_parser(|s| {
-                                s.trim()
-                                    .trim_end_matches('s')
-                                    .trim()
-                                    .parse::<f64>()
-                                    .ok()
-                                    .map(|v| v * 10.0)
-                            }),
-                    );
-                });
-            });
-        });
 
-        section(ui, "Updates", |ui| {
-            ui.checkbox(&mut self.auto_update_check, "Check automatically on launch");
-            ui.horizontal(|ui| {
-                ui.label("Check every:");
-                ui.scope(|ui| {
-                    ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(220);
-                    ui.add(
-                        egui::Slider::new(&mut self.update_check_interval_days, 1..=30)
-                            .custom_formatter(|v, _| {
-                                let d = v as u32;
-                                if d == 1 {
-                                    "1 day".to_string()
-                                } else {
-                                    format!("{d} days")
-                                }
-                            })
-                            .custom_parser(|s| {
-                                s.trim()
-                                    .trim_end_matches("days")
-                                    .trim_end_matches("day")
-                                    .trim()
-                                    .parse::<f64>()
-                                    .ok()
-                            }),
-                    );
+            section(ui, "Updates", |ui| {
+                ui.checkbox(&mut self.auto_update_check, "Check automatically on launch");
+                ui.horizontal(|ui| {
+                    ui.label("Check every:");
+                    ui.scope(|ui| {
+                        ui.style_mut().visuals.widgets.inactive.bg_fill =
+                            egui::Color32::from_gray(220);
+                        ui.add(
+                            egui::Slider::new(&mut self.update_check_interval_days, 1..=30)
+                                .custom_formatter(|v, _| {
+                                    let d = v as u32;
+                                    if d == 1 {
+                                        "1 day".to_string()
+                                    } else {
+                                        format!("{d} days")
+                                    }
+                                })
+                                .custom_parser(|s| {
+                                    s.trim()
+                                        .trim_end_matches("days")
+                                        .trim_end_matches("day")
+                                        .trim()
+                                        .parse::<f64>()
+                                        .ok()
+                                }),
+                        );
+                    });
                 });
             });
         });
@@ -716,6 +823,73 @@ impl SettingsApp {
         });
     }
 
+    fn integrations_changed(&self) -> bool {
+        self.trushar_enabled != self.initial_trushar_enabled
+            || self.trushar_bind != self.initial_trushar_bind
+            || self.trushar_auth_token != self.initial_trushar_auth_token
+    }
+
+    fn apply_lan_access(&mut self) {
+        cancel_pairing();
+        self.pairing_code = None;
+        self.next_pairing_status_check = None;
+        self.pairing_error = None;
+        let port = integration_port(&self.trushar_bind);
+        if self.trushar_lan_enabled {
+            self.trushar_bind = format!("0.0.0.0:{port}");
+            if self
+                .trushar_auth_token
+                .as_ref()
+                .is_none_or(|token| token.trim().is_empty())
+            {
+                self.trushar_auth_token = Some(generate_auth_token());
+            }
+        } else {
+            self.trushar_bind = format!("127.0.0.1:{port}");
+            self.trushar_auth_token = None;
+        }
+    }
+
+    fn start_pairing(&mut self) {
+        let code = generate_pairing_code();
+        if request_pairing(code) {
+            let now = Instant::now();
+            self.pairing_code = Some((code, now + trushar::server::PAIRING_CODE_TTL));
+            self.next_pairing_status_check = Some(now + Duration::from_secs(1));
+            self.pairing_error = None;
+        } else {
+            self.pairing_code = None;
+            self.next_pairing_status_check = None;
+            self.pairing_error =
+                Some("Save and restart Stonemite with local-network access before pairing.".into());
+        }
+    }
+
+    fn expire_pairing_code(&mut self) {
+        let now = Instant::now();
+        if self
+            .pairing_code
+            .is_some_and(|(_, expires_at)| now >= expires_at)
+        {
+            cancel_pairing();
+            self.pairing_code = None;
+            self.next_pairing_status_check = None;
+            return;
+        }
+        if self
+            .next_pairing_status_check
+            .is_some_and(|next_check| now >= next_check)
+        {
+            if pairing_is_open() {
+                self.next_pairing_status_check = Some(now + Duration::from_secs(1));
+            } else {
+                cancel_pairing();
+                self.pairing_code = None;
+                self.next_pairing_status_check = None;
+            }
+        }
+    }
+
     fn save_config(&self) -> bool {
         let existing = Config::load();
         let filter_keys: Vec<String> = self
@@ -726,6 +900,8 @@ impl SettingsApp {
             .collect();
         let mut trushar = existing.trushar;
         trushar.enabled = self.trushar_enabled;
+        trushar.bind = self.trushar_bind.clone();
+        trushar.auth_token = self.trushar_auth_token.clone();
         let cfg = Config {
             eq_dir: self.eq_dir.clone(),
             hide_hotkey: self.hide_hotkey.clone(),
@@ -768,6 +944,12 @@ impl SettingsApp {
         cfg.write_server_to_ini();
         if let Err(error) = cfg.save() {
             eprintln!("Failed to save config: {error}");
+            let _ = rfd::MessageDialog::new()
+                .set_title("Could not save settings")
+                .set_description(format!("Stonemite could not save its settings:\n\n{error}"))
+                .set_level(rfd::MessageLevel::Error)
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
             return false;
         }
 
@@ -1023,11 +1205,82 @@ fn centered_position(width: f32, height: f32) -> egui::Pos2 {
     }
 }
 
+fn trushar_lan_enabled(bind: &str) -> bool {
+    bind.parse::<std::net::SocketAddr>()
+        .is_ok_and(|address| !address.ip().is_loopback())
+}
+
+fn integration_port(bind: &str) -> u16 {
+    bind.parse::<std::net::SocketAddr>()
+        .map_or(19_720, |address| address.port())
+}
+
+fn generate_auth_token() -> String {
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+fn generate_pairing_code() -> u32 {
+    let bytes = uuid::Uuid::new_v4().into_bytes();
+    u32::from_le_bytes(bytes[..4].try_into().expect("UUID has four bytes")) % 1_000_000
+}
+
+fn format_pairing_code(code: u32) -> String {
+    format!("{:03} {:03}", code / 1_000, code % 1_000)
+}
+
+fn integration_address(bind: &str) -> String {
+    let hostname = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "this-pc".into());
+    let hostname = hostname.to_ascii_lowercase();
+    let hostname = if hostname.ends_with(".local") {
+        hostname
+    } else {
+        format!("{hostname}.local")
+    };
+    format!("{hostname}:{}", integration_port(bind))
+}
+
+fn send_tray_request(message: u32, wparam: WPARAM) -> Option<usize> {
+    unsafe {
+        let tray = FindWindowW(w!("StonemiteTrayClass"), w!("Stonemite")).ok()?;
+        let mut result = 0usize;
+        let sent = SendMessageTimeoutW(
+            tray,
+            message,
+            wparam,
+            LPARAM(0),
+            SMTO_ABORTIFHUNG,
+            1_000,
+            Some(&mut result),
+        );
+        (sent.0 != 0).then_some(result)
+    }
+}
+
+fn request_pairing(code: u32) -> bool {
+    send_tray_request(WM_BEGIN_PAIRING, WPARAM(code as usize)) == Some(1)
+}
+
+fn pairing_is_open() -> bool {
+    send_tray_request(WM_PAIRING_STATUS, WPARAM(0)) == Some(1)
+}
+
+fn cancel_pairing() {
+    unsafe {
+        if let Ok(tray) = FindWindowW(w!("StonemiteTrayClass"), w!("Stonemite")) {
+            let _ = PostMessageW(tray, WM_CANCEL_PAIRING, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
 fn offer_restart() -> bool {
     rfd::MessageDialog::new()
         .set_title("Restart Stonemite?")
         .set_description(
-            "Local integrations changes take effect after restarting Stonemite. Restart now?",
+            "Integration access changes take effect after restarting Stonemite. Restart now?",
         )
         .set_level(rfd::MessageLevel::Info)
         .set_buttons(rfd::MessageButtons::YesNo)
@@ -1053,5 +1306,20 @@ fn request_tray_restart() {
 
     if let Ok(executable) = std::env::current_exe() {
         let _ = std::process::Command::new(executable).spawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn integration_access_preserves_ports_and_formats_pairing_codes() {
+        assert!(!trushar_lan_enabled("127.0.0.1:19720"));
+        assert!(trushar_lan_enabled("0.0.0.0:19720"));
+        assert!(trushar_lan_enabled("192.168.1.20:12345"));
+        assert_eq!(integration_port("192.168.1.20:12345"), 12_345);
+        assert_eq!(format_pairing_code(4_271), "004 271");
+        assert_eq!(format_pairing_code(999_999), "999 999");
     }
 }

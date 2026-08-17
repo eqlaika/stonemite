@@ -50,17 +50,20 @@ pip_edge = "right"
 # telemetry = true
 
 # Generic trushar control/state and targeted-input WebSocket API. The server is
-# disabled by default. Enable local integrations in Settings > General, or set
-# enabled = true here. Enabling the server opts into all operations; targeted
-# input also requires trusik = true. These settings require restart.
+# disabled by default. Enable integrations in Settings > General, or set
+# enabled = true here. Settings can configure this-PC or paired local-network
+# access. Enabling the server opts into all operations; targeted input also
+# requires trusik = true. These settings require restart.
 # The default bind is IPv4 loopback only; no token is needed for a trusted
 # native localhost client that sends no Origin header.
 # [trushar]
 # enabled = true
 # bind = "127.0.0.1:19720"
 
-# LAN access is explicit. A wildcard or non-loopback bind requires a nonempty
-# shared token or startup fails closed. Use only on a trusted network: ws://
-# authenticates the client but does not encrypt the token or EQ state.
+# LAN access is explicit. Settings generates the long credential and pairs
+# clients through a temporary six-digit code. For advanced manual setup, a
+# wildcard or non-loopback bind requires a nonempty shared token or startup
+# fails closed. Use only on a trusted network: ws:// authenticates the client
+# but does not encrypt the credential or EQ state.
 # bind = "0.0.0.0:19720"
 # auth_token = "replace-with-a-long-random-token"

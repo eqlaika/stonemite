@@ -9,9 +9,9 @@ use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use tokio_tungstenite::{client_async, WebSocketStream};
 use trushar::control::{BroadcastState, InMemoryController, RecordedInput};
 use trushar::protocol::{
-    ClientMessage, ServerMessage, Success, Target, WireInputKind, WireKeyStroke,
+    ClientMessage, PairingRequest, ServerMessage, Success, Target, WireInputKind, WireKeyStroke,
 };
-use trushar::server::{ServerConfig, ServerHandle, ENDPOINT_PATH};
+use trushar::server::{ServerConfig, ServerHandle, ENDPOINT_PATH, PAIRING_ENDPOINT_PATH};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
 type Client = WebSocketStream<TcpStream>;
@@ -21,8 +21,17 @@ async fn connect(
     token: Option<&str>,
     origin: Option<&str>,
 ) -> Result<Client, WebSocketError> {
+    connect_path(address, ENDPOINT_PATH, token, origin).await
+}
+
+async fn connect_path(
+    address: SocketAddr,
+    path: &str,
+    token: Option<&str>,
+    origin: Option<&str>,
+) -> Result<Client, WebSocketError> {
     let stream = TcpStream::connect(address).await.unwrap();
-    let mut request = format!("ws://{address}{ENDPOINT_PATH}")
+    let mut request = format!("ws://{address}{path}")
         .into_client_request()
         .unwrap();
     if let Some(token) = token {
@@ -340,6 +349,86 @@ async fn authentication_origin_and_secret_nonreflection_are_enforced() {
         WebSocketError::Http(ref response) if response.status() == StatusCode::FORBIDDEN
     ));
     unauthenticated.shutdown();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn six_digit_pairing_exchanges_a_single_use_code_for_the_long_token() {
+    let token = "long-random-token-stored-by-ikkinz";
+    let server = ServerHandle::start(
+        ServerConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            auth_token: Some(token.into()),
+        },
+        Arc::new(InMemoryController::new(BroadcastState::UNAVAILABLE)),
+    )
+    .unwrap();
+    let pairing_handle = server.pairing_handle();
+    assert!(pairing_handle.begin(111_111, token.into()));
+    let address = server.local_addr();
+    let mut stale_pairing = connect_path(address, PAIRING_ENDPOINT_PATH, None, None)
+        .await
+        .unwrap();
+    assert!(pairing_handle.begin(482_731, token.into()));
+    stale_pairing
+        .send(Message::text(
+            serde_json::to_string(&PairingRequest::Pair {
+                version: 1,
+                code: "482731".into(),
+            })
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut stale_pairing).await,
+        ServerMessage::Error { .. }
+    ));
+    assert!(pairing_handle.is_open());
+    drop(stale_pairing);
+
+    let browser = connect_path(
+        address,
+        PAIRING_ENDPOINT_PATH,
+        None,
+        Some("https://attacker.invalid"),
+    )
+    .await;
+    assert!(matches!(
+        browser,
+        Err(WebSocketError::Http(ref response)) if response.status() == StatusCode::FORBIDDEN
+    ));
+
+    let mut pairing = connect_path(address, PAIRING_ENDPOINT_PATH, None, None)
+        .await
+        .unwrap();
+    pairing
+        .send(Message::text(
+            serde_json::to_string(&PairingRequest::Pair {
+                version: 1,
+                code: "482731".into(),
+            })
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut pairing).await,
+        ServerMessage::Paired { auth_token, .. } if auth_token == token
+    ));
+    drop(pairing);
+
+    let second = connect_path(address, PAIRING_ENDPOINT_PATH, None, None).await;
+    assert!(matches!(
+        second,
+        Err(WebSocketError::Http(ref response)) if response.status() == StatusCode::FORBIDDEN
+    ));
+    let mut authenticated = connect(address, Some(token), None).await.unwrap();
+    assert!(matches!(
+        receive(&mut authenticated).await,
+        ServerMessage::State { .. }
+    ));
+    drop(authenticated);
+    server.shutdown();
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -10,7 +10,7 @@ Protocol version 1 uses JSON text messages over RFC 6455 WebSocket at:
 ws://127.0.0.1:19720/trushar/v1
 ```
 
-The server is disabled by default. Enable **Local integrations** in Settings > General and restart Stonemite, or configure it manually:
+The server is disabled by default. In Settings > General, enable **Integrations**, choose **This PC only**, and restart Stonemite, or configure it manually:
 
 ```toml
 [trushar]
@@ -20,7 +20,7 @@ bind = "127.0.0.1:19720"
 
 `bind` must be a numeric IPv4 or bracketed IPv6 socket address. Port `0` is supported for tests. IPv4 `127.0.0.0/8` and IPv6 `::1` are recognized as loopback. Wildcard and non-loopback addresses fail closed unless `auth_token` is configured. Settings take effect after restart and are preserved when the graphical settings dialog saves other settings.
 
-To opt into LAN access:
+For guided LAN access, choose **Devices on my local network**, save, restart, and allow Stonemite on Private networks if Windows Defender Firewall asks. Stonemite generates the long credential automatically. The equivalent advanced configuration is:
 
 ```toml
 [trushar]
@@ -29,7 +29,7 @@ bind = "0.0.0.0:19720"
 auth_token = "replace-with-a-long-random-token"
 ```
 
-Authenticated clients send the token in the HTTP upgrade request, never in the URL:
+Authenticated clients send the long credential in the HTTP upgrade request, never in the URL:
 
 ```http
 Authorization: Bearer replace-with-a-long-random-token
@@ -38,6 +38,28 @@ Authorization: Bearer replace-with-a-long-random-token
 When a token is configured, every connection must supply it. A version 1 token authorizes every API operation; token scopes are reserved for a future protocol version if distinct trust levels become necessary. A request containing an `Origin` header is rejected unless it is authenticated. Native localhost clients normally omit `Origin`; browsers send it, so an arbitrary web page cannot use unauthenticated loopback access. Tokens are never included in state, protocol errors, or server diagnostics.
 
 Authentication failures reject the HTTP upgrade with status 401 (or 403 for the unauthenticated `Origin` policy) and an `application/json` body using the stable `unauthorized` error code. No WebSocket connection is established.
+
+### Six-digit device pairing
+
+While LAN mode is running, **Pair a device** in Settings opens this endpoint for five minutes:
+
+```text
+ws://<stonemite-host>:19720/trushar/v1/pair
+```
+
+The native client connects without an `Authorization` or `Origin` header and sends the six digits without spaces:
+
+```json
+{"type":"pair","version":1,"code":"482731"}
+```
+
+A correct code receives the long credential exactly once:
+
+```json
+{"type":"paired","version":1,"auth_token":"long-random-credential"}
+```
+
+The client stores that credential securely, closes the pairing connection, and reconnects to `/trushar/v1` using `Authorization: Bearer ...`. A code is generated from cryptographic randomness, expires after five minutes, is invalidated by one successful exchange, and is disabled after five failed attempts. Starting a new code invalidates the previous one; closing Settings cancels a code still in progress. Pairing requests with an `Origin` header are rejected. Neither the six-digit code nor long credential is logged or included in normal state and error messages.
 
 The server currently provides `ws://`, not TLS. A token authenticates a LAN client but offers no confidentiality against traffic observation or modification. Because an authenticated client can deliver input to EQ, use LAN binding only on a trusted network or provide an encrypted tunnel. Certificate management and native `wss://` are intentionally outside this small subsystem.
 
@@ -187,7 +209,7 @@ $env:TRUSHAR_TOKEN = Read-Host "trushar token"
 cargo run -p trushar --example client -- ws://192.168.1.50:19720/trushar/v1
 ```
 
-Windows Defender Firewall normally needs an inbound exception for LAN mode. From an elevated PowerShell prompt, scope it to the installed executable, Private networks, the configured TCP port, and the local subnet:
+Windows Defender Firewall normally asks whether to allow Stonemite when LAN mode first starts. Allow **Private networks** only. If no prompt appears and a LAN client cannot connect, create a narrowly scoped rule from an elevated PowerShell prompt:
 
 ```powershell
 New-NetFirewallRule -DisplayName "Stonemite trushar (Private LAN)" `
@@ -202,7 +224,7 @@ Remove it when disabling LAN access or before changing the program/port scope:
 Remove-NetFirewallRule -DisplayName "Stonemite trushar (Private LAN)"
 ```
 
-The current per-user installer does not silently elevate or open the firewall. A future settings/installer flow should make this an explicit opt-in UAC action, apply the same narrow scope, and remove its rule on opt-out/uninstall. Loopback-only use never needs this rule.
+The per-user installer does not silently elevate or open the firewall. The normal Windows firewall prompt owns any rule it creates. The commands above are only the manual fallback; remove a manual rule when disabling LAN access or uninstalling. Loopback-only use never needs a rule.
 
 Do not commit a real token or place it in a query string.
 
