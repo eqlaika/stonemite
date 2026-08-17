@@ -4,7 +4,7 @@
 //! and report the character name + server via shared memory.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 use windows::Win32::Foundation::{BOOL, HANDLE};
 use windows::Win32::System::Memory::{
@@ -12,9 +12,6 @@ use windows::Win32::System::Memory::{
 };
 
 use crate::log;
-
-/// Whether we've already detected the character (skip redundant shm writes + logging).
-static CHARACTER_DETECTED: AtomicBool = AtomicBool::new(false);
 
 // CreateFileW signature.
 type CreateFileWFn = unsafe extern "system" fn(
@@ -38,16 +35,12 @@ unsafe extern "system" fn hooked_create_file_w(
     dw_flags_and_attributes: u32,
     h_template_file: *mut c_void,
 ) -> HANDLE {
-    // Fast path: skip entirely once character is already detected.
-    if !CHARACTER_DETECTED.load(Ordering::Relaxed)
-        && !lp_file_name.is_null()
-        && wide_contains_eqlog(lp_file_name)
-    {
+    if !lp_file_name.is_null() && wide_contains_eqlog(lp_file_name) {
         if let Some(path) = read_wide_string(lp_file_name) {
             if let Some((character, server)) = parse_eqlog_path(&path) {
-                log::write(&format!("CreateFileW: detected {character} on {server}"));
-                crate::shm::write_character(&character, &server);
-                CHARACTER_DETECTED.store(true, Ordering::Relaxed);
+                if crate::shm::write_character(&character, &server) {
+                    log::write(&format!("CreateFileW: detected {character} on {server}"));
+                }
             }
         }
     }

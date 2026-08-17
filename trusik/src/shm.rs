@@ -1,4 +1,5 @@
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::System::Memory::{
     CreateFileMappingW, MapViewOfFile, FILE_MAP_WRITE, PAGE_READWRITE,
@@ -18,18 +19,21 @@ pub struct CharacterInfo {
     pub character: [u8; 64],
     /// Server name, UTF-8, null-terminated.
     pub server: [u8; 64],
+    /// Seqlock generation. Odd while identity fields are being replaced.
+    pub generation: AtomicU32,
 }
 
 const MAGIC: u32 = 0x53544D43; // "STMC"
 const SHM_SIZE: usize = std::mem::size_of::<CharacterInfo>();
 
-/// Wrapper to make a raw pointer Send + Sync (safe because we only
-/// write from DllMain's thread and the shm region outlives the process).
+/// Wrapper to make a raw pointer Send + Sync. Writes are serialized and the
+/// mapped region outlives every hook call in the process.
 struct SendPtr(*mut CharacterInfo);
 unsafe impl Send for SendPtr {}
 unsafe impl Sync for SendPtr {}
 
 static SHM_PTR: OnceLock<SendPtr> = OnceLock::new();
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Create the shared memory region on DLL_PROCESS_ATTACH.
 /// Writes magic + PID immediately; character/server filled later.
@@ -67,6 +71,7 @@ pub fn create() {
         std::ptr::write_bytes(ptr, 0, 1);
         std::ptr::write_volatile(&mut (*ptr).magic, MAGIC);
         std::ptr::write_volatile(&mut (*ptr).pid, pid);
+        std::ptr::write(&mut (*ptr).generation, AtomicU32::new(0));
 
         let _ = SHM_PTR.set(SendPtr(ptr));
         log::write(&format!(
@@ -75,31 +80,88 @@ pub fn create() {
     }
 }
 
-/// Write the detected character name and server into shared memory.
-pub fn write_character(character: &str, server: &str) {
+/// Write a newly detected character identity into shared memory.
+/// Returns false when the published, truncated identity is already current.
+pub fn write_character(character: &str, server: &str) -> bool {
     let Some(SendPtr(ptr)) = SHM_PTR.get() else {
-        return;
+        return false;
     };
     let ptr = *ptr;
     if ptr.is_null() {
-        return;
+        return false;
     }
 
-    unsafe {
-        // Write character name (null-terminated, truncated to fit).
-        let char_bytes = character.as_bytes();
-        let char_len = char_bytes.len().min(63);
-        let dst = &mut (*ptr).character;
-        dst.fill(0);
-        dst[..char_len].copy_from_slice(&char_bytes[..char_len]);
+    let _guard = WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let character = truncated_bytes(character);
+    let server = truncated_bytes(server);
 
-        // Write server name (null-terminated, truncated to fit).
-        let server_bytes = server.as_bytes();
-        let server_len = server_bytes.len().min(63);
-        let dst = &mut (*ptr).server;
-        dst.fill(0);
-        dst[..server_len].copy_from_slice(&server_bytes[..server_len]);
+    unsafe { publish_identity(ptr, character, server) }
+}
+
+unsafe fn publish_identity(ptr: *mut CharacterInfo, character: &[u8], server: &[u8]) -> bool {
+    if field_matches(&(*ptr).character, character) && field_matches(&(*ptr).server, server) {
+        return false;
     }
 
-    log::write(&format!("shm: character={character} server={server}"));
+    // An odd generation tells readers not to accept the two identity
+    // fields while either one may contain a partially replaced value.
+    (*ptr).generation.fetch_add(1, Ordering::SeqCst);
+
+    let dst = &mut (*ptr).character;
+    dst.fill(0);
+    dst[..character.len()].copy_from_slice(character);
+
+    let dst = &mut (*ptr).server;
+    dst.fill(0);
+    dst[..server.len()].copy_from_slice(server);
+
+    (*ptr).generation.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
+fn truncated_bytes(value: &str) -> &[u8] {
+    let bytes = value.as_bytes();
+    &bytes[..bytes.len().min(63)]
+}
+
+fn field_matches(field: &[u8; 64], value: &[u8]) -> bool {
+    field[..value.len()] == *value && field[value.len()] == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identity_comparison_uses_the_published_truncated_value() {
+        let mut field = [0u8; 64];
+        let long = "a".repeat(80);
+        let truncated = truncated_bytes(&long);
+        field[..truncated.len()].copy_from_slice(truncated);
+
+        assert!(field_matches(&field, truncated));
+        assert!(!field_matches(&field, b"different"));
+    }
+
+    #[test]
+    fn publishing_changes_identity_once_and_advances_an_even_generation() {
+        let mut info = CharacterInfo {
+            magic: MAGIC,
+            pid: 42,
+            character: [0; 64],
+            server: [0; 64],
+            generation: AtomicU32::new(0),
+        };
+
+        unsafe {
+            assert!(publish_identity(&mut info, b"Orlov", b"teek"));
+            assert_eq!(info.generation.load(Ordering::SeqCst), 2);
+            assert!(!publish_identity(&mut info, b"Orlov", b"teek"));
+            assert_eq!(info.generation.load(Ordering::SeqCst), 2);
+            assert!(publish_identity(&mut info, b"Laika", b"xegony"));
+            assert_eq!(info.generation.load(Ordering::SeqCst), 4);
+            assert!(field_matches(&info.character, b"Laika"));
+            assert!(field_matches(&info.server, b"xegony"));
+        }
+    }
 }

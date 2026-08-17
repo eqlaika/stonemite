@@ -259,6 +259,10 @@ struct OverlayState {
     original_ex_styles: HashMap<isize, isize>,
     /// Whether trusik character detection is enabled.
     trusik_enabled: bool,
+    /// Last automatic identity observed for each process. Kept separate from
+    /// the visible assignment so an unchanged SHM value cannot undo a manual
+    /// assignment, while a genuinely new login can replace stale identity.
+    trusik_identities: HashMap<u32, (String, String)>,
     /// Log file tailer for /who class detection.
     log_watcher: log_watcher::LogTailer,
     /// Persistent character knowledge (class, pets).
@@ -939,6 +943,7 @@ unsafe fn init_inner() -> HWND {
         hide_from_alt_tab: cfg.hide_from_alt_tab,
         original_ex_styles: HashMap::new(),
         trusik_enabled: cfg.trusik,
+        trusik_identities: HashMap::new(),
         log_watcher: log_watcher::LogTailer::new(),
         character_cache: character_cache::CharacterCache::load(),
     });
@@ -1022,6 +1027,7 @@ unsafe fn poll_inner_guarded() {
             last_closed_label = Some(format!("Window #{} closed", w.number));
         }
         s.eq_windows.retain(|w| w.pid != *pid);
+        s.trusik_identities.remove(pid);
         s.pip_order.retain(|p| *p != *pid);
         if s.active_pid == Some(*pid) {
             s.active_pid = s.pip_order.first().copied();
@@ -1111,25 +1117,45 @@ unsafe fn poll_inner_guarded() {
     publish_control_state(s);
 }
 
-/// Check trusik shared memory for each EQ window that doesn't have a character yet.
+/// Check trusik shared memory for a newly published identity for each process.
 fn trusik_poll_characters(s: &mut OverlayState) {
     let mut changed = false;
     for ew in &mut s.eq_windows {
-        if ew.character.is_none() {
-            if let Some((name, server)) = trusik_shm::read_character(ew.pid) {
-                ew.class = s
-                    .character_cache
-                    .get_class(&server, &name)
-                    .map(String::from);
-                ew.character = Some(name);
-                ew.server = Some(server);
-                changed = true;
-            }
+        if let Some((name, server)) = trusik_shm::read_character(ew.pid) {
+            let class = s
+                .character_cache
+                .get_class(&server, &name)
+                .map(String::from);
+            changed |= reconcile_trusik_identity(&mut s.trusik_identities, ew, name, server, class);
         }
     }
     if changed {
         unsafe { rebuild_thumbnails(s) };
     }
+}
+
+fn reconcile_trusik_identity(
+    observed: &mut HashMap<u32, (String, String)>,
+    window: &mut EqWindow,
+    character: String,
+    server: String,
+    class: Option<String>,
+) -> bool {
+    let unchanged = observed
+        .get(&window.pid)
+        .is_some_and(|(old_character, old_server)| {
+            old_character.eq_ignore_ascii_case(&character)
+                && old_server.eq_ignore_ascii_case(&server)
+        });
+    if unchanged {
+        return false;
+    }
+
+    observed.insert(window.pid, (character.clone(), server.clone()));
+    window.character = Some(character);
+    window.server = Some(server);
+    window.class = class;
+    true
 }
 
 /// Poll log files for /who output and update character classes.
@@ -4020,5 +4046,58 @@ pub fn cleanup() {
             let _ = DestroyWindow(s.toast.hwnd);
         }
         *state_unguarded() = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn window(pid: u32) -> EqWindow {
+        EqWindow {
+            hwnd: HWND::default(),
+            pid,
+            number: 1,
+            character: None,
+            server: None,
+            class: None,
+        }
+    }
+
+    #[test]
+    fn new_automatic_identity_refreshes_but_unchanged_identity_preserves_manual_assignment() {
+        let mut observed = HashMap::new();
+        let mut window = window(42);
+
+        assert!(reconcile_trusik_identity(
+            &mut observed,
+            &mut window,
+            "Orlov".into(),
+            "teek".into(),
+            Some("SHK".into()),
+        ));
+        window.character = Some("Manual".into());
+        window.server = Some("assignment".into());
+        window.class = Some("CLR".into());
+
+        assert!(!reconcile_trusik_identity(
+            &mut observed,
+            &mut window,
+            "orlov".into(),
+            "TEEK".into(),
+            None,
+        ));
+        assert_eq!(window.character.as_deref(), Some("Manual"));
+
+        assert!(reconcile_trusik_identity(
+            &mut observed,
+            &mut window,
+            "Laika".into(),
+            "xegony".into(),
+            Some("SHM".into()),
+        ));
+        assert_eq!(window.character.as_deref(), Some("Laika"));
+        assert_eq!(window.server.as_deref(), Some("xegony"));
+        assert_eq!(window.class.as_deref(), Some("SHM"));
     }
 }

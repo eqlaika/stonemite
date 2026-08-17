@@ -75,7 +75,7 @@ The server sends a complete `state` message immediately after a successful upgra
 
 `window_number` is Stonemite's one-based, user-visible window number. It is not the PiP layout index. `activatable` is false if a discovered EQ window is outside the existing active-plus-five-PiP swap set; state does not claim that such a window can be activated.
 
-`character`, `server`, and `class_code` are omitted when unknown. Character/server identity can appear after initial process discovery. `class_code` is the actual abbreviation Stonemite learned (for example `SHK` or `SHM`), not a fabricated full class name. Log-file assignment candidates are not exposed as loaded clients.
+`character`, `server`, and `class_code` are omitted when unknown. Character/server identity can appear after initial process discovery and can change when trusik observes the same EQ process open a different character log after camping or changing servers. `class_code` is the actual abbreviation Stonemite learned (for example `SHK` or `SHM`), not a fabricated full class name. Log-file assignment candidates are not exposed as loaded clients.
 
 `broadcast.available` is false when trusik/broadcast support was not initialized. In that state `enabled` is false, `set_broadcast` capability is false, and mutation requests return `broadcast_unavailable`.
 

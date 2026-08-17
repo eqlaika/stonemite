@@ -83,6 +83,24 @@ fn mapper_ids_survive_enrichment_but_not_process_lifetimes() {
     assert_eq!(enriched.clients[0].id, id);
     assert_eq!(enriched.clients[0].character.as_deref(), Some("Laika"));
 
+    let changed_identity = mapper.map(
+        &[SourceClient {
+            private_key: 7,
+            character: Some("Orlov".into()),
+            server: Some("Teek".into()),
+            class_code: Some("CLR".into()),
+            window_number: 1,
+            active: true,
+            activatable: true,
+        }],
+        BroadcastState::UNAVAILABLE,
+    );
+    assert_eq!(changed_identity.clients[0].id, id);
+    assert_eq!(
+        changed_identity.clients[0].character.as_deref(),
+        Some("Orlov")
+    );
+
     mapper.map(&[], BroadcastState::UNAVAILABLE);
     let reappeared = mapper.map(
         &[SourceClient {
@@ -112,6 +130,15 @@ fn appearance_disappearance_enrichment_and_local_foreground_changes_publish_revi
     let enriched = states.borrow_and_update().clone();
     assert_eq!(enriched.revision, 2);
     assert_eq!(enriched.clients[0].class_code.as_deref(), Some("SHK"));
+
+    control.enrich_client(&first, Some("Orlov"), Some("Teek"), Some("CLR"));
+    let identity_changed = states.borrow_and_update().clone();
+    assert_eq!(identity_changed.revision, 3);
+    assert_eq!(identity_changed.clients[0].id, first);
+    assert_eq!(
+        identity_changed.clients[0].character.as_deref(),
+        Some("Orlov")
+    );
 
     let second = control.add_client(2, None, None, None, false, true);
     control.set_active_locally(&second);
