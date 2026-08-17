@@ -13,6 +13,8 @@ use crate::crypt;
 
 /// Custom message posted to the tray window after settings are saved.
 pub const WM_SETTINGS_CHANGED: u32 = WM_USER + 100;
+/// Custom message asking the tray application to shut down and relaunch.
+pub const WM_RESTART_REQUESTED: u32 = WM_USER + 101;
 
 const PIP_EDGE_OPTIONS: &[(&str, PipEdge)] = &[
     ("Right", PipEdge::Right),
@@ -218,6 +220,7 @@ struct SettingsApp {
     auto_update_check: bool,
     update_check_interval_days: u32,
     trushar_enabled: bool,
+    initial_trushar_enabled: bool,
     server_index: usize,
     accounts: Vec<AccountRow>,
     last_position: Option<[f32; 2]>,
@@ -274,6 +277,7 @@ impl SettingsApp {
             auto_update_check: cfg.auto_update_check,
             update_check_interval_days: cfg.update_check_interval_days,
             trushar_enabled: cfg.trushar.enabled,
+            initial_trushar_enabled: cfg.trushar.enabled,
             server_index: {
                 let ini_server = cfg.read_server_from_ini().unwrap_or_default();
                 let server = if ini_server.is_empty() {
@@ -333,7 +337,12 @@ impl eframe::App for SettingsApp {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if ui.button("  Save  ").clicked() {
-                        self.save_config();
+                        let integrations_changed =
+                            self.trushar_enabled != self.initial_trushar_enabled;
+                        let saved = self.save_config();
+                        if saved && integrations_changed && offer_restart() {
+                            request_tray_restart();
+                        }
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
@@ -707,7 +716,7 @@ impl SettingsApp {
         });
     }
 
-    fn save_config(&self) {
+    fn save_config(&self) -> bool {
         let existing = Config::load();
         let filter_keys: Vec<String> = self
             .filter_keys_text
@@ -757,11 +766,13 @@ impl SettingsApp {
             trushar,
         };
         cfg.write_server_to_ini();
-        if let Err(e) = cfg.save() {
-            eprintln!("Failed to save config: {e}");
+        if let Err(error) = cfg.save() {
+            eprintln!("Failed to save config: {error}");
+            return false;
         }
 
         notify_tray();
+        true
     }
 
     fn save_position(&self) {
@@ -1012,10 +1023,35 @@ fn centered_position(width: f32, height: f32) -> egui::Pos2 {
     }
 }
 
+fn offer_restart() -> bool {
+    rfd::MessageDialog::new()
+        .set_title("Restart Stonemite?")
+        .set_description(
+            "Local integrations changes take effect after restarting Stonemite. Restart now?",
+        )
+        .set_level(rfd::MessageLevel::Info)
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        == rfd::MessageDialogResult::Yes
+}
+
 fn notify_tray() {
     unsafe {
         if let Ok(tray) = FindWindowW(w!("StonemiteTrayClass"), w!("Stonemite")) {
             let _ = PostMessageW(tray, WM_SETTINGS_CHANGED, WPARAM(0), LPARAM(0));
         }
+    }
+}
+
+fn request_tray_restart() {
+    unsafe {
+        if let Ok(tray) = FindWindowW(w!("StonemiteTrayClass"), w!("Stonemite")) {
+            let _ = PostMessageW(tray, WM_RESTART_REQUESTED, WPARAM(0), LPARAM(0));
+            return;
+        }
+    }
+
+    if let Ok(executable) = std::env::current_exe() {
+        let _ = std::process::Command::new(executable).spawn();
     }
 }

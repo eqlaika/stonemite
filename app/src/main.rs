@@ -134,7 +134,7 @@ fn main() {
     }
 
     // Ensure only one instance is running via a named mutex.
-    let _mutex = unsafe {
+    let mutex = unsafe {
         extern "system" {
             fn CreateMutexW(
                 attrs: *const std::ffi::c_void,
@@ -204,11 +204,21 @@ fn main() {
     }
 
     // Run tray icon and message loop (blocks until exit).
-    tray::run();
+    let restart_requested = tray::run();
 
     // Cleanup broadcast engine before exit.
     broadcast::cleanup();
 
     // Cleanup overlay before exit.
     overlay::cleanup();
+
+    if restart_requested {
+        unsafe {
+            extern "system" {
+                fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+            }
+            let _ = CloseHandle(mutex);
+        }
+        updater::restart();
+    }
 }

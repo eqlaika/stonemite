@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -106,9 +108,17 @@ const POLL_INTERVAL_MS: u32 = 2000;
 /// Custom message posted when a background update check finds a new version.
 const WM_UPDATE_AVAILABLE: u32 = WM_USER + 2;
 
-/// Run the tray icon and message loop. Blocks until exit.
-pub fn run() {
+static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Run the tray icon and message loop. Returns whether the application should relaunch.
+pub fn run() -> bool {
     unsafe { run_inner() }
+    RESTART_REQUESTED.swap(false, Ordering::SeqCst)
+}
+
+fn request_restart() {
+    RESTART_REQUESTED.store(true, Ordering::SeqCst);
+    unsafe { PostQuitMessage(0) };
 }
 
 unsafe fn run_inner() {
@@ -297,6 +307,10 @@ unsafe extern "system" fn wnd_proc(
             overlay::force_rebuild();
             LRESULT(0)
         }
+        x if x == settings_dialog::WM_RESTART_REQUESTED => {
+            request_restart();
+            LRESULT(0)
+        }
         WM_DESTROY => {
             unregister_hotkeys(hwnd);
             let _ = KillTimer(hwnd, TIMER_POLL_EQ);
@@ -452,7 +466,7 @@ unsafe fn do_update_check(hwnd: HWND) {
                 w!("Stonemite Update"),
                 MB_OK | MB_ICONINFORMATION,
             );
-            updater::restart();
+            request_restart();
         }
         updater::UpdateResult::Error(e) => {
             let msg = format!("Update check failed:\n{}\0", e);
