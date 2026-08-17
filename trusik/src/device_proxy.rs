@@ -433,8 +433,7 @@ unsafe extern "system" fn dev_get_device_data(
     let to_inject = num_changes.min(available);
     let timestamp = windows::Win32::System::SystemInformation::GetTickCount();
 
-    for j in 0..to_inject {
-        let (scan, val) = changes[j];
+    for (j, (scan, val)) in changes.iter().copied().take(to_inject).enumerate() {
         let offset = (real_count as usize + j) * cbobjectdata as usize;
         let entry = buf_start.add(offset) as *mut DiDeviceObjectData;
         (*entry).dw_ofs = scan as u32;
@@ -486,7 +485,7 @@ unsafe extern "system" fn dev_set_event_notification(
                     let active = crate::key_shm::read_keys(&mut keys);
                     let any_keys = active && keys.iter().any(|&k| k != 0);
 
-                    if any_keys || (prev_any_keys && !any_keys) {
+                    if any_keys || prev_any_keys {
                         let h = KB_EVENT_HANDLE.load(Ordering::Acquire);
                         if h != 0 {
                             let _ = SetEvent(HANDLE(h as *mut c_void));

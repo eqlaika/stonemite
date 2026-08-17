@@ -8,7 +8,7 @@ pub mod shm;
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
-use windows::core::{GUID, HRESULT, PCSTR};
+use windows::core::{GUID, HRESULT};
 use windows::Win32::Foundation::{BOOL, HINSTANCE, TRUE};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
@@ -46,7 +46,7 @@ extern "system" fn DllMain(_hinst: HINSTANCE, reason: u32, _reserved: *mut c_voi
         log::write("DllMain: loaded real dinput8.dll");
 
         // Resolve the real DirectInput8Create.
-        let proc = unsafe { GetProcAddress(real_dll, PCSTR(b"DirectInput8Create\0".as_ptr())) };
+        let proc = unsafe { GetProcAddress(real_dll, windows::core::s!("DirectInput8Create")) };
         let proc = match proc {
             Some(p) => p,
             None => {
@@ -82,6 +82,11 @@ extern "system" fn DllMain(_hinst: HINSTANCE, reason: u32, _reserved: *mut c_voi
 ///
 /// We call the real function, then wrap the returned IDirectInput8 interface
 /// in our proxy so we can intercept CreateDevice calls.
+///
+/// # Safety
+///
+/// The caller must provide the valid pointers and interface identifier required
+/// by the Windows `DirectInput8Create` ABI.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn DirectInput8Create(
     hinst: HINSTANCE,

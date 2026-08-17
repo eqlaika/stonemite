@@ -126,7 +126,7 @@ unsafe fn run_inner() {
     let class_name = w!("StonemiteTrayClass");
     let wc = WNDCLASSW {
         lpfnWndProc: Some(wnd_proc),
-        lpszClassName: class_name.into(),
+        lpszClassName: class_name,
         style: CS_HREDRAW | CS_VREDRAW,
         ..Default::default()
     };

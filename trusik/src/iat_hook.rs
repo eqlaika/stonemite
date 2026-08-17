@@ -77,11 +77,15 @@ unsafe fn wide_contains_eqlog(ptr: *const u16) -> bool {
         // Case-insensitive check for first char 'e'/'E'
         if (ch == 0x65 || ch == 0x45) && i < 4096 {
             let mut matched = true;
-            for j in 0..6 {
+            for (j, expected) in NEEDLE.iter().enumerate() {
                 let c = *ptr.add(i + j);
                 // Compare lowercase
-                let lower = if c >= 0x41 && c <= 0x5A { c + 0x20 } else { c };
-                if lower != NEEDLE[j] {
+                let lower = if (0x41..=0x5A).contains(&c) {
+                    c + 0x20
+                } else {
+                    c
+                };
+                if lower != *expected {
                     matched = false;
                     break;
                 }
@@ -378,7 +382,7 @@ static REAL_GETFOCUS: OnceLock<GetFocusFn> = OnceLock::new();
 static REAL_GETACTIVEWINDOW: OnceLock<GetActiveWindowFn> = OnceLock::new();
 
 unsafe extern "system" fn hooked_get_async_key_state(vk: i32) -> i16 {
-    if vk >= 0 && vk <= 255 {
+    if (0..=255).contains(&vk) {
         let scan = windows::Win32::UI::Input::KeyboardAndMouse::MapVirtualKeyW(
             vk as u32,
             windows::Win32::UI::Input::KeyboardAndMouse::MAPVK_VK_TO_VSC,
@@ -395,7 +399,7 @@ unsafe extern "system" fn hooked_get_async_key_state(vk: i32) -> i16 {
 }
 
 unsafe extern "system" fn hooked_get_key_state(vk: i32) -> i16 {
-    if vk >= 0 && vk <= 255 {
+    if (0..=255).contains(&vk) {
         let scan = windows::Win32::UI::Input::KeyboardAndMouse::MapVirtualKeyW(
             vk as u32,
             windows::Win32::UI::Input::KeyboardAndMouse::MAPVK_VK_TO_VSC,
@@ -620,10 +624,7 @@ unsafe fn install_inline_gfw_hook() {
             return;
         }
     };
-    let nt_gfw = GetProcAddress(
-        win32u,
-        windows::core::PCSTR(b"NtUserGetForegroundWindow\0".as_ptr()),
-    );
+    let nt_gfw = GetProcAddress(win32u, windows::core::s!("NtUserGetForegroundWindow"));
     let nt_gfw = match nt_gfw {
         Some(p) => p,
         None => {
@@ -631,7 +632,7 @@ unsafe fn install_inline_gfw_hook() {
             return;
         }
     };
-    let _ = REAL_NT_GFW.set(std::mem::transmute(nt_gfw));
+    let _ = REAL_NT_GFW.set(nt_gfw);
 
     // Resolve the function we want to patch.
     let user32 = match LoadLibraryW(windows::core::w!("user32.dll")) {
@@ -641,10 +642,7 @@ unsafe fn install_inline_gfw_hook() {
             return;
         }
     };
-    let gfw = GetProcAddress(
-        user32,
-        windows::core::PCSTR(b"GetForegroundWindow\0".as_ptr()),
-    );
+    let gfw = GetProcAddress(user32, windows::core::s!("GetForegroundWindow"));
     let gfw_ptr = match gfw {
         Some(p) => p as *mut u8,
         None => {
@@ -654,7 +652,7 @@ unsafe fn install_inline_gfw_hook() {
     };
 
     // Detour: mov rax, <hook_addr>; jmp rax  (12 bytes)
-    let hook_addr = inline_hooked_gfw as u64;
+    let hook_addr = inline_hooked_gfw as usize as u64;
 
     let mut old_protect = PAGE_PROTECTION_FLAGS(0);
     if VirtualProtect(

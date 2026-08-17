@@ -172,7 +172,7 @@ fn main() {
     };
 
     // Check if this is a first launch (no config file yet).
-    let first_launch = config::Config::path().map_or(false, |p| !p.exists());
+    let first_launch = config::Config::path().is_some_and(|path| !path.exists());
 
     // Load config (creates default if missing).
     let config = config::Config::load();

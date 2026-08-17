@@ -557,10 +557,10 @@ fn strip_resize_hit_test(
 
 fn cursor_for_resize_edge(edge: ResizeEdge) -> *const u16 {
     match edge {
-        ResizeEdge::N | ResizeEdge::S => IDC_SIZENS.0 as *const u16,
-        ResizeEdge::E | ResizeEdge::W => IDC_SIZEWE.0 as *const u16,
-        ResizeEdge::NW | ResizeEdge::SE => IDC_SIZENWSE.0 as *const u16,
-        ResizeEdge::NE | ResizeEdge::SW => IDC_SIZENESW.0 as *const u16,
+        ResizeEdge::N | ResizeEdge::S => IDC_SIZENS.0,
+        ResizeEdge::E | ResizeEdge::W => IDC_SIZEWE.0,
+        ResizeEdge::NW | ResizeEdge::SE => IDC_SIZENWSE.0,
+        ResizeEdge::NE | ResizeEdge::SW => IDC_SIZENESW.0,
     }
 }
 
@@ -661,6 +661,7 @@ fn aspect_width_for_height(cell_h: i32, border: i32, _label_h: i32) -> i32 {
 
 /// Apply snap to a resize operation, enforcing 16:9 thumbnail aspect ratio.
 /// The dragged edge(s) determine whether width or height is the driving dimension.
+#[allow(clippy::too_many_arguments)]
 fn snap_resize(
     edge: ResizeEdge,
     start_rect: RECT,
@@ -761,7 +762,7 @@ unsafe fn init_inner() -> HWND {
     let cursor = LoadCursorW(None, IDC_ARROW).unwrap_or_default();
     let wc = WNDCLASSW {
         lpfnWndProc: Some(pip_wnd_proc),
-        lpszClassName: pip_class.into(),
+        lpszClassName: pip_class,
         hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
         hCursor: cursor,
         style: CS_DBLCLKS,
@@ -773,7 +774,7 @@ unsafe fn init_inner() -> HWND {
     let pip_label_class = w!("StonemitePipLabelClass");
     let pip_label_wc = WNDCLASSW {
         lpfnWndProc: Some(pip_label_wnd_proc),
-        lpszClassName: pip_label_class.into(),
+        lpszClassName: pip_label_class,
         hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
         hCursor: cursor,
         ..Default::default()
@@ -784,7 +785,7 @@ unsafe fn init_inner() -> HWND {
     let label_class = w!("StonemiteLabelClass");
     let label_wc = WNDCLASSW {
         lpfnWndProc: Some(label_wnd_proc),
-        lpszClassName: label_class.into(),
+        lpszClassName: label_class,
         hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
         hCursor: cursor,
         ..Default::default()
@@ -822,7 +823,7 @@ unsafe fn init_inner() -> HWND {
     let bc_class = w!("StonemiteBroadcastClass");
     let bc_wc = WNDCLASSW {
         lpfnWndProc: Some(broadcast_label_wnd_proc),
-        lpszClassName: bc_class.into(),
+        lpszClassName: bc_class,
         hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
         hCursor: cursor,
         ..Default::default()
@@ -851,7 +852,7 @@ unsafe fn init_inner() -> HWND {
     let toast_class = w!("StonemiteToastClass");
     let toast_wc = WNDCLASSW {
         lpfnWndProc: Some(toast_wnd_proc),
-        lpszClassName: toast_class.into(),
+        lpszClassName: toast_class,
         hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
         hCursor: cursor,
         ..Default::default()
@@ -1485,7 +1486,7 @@ unsafe fn update_active_label(s: &mut OverlayState) {
     let active = s
         .active_pid
         .and_then(|pid| s.eq_windows.iter().find(|w| w.pid == pid));
-    s.active_label_text = active.map(|w| format_label(w)).unwrap_or_default();
+    s.active_label_text = active.map(format_label).unwrap_or_default();
     s.active_label_class = active.and_then(|w| w.class.clone());
     s.active_label_color = active
         .map(|w| color_for_number(w.number))
@@ -2141,12 +2142,12 @@ unsafe fn handle_menu_command(cmd_id: u32) {
         s.edit_mode = false;
         rebuild_thumbnails(s);
         update_visibility(s);
-    } else if cmd_id >= IDM_EDGE_BASE && cmd_id < IDM_EDGE_BASE + 4 {
+    } else if (IDM_EDGE_BASE..IDM_EDGE_BASE + 4).contains(&cmd_id) {
         handle_edge_assign(s, cmd_id);
-    } else if cmd_id >= IDM_NUMBER_BASE && cmd_id < IDM_NUMBER_BASE + 100 {
+    } else if (IDM_NUMBER_BASE..IDM_NUMBER_BASE + 100).contains(&cmd_id) {
         let number = (cmd_id - IDM_NUMBER_BASE) as usize;
         handle_number_assign(s, number);
-    } else if cmd_id >= IDM_CHAR_BASE && cmd_id < IDM_CHAR_BASE + 100 {
+    } else if (IDM_CHAR_BASE..IDM_CHAR_BASE + 100).contains(&cmd_id) {
         handle_char_assign(s, cmd_id);
     }
 }
@@ -2281,7 +2282,7 @@ pub fn toggle_edit_mode() {
 
 /// Public query for edit mode state.
 pub fn is_edit_mode() -> bool {
-    state().as_ref().map_or(false, |s| s.edit_mode)
+    state().as_ref().is_some_and(|state| state.edit_mode)
 }
 
 // ---------------------------------------------------------------------------
@@ -2316,7 +2317,7 @@ unsafe fn paint_pip_window(hwnd: HWND, pip_idx: usize) {
     let _ = GetClientRect(hwnd, &mut client_rect);
 
     // Determine drag visual state.
-    let is_reorder_dragging = s.reorder_drag.as_ref().map_or(false, |d| d.dragging);
+    let is_reorder_dragging = s.reorder_drag.as_ref().is_some_and(|drag| drag.dragging);
     let is_drag_source =
         is_reorder_dragging && s.reorder_drag.as_ref().map(|d| d.from_index) == Some(pip_idx);
     let is_drop_target = is_reorder_dragging
@@ -3587,7 +3588,7 @@ unsafe extern "system" fn pip_wnd_proc(
             }
 
             // Cancel non-dragging reorder on leave.
-            if s.reorder_drag.as_ref().map_or(false, |d| !d.dragging) {
+            if s.reorder_drag.as_ref().is_some_and(|drag| !drag.dragging) {
                 s.reorder_drag = None;
                 s.drop_target = None;
             }
@@ -3846,7 +3847,7 @@ unsafe extern "system" fn label_wnd_proc(
         WM_SETCURSOR => {
             let cursor = LoadCursorW(None, IDC_ARROW).unwrap_or_default();
             SetCursor(cursor);
-            return LRESULT(1);
+            LRESULT(1)
         }
         WM_PAINT => {
             let (text, class, color) = state()
@@ -3946,7 +3947,7 @@ pub fn is_eq_active() -> bool {
 
 /// Returns true if the overlay is currently visible (not hidden by user).
 pub fn is_visible() -> bool {
-    state().as_ref().map_or(true, |s| !s.hidden_by_user)
+    state().as_ref().is_none_or(|state| !state.hidden_by_user)
 }
 
 pub fn toggle_hidden() {

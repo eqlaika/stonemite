@@ -475,8 +475,8 @@ fn write_ini_value(path: &Path, section: &str, key: &str, value: &str) {
     if let Some(sec_idx) = section_pos {
         // Find existing key in this section.
         let mut key_idx = None;
-        for i in (sec_idx + 1)..lines.len() {
-            let trimmed = lines[i].trim();
+        for (i, line) in lines.iter().enumerate().skip(sec_idx + 1) {
+            let trimmed = line.trim();
             if trimmed.starts_with('[') {
                 break;
             }

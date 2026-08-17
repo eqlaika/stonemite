@@ -52,7 +52,7 @@ fn load_icon(png_bytes: &[u8]) -> ClassIcon {
                 biHeight: -h, // top-down
                 biPlanes: 1,
                 biBitCount: 32,
-                biCompression: BI_RGB.0 as u32,
+                biCompression: BI_RGB.0,
                 ..Default::default()
             },
             ..Default::default()
