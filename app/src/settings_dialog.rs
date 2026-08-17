@@ -918,8 +918,6 @@ impl SettingsApp {
             auto_update_check: self.auto_update_check,
             update_check_interval_days: self.update_check_interval_days,
             last_update_check: existing.last_update_check,
-            telemetry: existing.telemetry,
-            telemetry_id: existing.telemetry_id,
             accounts: self
                 .accounts
                 .iter()

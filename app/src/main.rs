@@ -12,7 +12,6 @@ mod eq_windows;
 mod log_watcher;
 mod overlay;
 mod settings_dialog;
-mod telemetry;
 mod tray;
 mod trusik_deploy;
 mod trusik_shm;
@@ -186,9 +185,6 @@ fn main() {
     } else {
         let _ = trusik_deploy::remove(&eq_dir);
     }
-
-    // Send anonymous telemetry ping (fire-and-forget background thread).
-    telemetry::send_app_start(&config);
 
     // Initialize overlay (creates the overlay window, hidden until EQ windows are detected).
     overlay::init();

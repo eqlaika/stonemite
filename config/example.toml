@@ -46,9 +46,6 @@ pip_edge = "right"
 # auto_update_check = true
 # update_check_interval_days = 7
 
-# Anonymous usage telemetry (set to false to disable)
-# telemetry = true
-
 # Generic trushar control/state and targeted-input WebSocket API. The server is
 # disabled by default. Enable integrations in Settings > General, or set
 # enabled = true here. Settings can configure this-PC or paired local-network

@@ -29,7 +29,6 @@ Name: "{userstartup}\Stonemite"; Filename: "{app}\stonemite.exe"; Tasks: autosta
 [Tasks]
 Name: "autostart"; Description: "Start Stonemite when Windows starts"; Flags: unchecked
 Name: "integrations"; Description: "Enable integrations for apps on this PC"; Flags: unchecked
-Name: "notelemetry"; Description: "Disable anonymous usage telemetry"; Flags: unchecked
 
 [Run]
 Filename: "{app}\stonemite.exe"; Description: "Launch Stonemite"; Flags: nowait postinstall skipifsilent
@@ -72,75 +71,18 @@ begin
   end;
 end;
 
-procedure InsertLine(var Lines: TArrayOfString; Index: Integer; const Value: String);
-var
-  I, Count: Integer;
-begin
-  Count := GetArrayLength(Lines);
-  SetArrayLength(Lines, Count + 1);
-  for I := Count downto Index + 1 do
-    Lines[I] := Lines[I - 1];
-  Lines[Index] := Value;
-end;
-
-procedure DisableTelemetry(const ConfigPath: String);
-var
-  Lines: TArrayOfString;
-  I, P, TopLevelEnd, TelemetryIndex: Integer;
-  Line, Key: String;
-begin
-  if FileExists(ConfigPath) then
-    LoadStringsFromFile(ConfigPath, Lines)
-  else
-    SetArrayLength(Lines, 0);
-
-  TopLevelEnd := GetArrayLength(Lines);
-  TelemetryIndex := -1;
-  for I := 0 to GetArrayLength(Lines) - 1 do
-  begin
-    Line := Trim(Lines[I]);
-    if (Length(Line) > 1) and (Line[1] = '[') then
-    begin
-      TopLevelEnd := I;
-      Break;
-    end;
-    P := Pos('=', Line);
-    if P > 0 then
-    begin
-      Key := Trim(Copy(Line, 1, P - 1));
-      if CompareText(Key, 'telemetry') = 0 then
-      begin
-        TelemetryIndex := I;
-        Break;
-      end;
-    end;
-  end;
-
-  if TelemetryIndex >= 0 then
-    Lines[TelemetryIndex] := 'telemetry = false'
-  else
-    InsertLine(Lines, TopLevelEnd, 'telemetry = false');
-
-  SaveStringsToFile(ConfigPath, Lines, False);
-end;
-
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ConfigDir: String;
-  ConfigPath: String;
 begin
   if CurStep = ssPostInstall then
   begin
     ConfigDir := ExpandConstant('{userappdata}\Stonemite');
-    ConfigPath := ConfigDir + '\config.toml';
     if not DirExists(ConfigDir) then
       ForceDirectories(ConfigDir);
 
     if WizardIsTaskSelected('integrations') then
       SaveStringToFile(ConfigDir + '\enable-local-integrations', '', False);
-
-    if WizardIsTaskSelected('notelemetry') then
-      DisableTelemetry(ConfigPath);
   end;
 end;
 

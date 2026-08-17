@@ -153,12 +153,6 @@ pub struct Config {
     /// ISO 8601 timestamp of last automatic update check.
     #[serde(default)]
     pub last_update_check: Option<String>,
-    /// Enable anonymous usage telemetry. Default: true.
-    #[serde(default = "default_telemetry")]
-    pub telemetry: bool,
-    /// Anonymous user identifier (auto-generated UUID).
-    #[serde(default)]
-    pub telemetry_id: Option<String>,
     /// EverQuest accounts for auto-login.
     #[serde(default)]
     pub accounts: Vec<Account>,
@@ -202,10 +196,6 @@ fn default_update_interval() -> u32 {
     7
 }
 
-fn default_telemetry() -> bool {
-    true
-}
-
 fn default_auto_order() -> bool {
     true
 }
@@ -239,8 +229,6 @@ impl Default for Config {
             auto_update_check: default_auto_update(),
             update_check_interval_days: default_update_interval(),
             last_update_check: None,
-            telemetry: true,
-            telemetry_id: None,
             accounts: Vec::new(),
             server: String::new(),
             trushar: TrusharConfig::default(),
@@ -260,7 +248,6 @@ impl Config {
     }
 
     /// Load config from disk. Creates default config file if it doesn't exist.
-    /// Auto-generates a telemetry_id if missing and telemetry is enabled.
     pub fn load() -> Self {
         let Some(path) = Self::path() else {
             return Self::default();
@@ -277,10 +264,6 @@ impl Config {
         };
         if enable_local_integrations {
             config.trushar.enabled = true;
-        }
-        // Generate a stable anonymous ID on first run.
-        if config.telemetry && config.telemetry_id.is_none() {
-            config.telemetry_id = Some(uuid::Uuid::new_v4().to_string());
         }
         match config.save() {
             Ok(()) if enable_local_integrations => {
@@ -550,6 +533,16 @@ mod tests {
         assert_eq!(config.eq_dir, DEFAULT_EQ_DIR);
         assert_eq!(config.trushar.bind, "127.0.0.1:19720");
         assert_eq!(config.trushar.auth_token, None);
+    }
+
+    #[test]
+    fn legacy_telemetry_fields_are_discarded_when_resaving() {
+        let config: Config =
+            toml::from_str("telemetry = true\ntelemetry_id = 'legacy-id'\n").unwrap();
+
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        assert!(!serialized.contains("telemetry"));
+        assert!(!serialized.contains("legacy-id"));
     }
 
     #[test]

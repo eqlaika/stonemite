@@ -14,7 +14,7 @@ Stonemite makes multiboxing EQ easy — PiP overlays with click-to-swap, swap ho
 
 Download the latest release from [GitHub Releases](https://github.com/eqlaika/stonemite/releases):
 
-- **Installer** (`stonemite-x.y.z-setup.exe`) — installs to Program Files, creates a Start Menu shortcut, with optional Windows startup and integrations
+- **Installer** (`stonemite-x.y.z-setup.exe`) — installs to Program Files, creates a Start Menu shortcut, with optional Windows startup
 - **Portable** (`stonemite-x86_64-pc-windows-msvc.zip`) — extract and run anywhere
 
 A system tray icon appears with access to all settings. Check for updates from the tray menu.
@@ -73,32 +73,14 @@ Stonemite can launch your EQ accounts and log them in automatically — no patch
 Your passwords are encrypted using [Windows DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/) and stored in your local config file. They are:
 
 - **Encrypted by Windows itself** — Stonemite does not implement its own encryption or manage any keys. Only your Windows user account on your machine can decrypt them.
-- **Never transmitted** — passwords are never sent over the network. Stonemite's telemetry only sends an anonymous ID and app version. You can verify this in the [source code](https://github.com/eqlaika/stonemite).
+- **Never transmitted** — Stonemite never sends your passwords over the network.
 - **Used only to launch EQ** — passwords are decrypted in memory only when launching the game client.
 
-Stonemite is open source. The encryption code is in [`app/src/crypt.rs`](app/src/crypt.rs) and the telemetry code is in [`app/src/telemetry.rs`](app/src/telemetry.rs) — you can audit exactly what the app does with your data.
+Stonemite is open source. The encryption code is in [`app/src/crypt.rs`](app/src/crypt.rs), so you can audit exactly what the app does with your data.
 
 ## Configuration
 
 Config lives at `%APPDATA%\Stonemite\config.toml`. See [config/example.toml](config/example.toml) for options.
-
-## trushar control API
-
-Stonemite includes `trushar`, a generic, persistent WebSocket control/state API for native local or LAN clients. It is independent of any particular controller hardware or UI. When enabled, it listens by default at `ws://127.0.0.1:19720/trushar/v1`, sends a complete current-state snapshot as soon as a client connects, pushes later snapshots whenever known state changes, and supports bounded text/key delivery to one exact loaded client after that client's trusik proxy acknowledges its shared-memory channel.
-
-`trushar` is disabled by default. In Settings > General, enable **Integrations** and choose either **This PC only** or **Devices on my local network**, then restart Stonemite. LAN clients pair with a six-digit, five-minute, single-use code; Stonemite exchanges it for a long credential that the client stores for automatic reconnection. Enabling integrations opts into the complete API, including targeted input when trusik is also enabled. The current server intentionally uses plaintext `ws://`; pairing and the resulting credential authenticate access but do not encrypt traffic, so LAN mode is appropriate only on a trusted network or encrypted tunnel. Browser-originated connections are rejected unless authenticated, including on loopback.
-
-See [docs/trushar-protocol.md](docs/trushar-protocol.md) for configuration, protocol messages, identifier/error semantics, limits, and exact hardware-free validation commands.
-
-## Telemetry
-
-Stonemite sends a single anonymous ping on each launch to help me understand if anyone is using the app. The payload contains only:
-
-- A random anonymous ID (UUID, not tied to your identity)
-- App version
-- Windows version
-
-No personal information, EQ character names, or config details are collected. Telemetry can be disabled by setting `telemetry = false` in `%APPDATA%\Stonemite\config.toml`, or by checking "Disable anonymous usage telemetry" during installation.
 
 ## Disclaimer
 

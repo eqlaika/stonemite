@@ -336,8 +336,7 @@ fn targeted_input_reports_unavailable_invalid_failed_and_disappeared() {
     let control = InMemoryController::new(available(false));
     let client = control.add_client(1, None, None, None, true, true);
     control.set_input_ready(&client, false);
-    let unready =
-        block_on(control.send_text(client.clone(), "/who".into(), false)).unwrap_err();
+    let unready = block_on(control.send_text(client.clone(), "/who".into(), false)).unwrap_err();
     assert_eq!(unready.code, ErrorCode::InputUnavailable);
     let capabilities = control.snapshot().capabilities;
     assert!(!capabilities.send_text && !capabilities.send_keys);
