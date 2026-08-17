@@ -20,7 +20,6 @@ DisableProgramGroupPage=yes
 
 [Files]
 Source: "target\release\stonemite.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "target\release\dinput8.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "config\example.toml"; DestDir: "{app}"; DestName: "example.toml"; Flags: ignoreversion
 
 [Icons]

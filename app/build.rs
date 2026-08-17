@@ -18,17 +18,29 @@ fn main() {
         .expect("OUT_DIR has an unexpected layout");
     let dll_src = profile_dir.join("dinput8.dll");
     let dll_dst = out_dir.join("dinput8.dll");
-    if dll_src.exists() {
-        std::fs::copy(&dll_src, &dll_dst).expect("failed to copy trusik dinput8.dll into OUT_DIR");
-    } else {
-        // Allow building the app alone (rust-analyzer, `cargo check`) without
-        // the trusik DLL present. deploy() treats an empty payload as
-        // "not embedded" and errors clearly at runtime.
-        std::fs::write(&dll_dst, b"").expect("failed to write placeholder dinput8.dll");
-        println!(
-            "cargo:warning=trusik dinput8.dll not found at {}; embedding empty placeholder (build -p trusik first)",
+    let release_build = std::env::var("DEBUG").as_deref() == Ok("false");
+    match std::fs::read(&dll_src) {
+        Ok(dll) if dll.len() >= 2 && dll.starts_with(b"MZ") => {
+            std::fs::write(&dll_dst, dll).expect("failed to copy trusik dinput8.dll into OUT_DIR");
+        }
+        Ok(_) => panic!(
+            "trusik dinput8.dll at {} is empty or not a PE image; build -p trusik first",
             dll_src.display()
-        );
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !release_build => {
+            // Keep rust-analyzer and app-only debug checks usable. Runtime
+            // deployment rejects this placeholder, while optimized/release
+            // builds fail closed below.
+            std::fs::write(&dll_dst, b"").expect("failed to write placeholder dinput8.dll");
+            println!(
+                "cargo:warning=trusik dinput8.dll not found at {}; embedding empty debug placeholder (build -p trusik first)",
+                dll_src.display()
+            );
+        }
+        Err(error) => panic!(
+            "required trusik dinput8.dll is unavailable at {}: {error}; build -p trusik first",
+            dll_src.display()
+        ),
     }
     println!("cargo:rerun-if-changed={}", dll_src.display());
 
