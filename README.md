@@ -14,7 +14,7 @@ Stonemite makes multiboxing EQ easy — PiP overlays with click-to-swap, swap ho
 
 Download the latest release from [GitHub Releases](https://github.com/eqlaika/stonemite/releases):
 
-- **Installer** (`stonemite-x.y.z-setup.exe`) — installs to Program Files, creates Start Menu shortcut, optional Windows startup
+- **Installer** (`stonemite-x.y.z-setup.exe`) — installs to Program Files, creates a Start Menu shortcut, with optional Windows startup and local integrations
 - **Portable** (`stonemite-x86_64-pc-windows-msvc.zip`) — extract and run anywhere
 
 A system tray icon appears with access to all settings. Check for updates from the tray menu.
@@ -84,9 +84,9 @@ Config lives at `%APPDATA%\Stonemite\config.toml`. See [config/example.toml](con
 
 ## trushar control API
 
-Stonemite includes `trushar`, a generic, persistent WebSocket control/state API for native local or LAN clients. It is independent of any particular controller hardware or UI. By default it listens only at `ws://127.0.0.1:19720/trushar/v1`, sends a complete current-state snapshot as soon as a client connects, pushes later snapshots whenever known state changes, and supports bounded text/key delivery to one exact loaded client through trusik shared memory.
+Stonemite includes `trushar`, a generic, persistent WebSocket control/state API for native local or LAN clients. It is independent of any particular controller hardware or UI. When enabled, it listens by default at `ws://127.0.0.1:19720/trushar/v1`, sends a complete current-state snapshot as soon as a client connects, pushes later snapshots whenever known state changes, and supports bounded text/key delivery to one exact loaded client through trusik shared memory.
 
-Enabling `trushar` opts into the complete API, including targeted input. LAN binding is manual and requires a shared bearer token. The current server intentionally uses plaintext `ws://`; a token authenticates access but does not encrypt traffic, so LAN mode is appropriate only on a trusted network or encrypted tunnel. Browser-originated connections are rejected unless authenticated, including on loopback.
+`trushar` is disabled by default. Enable **Local integrations** in Settings > General and restart Stonemite, or configure it manually in `config.toml`. Enabling it opts into the complete API, including targeted input when trusik is also enabled. LAN binding is manual and requires a shared bearer token. The current server intentionally uses plaintext `ws://`; a token authenticates access but does not encrypt traffic, so LAN mode is appropriate only on a trusted network or encrypted tunnel. Browser-originated connections are rejected unless authenticated, including on loopback.
 
 See [docs/trushar-protocol.md](docs/trushar-protocol.md) for configuration, protocol messages, identifier/error semantics, limits, and exact hardware-free validation commands.
 

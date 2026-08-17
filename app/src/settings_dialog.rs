@@ -217,6 +217,7 @@ struct SettingsApp {
     toast_duration_tenths: u32,
     auto_update_check: bool,
     update_check_interval_days: u32,
+    trushar_enabled: bool,
     server_index: usize,
     accounts: Vec<AccountRow>,
     last_position: Option<[f32; 2]>,
@@ -272,6 +273,7 @@ impl SettingsApp {
                 .unwrap_or(20),
             auto_update_check: cfg.auto_update_check,
             update_check_interval_days: cfg.update_check_interval_days,
+            trushar_enabled: cfg.trushar.enabled,
             server_index: {
                 let ini_server = cfg.read_server_from_ini().unwrap_or_default();
                 let server = if ini_server.is_empty() {
@@ -371,6 +373,13 @@ impl SettingsApp {
 
         section(ui, "EQ windows", |ui| {
             ui.checkbox(&mut self.hide_from_alt_tab, "Hide from Alt-Tab");
+        });
+
+        section(ui, "Integrations", |ui| {
+            ui.checkbox(&mut self.trushar_enabled, "Enable local integrations");
+            ui.label(
+                "Allows trusted apps such as Stream Deck plugins to control Stonemite. Requires restart.",
+            );
         });
 
         section(ui, "Toast notifications", |ui| {
@@ -706,6 +715,8 @@ impl SettingsApp {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
+        let mut trushar = existing.trushar;
+        trushar.enabled = self.trushar_enabled;
         let cfg = Config {
             eq_dir: self.eq_dir.clone(),
             hide_hotkey: self.hide_hotkey.clone(),
@@ -743,7 +754,7 @@ impl SettingsApp {
             toast_height: Some(self.toast_height),
             toast_duration: Some(self.toast_duration_tenths as f32 / 10.0),
             server: SERVER_OPTIONS[self.server_index].to_string(),
-            trushar: existing.trushar,
+            trushar,
         };
         cfg.write_server_to_ini();
         if let Err(e) = cfg.save() {

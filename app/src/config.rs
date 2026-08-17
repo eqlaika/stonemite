@@ -63,7 +63,7 @@ impl Default for TrusharConfig {
 }
 
 fn default_trushar_enabled() -> bool {
-    true
+    false
 }
 
 fn default_trushar_bind() -> String {
@@ -72,6 +72,7 @@ fn default_trushar_bind() -> String {
 
 /// Top-level configuration persisted to %APPDATA%\Stonemite\config.toml.
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     /// Path to the EverQuest installation directory.
     pub eq_dir: String,
@@ -250,6 +251,8 @@ impl Config {
         let Some(path) = Self::path() else {
             return Self::default();
         };
+        let enable_integrations_path = path.with_file_name("enable-local-integrations");
+        let enable_local_integrations = enable_integrations_path.exists();
         let mut config = if path.exists() {
             match std::fs::read_to_string(&path) {
                 Ok(contents) => toml::from_str(&contents).unwrap_or_default(),
@@ -258,12 +261,21 @@ impl Config {
         } else {
             Self::default()
         };
+        if enable_local_integrations {
+            config.trushar.enabled = true;
+        }
         // Generate a stable anonymous ID on first run.
         if config.telemetry && config.telemetry_id.is_none() {
             config.telemetry_id = Some(uuid::Uuid::new_v4().to_string());
         }
-        if let Err(e) = config.save() {
-            eprintln!("Failed to save config: {e}");
+        match config.save() {
+            Ok(()) if enable_local_integrations => {
+                if let Err(error) = std::fs::remove_file(enable_integrations_path) {
+                    eprintln!("Failed to clear the local integrations installer marker: {error}");
+                }
+            }
+            Ok(()) => {}
+            Err(error) => eprintln!("Failed to save config: {error}"),
         }
         config
     }
@@ -511,7 +523,17 @@ mod tests {
     fn legacy_config_gets_safe_trushar_defaults() {
         let config: Config = toml::from_str("eq_dir = 'C:\\EverQuest'").unwrap();
 
+        assert!(!config.trushar.enabled);
+        assert_eq!(config.trushar.bind, "127.0.0.1:19720");
+        assert_eq!(config.trushar.auth_token, None);
+    }
+
+    #[test]
+    fn minimal_trushar_config_uses_safe_defaults_for_other_fields() {
+        let config: Config = toml::from_str("[trushar]\nenabled = true").unwrap();
+
         assert!(config.trushar.enabled);
+        assert_eq!(config.eq_dir, DEFAULT_EQ_DIR);
         assert_eq!(config.trushar.bind, "127.0.0.1:19720");
         assert_eq!(config.trushar.auth_token, None);
     }

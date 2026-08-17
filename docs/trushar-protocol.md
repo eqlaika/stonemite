@@ -10,7 +10,7 @@ Protocol version 1 uses JSON text messages over RFC 6455 WebSocket at:
 ws://127.0.0.1:19720/trushar/v1
 ```
 
-The backward-compatible default configuration is:
+The server is disabled by default. Enable **Local integrations** in Settings > General and restart Stonemite, or configure it manually:
 
 ```toml
 [trushar]
@@ -41,7 +41,7 @@ Authentication failures reject the HTTP upgrade with status 401 (or 403 for the 
 
 The server currently provides `ws://`, not TLS. A token authenticates a LAN client but offers no confidentiality against traffic observation or modification. Because an authenticated client can deliver input to EQ, use LAN binding only on a trusted network or provide an encrypted tunnel. Certificate management and native `wss://` are intentionally outside this small subsystem.
 
-Enabling `trushar` is the opt-in for its complete API, including targeted input; there is no second input-enable switch. Disable the server if no trusted client should control EQ. The input operations are intended for bounded, user-initiated actions rather than unattended gameplay automation; users remain responsible for the game's rules.
+Enabling `trushar` is the opt-in for its complete API, including targeted input when trusik is also enabled; there is no separate input-enable switch. Disable the server if no trusted client should control EQ. The input operations are intended for bounded, user-initiated actions rather than unattended gameplay automation; users remain responsible for the game's rules.
 
 ## State and identifiers
 
