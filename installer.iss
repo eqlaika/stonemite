@@ -57,8 +57,10 @@ begin
       if P > 0 then
       begin
         Value := Trim(Copy(Line, P + 1, Length(Line)));
-        // Strip surrounding quotes
-        if (Length(Value) >= 2) and (Value[1] = '"') and (Value[Length(Value)] = '"') then
+        // Strip surrounding TOML basic or literal string quotes.
+        if (Length(Value) >= 2) and
+           (((Value[1] = '"') and (Value[Length(Value)] = '"')) or
+            ((Value[1] = '''') and (Value[Length(Value)] = ''''))) then
           Value := Copy(Value, 2, Length(Value) - 2);
         // Unescape backslashes
         StringChangeEx(Value, '\\', '\', True);
@@ -134,10 +136,10 @@ begin
     if not DirExists(ConfigDir) then
       ForceDirectories(ConfigDir);
 
-    if IsTaskSelected('integrations') then
+    if WizardIsTaskSelected('integrations') then
       SaveStringToFile(ConfigDir + '\enable-local-integrations', '', False);
 
-    if IsTaskSelected('notelemetry') then
+    if WizardIsTaskSelected('notelemetry') then
       DisableTelemetry(ConfigPath);
   end;
 end;
