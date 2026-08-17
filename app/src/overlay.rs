@@ -323,6 +323,7 @@ fn publish_control_state(s: &OverlayState) {
             // MAX_PIPS clients in pip_order. Extra discovered windows remain
             // visible in state but are explicitly not advertised as activatable.
             activatable: s.active_pid == Some(window.pid) || s.pip_order.contains(&window.pid),
+            input_ready: crate::broadcast::is_target_ready(window.pid),
         })
         .collect();
     crate::control::publish(

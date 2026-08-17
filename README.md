@@ -84,7 +84,7 @@ Config lives at `%APPDATA%\Stonemite\config.toml`. See [config/example.toml](con
 
 ## trushar control API
 
-Stonemite includes `trushar`, a generic, persistent WebSocket control/state API for native local or LAN clients. It is independent of any particular controller hardware or UI. When enabled, it listens by default at `ws://127.0.0.1:19720/trushar/v1`, sends a complete current-state snapshot as soon as a client connects, pushes later snapshots whenever known state changes, and supports bounded text/key delivery to one exact loaded client through trusik shared memory.
+Stonemite includes `trushar`, a generic, persistent WebSocket control/state API for native local or LAN clients. It is independent of any particular controller hardware or UI. When enabled, it listens by default at `ws://127.0.0.1:19720/trushar/v1`, sends a complete current-state snapshot as soon as a client connects, pushes later snapshots whenever known state changes, and supports bounded text/key delivery to one exact loaded client after that client's trusik proxy acknowledges its shared-memory channel.
 
 `trushar` is disabled by default. Enable **Local integrations** in Settings > General and restart Stonemite, or configure it manually in `config.toml`. Enabling it opts into the complete API, including targeted input when trusik is also enabled. LAN binding is manual and requires a shared bearer token. The current server intentionally uses plaintext `ws://`; a token authenticates access but does not encrypt traffic, so LAN mode is appropriate only on a trusted network or encrypted tunnel. Browser-originated connections are rejected unless authenticated, including on loopback.
 

@@ -26,10 +26,15 @@ struct SharedKeyState {
     active: u32,
     suppress: u32,
     seq: u32,
-    keys: [u8; 256],
+    /// DirectInput scan codes 0–254. Scan code 255 is reserved.
+    keys: [u8; 255],
+    /// Written by a compatible trusik proxy after it maps this region.
+    proxy_ready: u8,
 }
 
 const MAGIC: u32 = 0x53544D54; // "STMT"
+const VERSION: u32 = 1;
+const PROXY_READY: u8 = 0xA5;
 const SHM_SIZE: usize = std::mem::size_of::<SharedKeyState>();
 
 /// Per-process shared memory handle.
@@ -163,6 +168,22 @@ pub fn is_active() -> bool {
     state().as_ref().is_some_and(|s| s.broadcasting)
 }
 
+/// Returns whether the target process has acknowledged a compatible trusik proxy.
+pub fn is_target_ready(pid: u32) -> bool {
+    state()
+        .as_ref()
+        .and_then(|state| state.targets.get(&pid))
+        .is_some_and(target_is_ready)
+}
+
+fn target_is_ready(target: &ProcessShm) -> bool {
+    unsafe {
+        std::ptr::read_volatile(&(*target.ptr).magic) == MAGIC
+            && std::ptr::read_volatile(&(*target.ptr).version) == VERSION
+            && std::ptr::read_volatile(&(*target.ptr).proxy_ready) == PROXY_READY
+    }
+}
+
 /// Enable or disable broadcasting.
 pub fn set_active(active: bool) -> Result<(), String> {
     let Some(s) = state().as_mut() else {
@@ -286,9 +307,7 @@ unsafe fn create_shm(pid: u32) -> Option<ProcessShm> {
     // Initialize.
     std::ptr::write_bytes(ptr, 0, 1);
     std::ptr::write_volatile(&mut (*ptr).magic, MAGIC);
-    std::ptr::write_volatile(&mut (*ptr).version, 1);
-    // Handshake marker: trusik checks keys[255] == 0xAB on open.
-    std::ptr::write_volatile(&mut (*ptr).keys[255], 0xAB);
+    std::ptr::write_volatile(&mut (*ptr).version, VERSION);
 
     Some(ProcessShm {
         pid,
@@ -300,17 +319,34 @@ unsafe fn create_shm(pid: u32) -> Option<ProcessShm> {
     })
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum TargetedInputError {
+    Unavailable(String),
+    OperationFailed(String),
+}
+
 /// Activate direct input for one loaded process without enabling broadcasting.
 /// All functions in this group are called only by the Win32 owner thread.
-pub fn begin_targeted_input(pid: u32) -> Result<(), String> {
+pub fn begin_targeted_input(pid: u32) -> Result<(), TargetedInputError> {
     let Some(s) = state().as_mut() else {
-        return Err("targeted input is unavailable because trusik is disabled".to_owned());
+        return Err(TargetedInputError::Unavailable(
+            "targeted input is unavailable because trusik is disabled".to_owned(),
+        ));
     };
     let Some(shm) = s.targets.get_mut(&pid) else {
-        return Err("target process has no trusik shared-memory target".to_owned());
+        return Err(TargetedInputError::Unavailable(
+            "target process has no trusik shared-memory target".to_owned(),
+        ));
     };
+    if !target_is_ready(shm) {
+        return Err(TargetedInputError::Unavailable(
+            "target process has not acknowledged a compatible trusik proxy".to_owned(),
+        ));
+    }
     if shm.targeted_active {
-        return Err("target process already has an input sequence in progress".to_owned());
+        return Err(TargetedInputError::OperationFailed(
+            "target process already has an input sequence in progress".to_owned(),
+        ));
     }
     shm.targeted_active = true;
     unsafe {
@@ -433,6 +469,8 @@ mod tests {
 
     #[test]
     fn broadcast_and_targeted_sources_cannot_release_each_other() {
+        assert_eq!(SHM_SIZE, 276);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, proxy_ready), 275);
         assert_eq!(combined_key_value(false, false), 0x00);
         assert_eq!(combined_key_value(true, false), 0x80);
         assert_eq!(combined_key_value(false, true), 0x80);
@@ -455,7 +493,25 @@ mod tests {
         });
         update_targets(&[target_pid, other_pid], None);
 
+        assert!(!is_target_ready(target_pid));
+        assert!(matches!(
+            begin_targeted_input(target_pid),
+            Err(TargetedInputError::Unavailable(_))
+        ));
+        unsafe {
+            std::ptr::write_volatile(
+                &mut (*state().as_mut().unwrap().targets[&target_pid].ptr).proxy_ready,
+                PROXY_READY,
+            );
+        }
+        assert!(is_target_ready(target_pid));
+        assert!(!is_target_ready(other_pid));
+
         begin_targeted_input(target_pid).unwrap();
+        assert!(matches!(
+            begin_targeted_input(target_pid),
+            Err(TargetedInputError::OperationFailed(_))
+        ));
         set_targeted_key(target_pid, 0x1e, true).unwrap();
         let broadcast_state = state().as_ref().unwrap();
         let target = &broadcast_state.targets[&target_pid];

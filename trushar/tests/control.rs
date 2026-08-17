@@ -33,6 +33,7 @@ fn maps_zero_and_multiple_loaded_clients_without_confusing_window_number_with_la
                 window_number: 6,
                 active: false,
                 activatable: false,
+                input_ready: false,
             },
             SourceClient {
                 private_key: 10,
@@ -42,6 +43,7 @@ fn maps_zero_and_multiple_loaded_clients_without_confusing_window_number_with_la
                 window_number: 2,
                 active: true,
                 activatable: true,
+                input_ready: true,
             },
         ],
         available(false),
@@ -49,6 +51,9 @@ fn maps_zero_and_multiple_loaded_clients_without_confusing_window_number_with_la
     assert_eq!(mapped.clients[0].window_number, 2);
     assert_eq!(mapped.clients[1].window_number, 6);
     assert!(!mapped.clients[1].activatable);
+    assert!(!mapped.clients[1].input_ready);
+    assert!(mapped.clients[0].input_ready);
+    assert!(mapped.capabilities.send_text && mapped.capabilities.send_keys);
     assert_eq!(mapped.clients[1].class_code.as_deref(), Some("SHM"));
 }
 
@@ -64,6 +69,7 @@ fn mapper_ids_survive_enrichment_but_not_process_lifetimes() {
             window_number: 1,
             active: true,
             activatable: true,
+            input_ready: false,
         }],
         BroadcastState::UNAVAILABLE,
     );
@@ -77,6 +83,7 @@ fn mapper_ids_survive_enrichment_but_not_process_lifetimes() {
             window_number: 1,
             active: true,
             activatable: true,
+            input_ready: false,
         }],
         BroadcastState::UNAVAILABLE,
     );
@@ -92,6 +99,7 @@ fn mapper_ids_survive_enrichment_but_not_process_lifetimes() {
             window_number: 1,
             active: true,
             activatable: true,
+            input_ready: false,
         }],
         BroadcastState::UNAVAILABLE,
     );
@@ -111,6 +119,7 @@ fn mapper_ids_survive_enrichment_but_not_process_lifetimes() {
             window_number: 1,
             active: true,
             activatable: true,
+            input_ready: false,
         }],
         BroadcastState::UNAVAILABLE,
     );
@@ -326,10 +335,20 @@ fn targeted_input_reports_unavailable_invalid_failed_and_disappeared() {
 
     let control = InMemoryController::new(available(false));
     let client = control.add_client(1, None, None, None, true, true);
+    control.set_input_ready(&client, false);
+    let unready =
+        block_on(control.send_text(client.clone(), "/who".into(), false)).unwrap_err();
+    assert_eq!(unready.code, ErrorCode::InputUnavailable);
+    let capabilities = control.snapshot().capabilities;
+    assert!(!capabilities.send_text && !capabilities.send_keys);
+
     let invalid =
         block_on(control.send_text(client.clone(), "bad\ntext".into(), false)).unwrap_err();
     assert_eq!(invalid.code, ErrorCode::InvalidArgument);
 
+    control.set_input_ready(&client, true);
+    let capabilities = control.snapshot().capabilities;
+    assert!(capabilities.send_text && capabilities.send_keys);
     control.fail_next_input("shared memory write failed");
     let failed = block_on(control.send_text(client.clone(), "/who".into(), true)).unwrap_err();
     assert_eq!(failed.code, ErrorCode::InputOperationFailed);

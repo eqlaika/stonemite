@@ -24,10 +24,12 @@ struct SharedKeyState {
     active: u32,
     suppress: u32,
     seq: u32,
-    keys: [u8; 256],
+    keys: [u8; 255],
+    proxy_ready: u8,
 }
 
 const MAGIC: u32 = 0x53544D54; // "STMT"
+const VERSION: u32 = 1;
 const SHM_SIZE: usize = std::mem::size_of::<SharedKeyState>();
 
 /// How long to hold each key down.
@@ -135,9 +137,9 @@ fn type_password(pid: u32, password: &str, shm: Shm) -> Result<(), String> {
 
         let magic = std::ptr::read_volatile(&(*ptr).magic);
         let version = std::ptr::read_volatile(&(*ptr).version);
-        let marker = std::ptr::read_volatile(&(*ptr).keys[255]);
+        let proxy_ready = std::ptr::read_volatile(&(*ptr).proxy_ready);
         debug_log(&format!(
-            "auto_type: shm ready pid={pid} magic={magic:#010x} version={version} marker={marker:#04x} active=1 suppress=0"
+            "auto_type: shm ready pid={pid} magic={magic:#010x} version={version} proxy_ready={proxy_ready:#04x} active=1 suppress=0"
         ));
     }
 
@@ -232,8 +234,7 @@ fn open_or_create_shm(pid: u32) -> Result<(HANDLE, *mut SharedKeyState), String>
             ));
             std::ptr::write_bytes(ptr, 0, 1);
             std::ptr::write_volatile(&mut (*ptr).magic, MAGIC);
-            std::ptr::write_volatile(&mut (*ptr).version, 1);
-            std::ptr::write_volatile(&mut (*ptr).keys[255], 0xAB);
+            std::ptr::write_volatile(&mut (*ptr).version, VERSION);
         } else {
             debug_log("auto_type: shm already initialized by broadcast engine");
         }
@@ -260,9 +261,9 @@ fn type_char(ptr: *mut SharedKeyState, ch: char, index: usize, pid: u32) {
     let shift_state = ((result >> 8) & 0xFF) as u8;
     let needs_shift = shift_state & 0x01 != 0;
     let scan = vk_to_scan(vk);
-    if scan == 0 {
+    if !is_usable_scan_code(scan) {
         debug_log(&format!(
-            "auto_type: no scan code for char[{index}]='{ch}' vk={vk:#04x} pid={pid}"
+            "auto_type: no usable scan code for char[{index}]='{ch}' vk={vk:#04x} pid={pid}"
         ));
         return;
     }
@@ -275,7 +276,13 @@ fn type_char(ptr: *mut SharedKeyState, ch: char, index: usize, pid: u32) {
 
 /// Press and release a scan code, optionally with Shift held.
 fn press_scancode(ptr: *mut SharedKeyState, scan: u8, shift: bool) {
+    if !is_usable_scan_code(scan) {
+        return;
+    }
     let shift_scan = vk_to_scan(0x10); // VK_SHIFT
+    if shift && !is_usable_scan_code(shift_scan) {
+        return;
+    }
 
     unsafe {
         // Press Shift if needed.
@@ -310,7 +317,24 @@ fn press_scancode(ptr: *mut SharedKeyState, scan: u8, shift: bool) {
     }
 }
 
+fn is_usable_scan_code(scan: u8) -> bool {
+    (1..=254).contains(&scan)
+}
+
 unsafe fn bump_seq(ptr: *mut SharedKeyState) {
     let seq = std::ptr::read_volatile(&(*ptr).seq);
     std::ptr::write_volatile(&mut (*ptr).seq, seq.wrapping_add(1));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_memory_scan_codes_exclude_reserved_boundaries() {
+        assert!(!is_usable_scan_code(0));
+        assert!(is_usable_scan_code(1));
+        assert!(is_usable_scan_code(254));
+        assert!(!is_usable_scan_code(255));
+    }
 }

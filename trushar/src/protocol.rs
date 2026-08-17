@@ -363,6 +363,8 @@ pub struct WireClient {
     pub window_number: usize,
     pub active: bool,
     pub activatable: bool,
+    #[serde(default)]
+    pub input_ready: bool,
 }
 
 impl From<&crate::control::ClientState> for WireClient {
@@ -375,6 +377,7 @@ impl From<&crate::control::ClientState> for WireClient {
             window_number: value.window_number,
             active: value.active,
             activatable: value.activatable,
+            input_ready: value.input_ready,
         }
     }
 }
@@ -545,6 +548,7 @@ mod tests {
                 window_number: 1,
                 active: true,
                 activatable: true,
+                input_ready: true,
             }],
             broadcast: BroadcastState {
                 available: true,
@@ -594,6 +598,16 @@ mod tests {
         assert!(client.get("character").is_none());
         assert!(client.get("server").is_none());
         assert_eq!(client["class_code"], "SHK");
+        assert_eq!(client["input_ready"], true);
+    }
+
+    #[test]
+    fn older_wire_clients_default_to_not_input_ready() {
+        let client: WireClient = serde_json::from_str(
+            r#"{"id":"client-1","window_number":1,"active":true,"activatable":true}"#,
+        )
+        .unwrap();
+        assert!(!client.input_ready);
     }
 
     #[test]

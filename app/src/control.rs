@@ -445,11 +445,8 @@ fn start_resolved_input(
             ),
         ));
     }
-    if let Err(message) = crate::broadcast::begin_targeted_input(pid) {
-        return Err((
-            reply,
-            ControlError::new(ErrorCode::InputOperationFailed, message),
-        ));
+    if let Err(error) = crate::broadcast::begin_targeted_input(pid) {
+        return Err((reply, map_targeted_input_error(error)));
     }
     let timer = unsafe { SetTimer(state.tray_hwnd, TIMER_CONTROL_INPUT, INPUT_TICK_MS, None) };
     if timer == 0 {
@@ -476,6 +473,18 @@ fn start_resolved_input(
     Ok(())
 }
 
+fn map_targeted_input_error(error: crate::broadcast::TargetedInputError) -> ControlError {
+    let (code, message) = match error {
+        crate::broadcast::TargetedInputError::Unavailable(message) => {
+            (ErrorCode::InputUnavailable, message)
+        }
+        crate::broadcast::TargetedInputError::OperationFailed(message) => {
+            (ErrorCode::InputOperationFailed, message)
+        }
+    };
+    ControlError::new(code, message)
+}
+
 fn resolve_input_pid(client_id: &ClientId) -> Result<u32, ControlError> {
     if !crate::broadcast::is_available() {
         return Err(ControlError::new(
@@ -494,7 +503,14 @@ fn resolve_input_pid(client_id: &ClientId) -> Result<u32, ControlError> {
         .iter()
         .find(|source| state.mapper.id_for_key(source.private_key) == Some(client_id))
     {
-        return Ok(source.private_key as u32);
+        let pid = source.private_key as u32;
+        if !crate::broadcast::is_target_ready(pid) {
+            return Err(ControlError::new(
+                ErrorCode::InputUnavailable,
+                "targeted input is unavailable because the selected client's trusik proxy is not ready",
+            ));
+        }
+        return Ok(pid);
     }
     let code = if state.mapper.is_retired(client_id) {
         ErrorCode::TargetDisappeared
@@ -816,5 +832,13 @@ mod tests {
         let strokes = resolve_text_strokes("/who", true).unwrap();
         assert_eq!(strokes.len(), 5);
         assert_eq!(strokes.last().unwrap().scans, vec![0x1c]);
+    }
+
+    #[test]
+    fn live_readiness_failures_are_reported_as_input_unavailable() {
+        let error = map_targeted_input_error(crate::broadcast::TargetedInputError::Unavailable(
+            "proxy is not ready".into(),
+        ));
+        assert_eq!(error.code, ErrorCode::InputUnavailable);
     }
 }

@@ -32,6 +32,7 @@ pub struct ClientState {
     pub window_number: usize,
     pub active: bool,
     pub activatable: bool,
+    pub input_ready: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -432,6 +433,7 @@ pub struct SourceClient {
     pub window_number: usize,
     pub active: bool,
     pub activatable: bool,
+    pub input_ready: bool,
 }
 
 /// Maintains opaque identifiers for exactly the lifetime of each loaded source client.
@@ -481,17 +483,20 @@ impl SnapshotMapper {
                 window_number: source.window_number,
                 active: source.active,
                 activatable: source.activatable,
+                input_ready: source.input_ready,
             });
         }
         clients.sort_by_key(|client| client.window_number);
+        let input_available =
+            broadcast.available && clients.iter().any(|client| client.input_ready);
         StateData {
             clients,
             broadcast,
             capabilities: Capabilities {
                 activate: true,
                 set_broadcast: broadcast.available,
-                send_text: broadcast.available,
-                send_keys: broadcast.available,
+                send_text: input_available,
+                send_keys: input_available,
             },
         }
     }
@@ -547,8 +552,8 @@ impl InMemoryController {
             capabilities: Capabilities {
                 activate: true,
                 set_broadcast: broadcast.available,
-                send_text: broadcast.available,
-                send_keys: broadcast.available,
+                send_text: false,
+                send_keys: false,
             },
             ..StateData::default()
         };
@@ -581,6 +586,7 @@ impl InMemoryController {
                     client.active = false;
                 }
             }
+            let input_ready = state.broadcast.available;
             state.clients.push(ClientState {
                 id: id.clone(),
                 character: character.map(str::to_owned),
@@ -589,6 +595,7 @@ impl InMemoryController {
                 window_number,
                 active,
                 activatable,
+                input_ready,
             });
             (id, memory_data(&state))
         };
@@ -632,6 +639,17 @@ impl InMemoryController {
             let mut state = self.inner.state.lock().expect("memory controller poisoned");
             for client in &mut state.clients {
                 client.active = &client.id == id;
+            }
+            memory_data(&state)
+        };
+        self.inner.hub.publish(data);
+    }
+
+    pub fn set_input_ready(&self, id: &ClientId, input_ready: bool) {
+        let data = {
+            let mut state = self.inner.state.lock().expect("memory controller poisoned");
+            if let Some(client) = state.clients.iter_mut().find(|client| &client.id == id) {
+                client.input_ready = input_ready;
             }
             memory_data(&state)
         };
@@ -716,14 +734,16 @@ impl InMemoryController {
 fn memory_data(state: &MemoryState) -> StateData {
     let mut clients = state.clients.clone();
     clients.sort_by_key(|client| client.window_number);
+    let input_available =
+        state.broadcast.available && clients.iter().any(|client| client.input_ready);
     StateData {
         clients,
         broadcast: state.broadcast,
         capabilities: Capabilities {
             activate: true,
             set_broadcast: state.broadcast.available,
-            send_text: state.broadcast.available,
-            send_keys: state.broadcast.available,
+            send_text: input_available,
+            send_keys: input_available,
         },
     }
 }
@@ -911,6 +931,12 @@ fn prepare_memory_input(
         };
         return Err(ControlError::new(code, "the target client is not loaded"));
     };
+    if !state.clients[index].input_ready {
+        return Err(ControlError::new(
+            ErrorCode::InputUnavailable,
+            "targeted input is unavailable because the selected client's trusik proxy is not ready",
+        ));
+    }
     if state.disappear_on_input.remove(client_id) {
         let id = state.clients.remove(index).id;
         state.retired_ids.insert(id);

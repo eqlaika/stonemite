@@ -61,7 +61,8 @@ The server sends a complete `state` message immediately after a successful upgra
         "class_code": "SHK",
         "window_number": 1,
         "active": true,
-        "activatable": true
+        "activatable": true,
+        "input_ready": true
       }
     ],
     "active_client_id": "client-0000000000000001",
@@ -73,17 +74,17 @@ The server sends a complete `state` message immediately after a successful upgra
 
 `id` is opaque and stable only while that EQ process remains loaded in the current Stonemite run. It does not expose the PID or HWND. A stale recently issued ID produces `target_disappeared`; an ID never known to this run produces `client_not_found`.
 
-`window_number` is Stonemite's one-based, user-visible window number. It is not the PiP layout index. `activatable` is false if a discovered EQ window is outside the existing active-plus-five-PiP swap set; state does not claim that such a window can be activated.
+`window_number` is Stonemite's one-based, user-visible window number. It is not the PiP layout index. `activatable` is false if a discovered EQ window is outside the existing active-plus-five-PiP swap set; state does not claim that such a window can be activated. `input_ready` is true only after that EQ process's compatible trusik proxy acknowledges the per-process shared-memory channel.
 
 `character`, `server`, and `class_code` are omitted when unknown. Character/server identity can appear after initial process discovery and can change when trusik observes the same EQ process open a different character log after camping or changing servers. `class_code` is the actual abbreviation Stonemite learned (for example `SHK` or `SHM`), not a fabricated full class name. Log-file assignment candidates are not exposed as loaded clients.
 
 `broadcast.available` is false when trusik/broadcast support was not initialized. In that state `enabled` is false, `set_broadcast` capability is false, and mutation requests return `broadcast_unavailable`.
 
-`send_text` and `send_keys` capabilities are true when trusik shared-memory input is available. This requires `trusik = true`, the proxy DLL loaded in the target EQ process, and a current per-process shared-memory target. These capabilities do not depend on whether broadcasting is enabled.
+`send_text` and `send_keys` capabilities are true when at least one loaded client has `input_ready: true`. They require `trusik = true` but do not depend on whether broadcasting is enabled. Consumers must still check the selected client's `input_ready`; command-time validation is authoritative because readiness can change after a snapshot.
 
 ## Client requests
 
-Every request carries version 1 and a nonempty caller-chosen `request_id` of at most 128 bytes. Up to 16 commands may be in flight on one connection. Results can complete in a different order, and pushed state can arrive between them, so clients must correlate by `request_id`.
+Every request carries version 1 and a nonempty caller-chosen `request_id` of at most 128 bytes. Version 1 state and result objects may gain additive fields; clients must ignore fields they do not recognize. Up to 16 commands may be in flight on one connection. Results can complete in a different order, and pushed state can arrive between them, so clients must correlate by `request_id`.
 
 Request current state explicitly:
 
@@ -128,7 +129,7 @@ Deliver semantic key strokes to one exact client. Keys in one `keys` array form 
 
 `send_keys` accepts 1–64 strokes, each containing 1–8 distinct keys. `hold_ms` defaults to 75 and must be 1–1000; `pause_ms` defaults to 75 and must be 0–1000. Total requested duration is limited to 15 seconds. Supported names are `a`–`z`, `0`–`9`, `f1`–`f12`, `numpad_0`–`numpad_9`, and: `escape`, `minus`, `equals`, `backspace`, `tab`, `left_bracket`, `right_bracket`, `enter`, `left_control`, `semicolon`, `apostrophe`, `grave`, `left_shift`, `backslash`, `comma`, `period`, `slash`, `right_shift`, `numpad_multiply`, `left_alt`, `space`, `caps_lock`, `num_lock`, `scroll_lock`, `numpad_subtract`, `numpad_add`, `numpad_decimal`, `numpad_divide`, `numpad_enter`, `right_control`, `right_alt`, `home`, `arrow_up`, `page_up`, `arrow_left`, `arrow_right`, `end`, `arrow_down`, `page_down`, `insert`, `delete`, and `pause`.
 
-Input uses the target process's trusik shared memory. It does not activate the window, call global `SendInput`, or send keys to other EQ clients. Only one targeted sequence runs at a time. All API-held keys are released on success, error, request timeout/disconnect, target disappearance, or Stonemite shutdown. Physical broadcast keys and targeted keys are tracked separately so one source cannot release the other's held key.
+Input uses the target process's trusik shared memory. A selected client whose compatible proxy has not acknowledged that channel returns `input_unavailable`; Stonemite never reports successful delivery solely because it created a mapping. Input does not activate the window, call global `SendInput`, or send keys to other EQ clients. Only one targeted sequence runs at a time. All API-held keys are released on success, error, request timeout/disconnect, target disappearance, or Stonemite shutdown. Physical broadcast keys and targeted keys are tracked separately so one source cannot release the other's held key.
 
 ## Results and errors
 
