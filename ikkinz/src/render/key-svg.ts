@@ -1,6 +1,6 @@
 import { APP_IMAGE, CLASS_IMAGES } from "./assets.generated";
 import { renderLucideActionIcon, type ActionIcon } from "./action-icons";
-import { BADGE_COLORS, SLOT_COLORS, type GridCell } from "../state/layout";
+import { BADGE_COLORS, SLOT_COLORS, type KeyCell } from "../state/layout";
 
 const W = 72;
 const COLORS = {
@@ -23,13 +23,11 @@ export const ACTION_COLORS = {
   swap: COLORS.cyan,
 } satisfies Record<ActionIcon, string>;
 
-export function renderCell(cell: GridCell, motionFrame = 0): string {
+export function renderCell(cell: KeyCell, motionFrame = 0): string {
   const body = (() => {
     switch (cell.type) {
-      case "unsupported":
-        return `${base()}<text x="36" y="29" class="text center" font-size="17">5 × 3</text><text x="36" y="54" fill="${COLORS.amber}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" font-weight="850" text-anchor="middle" textLength="62" lengthAdjust="spacingAndGlyphs">LAYOUT REQUIRED</text>`;
       case "boot":
-        return renderBoot(cell.row, cell.column, cell.stage);
+        return renderBoot(cell.stage);
       case "feedback":
         return renderFeedback(
           cell.feedback.kind,
@@ -48,6 +46,8 @@ export function renderCell(cell: GridCell, motionFrame = 0): string {
         return `${base()}<text x="36" y="31" class="muted center medium">SLOT ${cell.slot}</text><text x="36" y="56" class="quiet center tiny" textLength="62" lengthAdjust="spacingAndGlyphs">NOT LOADED</text>`;
       case "blank":
         return base();
+      case "logo":
+        return renderLogo();
       case "group":
         return renderActionTile(
           "group",
@@ -99,10 +99,10 @@ function base(): string {
 }
 
 function renderCharacter(
-  client: Extract<GridCell, { type: "character" }>["client"],
+  client: Extract<KeyCell, { type: "character" }>["client"],
   slot: number,
   enabled: boolean,
-  interaction: Extract<GridCell, { type: "character" }>["interaction"],
+  interaction: Extract<KeyCell, { type: "character" }>["interaction"],
 ): string {
   const color = SLOT_COLORS[(slot - 1) % SLOT_COLORS.length] ?? SLOT_COLORS[0];
   const badge =
@@ -208,30 +208,15 @@ function fittedTextAttributes(
     : "";
 }
 
-function renderBoot(row: number, column: number, stage: number): string {
-  const letters: Record<string, string> = {
-    "1,0": "S",
-    "1,1": "T",
-    "1,2": "O",
-    "1,3": "N",
-    "1,4": "E",
-    "2,0": "M",
-    "2,1": "I",
-    "2,2": "T",
-    "2,3": "E",
-  };
-  const key = `${row},${column}`;
+function renderLogo(): string {
+  return `${base()}<image href="${APP_IMAGE}" x="5" y="7" width="62" height="58" preserveAspectRatio="xMidYMid meet"/>`;
+}
+
+function renderBoot(stage: number): string {
   if (stage === 0) {
     return `${base()}<rect x="19" y="35" width="34" height="2" fill="#38414b"/>`;
   }
-  if (row === 0 && column === 2) {
-    return `${base()}<image href="${APP_IMAGE}" x="8" y="8" width="56" height="56"/>`;
-  }
-  const letter = letters[key];
-  if (letter)
-    return `${base()}<text x="36" y="50" class="text center" font-size="34">${letter}</text>`;
-  if (row === 2 && column === 4) {
-    return `${base()}<text x="36" y="40" fill="${COLORS.cyan}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" font-weight="850" text-anchor="middle">${stage >= 2 ? "READY" : "LINK"}</text><rect x="21" y="50" width="30" height="4" rx="2" fill="${stage >= 2 ? COLORS.green : COLORS.cyan}"/>`;
-  }
-  return `${base()}<rect x="19" y="35" width="34" height="2" fill="#38414b"/>`;
+  const label = stage >= 2 ? "CONNECTING" : "STONEMITE";
+  const accent = stage >= 2 ? COLORS.cyan : COLORS.muted;
+  return `${base()}<text x="36" y="38" fill="${accent}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" font-weight="850" text-anchor="middle"${fittedTextAttributes(label, 8, 62)}>${label}</text><rect x="21" y="50" width="30" height="4" rx="2" fill="${accent}"/>`;
 }

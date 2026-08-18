@@ -641,7 +641,7 @@ export function normalizeAddress(input: string): string {
   ) {
     throw new CommandError(
       "invalid_address",
-      "Use a host and port only, such as jaggedpine.local:19720.",
+      "Use a host and port only, such as stonemite-pc.local:19720.",
     );
   }
   if (!url.hostname || !url.port)

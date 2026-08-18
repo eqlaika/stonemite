@@ -194,7 +194,7 @@ Charcoal surfaces keep the interface quiet while cyan, green, amber, and coral r
 
 ## Layout
 
-Ikkinz key art is authored at exactly 72 × 72 pixels. The shipped v0 grid is five columns by three rows: the first six positions carry exact-client identity; the remaining active positions carry Group, Follow, Assist, Bcast, and a two-step Swap. Four reserved positions remain intentionally blank until they earn a clearer use. This is the implemented v0 deck map, not a promise that every Stonemite surface uses a 5 × 3 composition.
+Ikkinz key art is authored at exactly 72 × 72 pixels. Character slots 1–6, Group, Follow, Assist, Bcast, Swap, and the inert Stonemite logo are separate, position-independent actions. The shipped editable five-column by three-row profile arranges character identity across the first two rows, places the controls around them, puts Logo at bottom left, and leaves three positions blank. The profile is a useful default rather than a behavior map: users may move or duplicate any action.
 
 Dark key surfaces have no colored top rails. Character keys use a 13px-radius badge centered at (17, 18), a 29 × 29 class image at the top right when known, a bottom-centered name, and a 3px readiness dot at the lower right. The active character replaces its slot gradient with an active-white surface, keeps a 3px slot-color outline, switches its labels to dark ink, and states “ACTIVE” explicitly. Missing clients and unavailable controls remain in place rather than collapsing the grid.
 
@@ -231,15 +231,16 @@ Corners are compact and consistent: Stream Deck artwork and property-inspector i
 - **Supporting panel:** Layout help uses the same panel surface, padding, radius, and muted body text; privacy copy is separated by a one-pixel line rather than placed in another card.
 
 ### Key Tiles
-- **Base grammar:** Every tile is a 72px square with the key radius. Non-character tiles use the restrained key gradient with no colored top rail and deck copy no smaller than 15px; long labels fit horizontally instead of shrinking. Reserved tiles render only the dark surface.
+- **Base grammar:** Every tile is a 72px square with the key radius. Non-character tiles use the restrained key gradient with no colored top rail and deck copy no smaller than 15px; long labels fit horizontally instead of shrinking. Reserved profile positions remain empty rather than requiring placeholder actions.
 - **Identity:** Character tiles combine the fixed slot surface, darker number badge, class icon or explicit code fallback, character name, readiness dot, and optional unavailable veil. The active tile becomes active-white with dark labels, a slot-color outline, and an explicit “ACTIVE” marker.
 - **Bcast:** Off uses the dark base, broadcast-off icon, and one “Bcast” label; unavailable switches to broadcast-unavailable and says “UNAVAILABLE.” On replaces the entire surface with solid broadcast red while keeping the white lightning mark and the same “Bcast” label.
 - **Group / Follow / Assist:** Actions use vendored Lucide Animated geometry—Users Round, Route, and Target—above one large “Group,” “Follow,” or “Assist” label. Group is blue, Follow is green, and Assist is gold. Idle tiles keep a dark surface with the action color on the icon; while an action is running, the entire tile fills with its action color and the icon and fixed action word invert to dark ink. Ready-box counts and lower qualifiers remain omitted for hardware-scale legibility.
 - **Window-number swap:** Lucide’s Arrow Left Right sits above one large “Swap” label in both idle and armed modes. Swap is cyan: idle keeps a dark surface with the cyan icon, while armed mode fills the tile cyan, inverts its icon and word to dark ink, staggers the two source arrow motions, and temporarily relabels character tiles as “CURRENT” or “SELECT.”
-- **Feedback / Error:** Pending Group, Follow, and Assist actions preserve the same large action word while their tile fills with its action-specific color and the icon animates in dark ink. Other pending and error states replace only the operated key with recovery amber or error coral iconography plus 15px “WORKING” or “FAILED” copy and a fitted 15px message. Empty and unsupported positions stay explicit with 15px “NOT LOADED” or “LAYOUT REQUIRED.”
+- **Logo:** The inert Logo action centers the real Stonemite app artwork on the standard dark key surface. Pressing it never triggers a command or claims a state.
+- **Feedback / Error:** Pending Group, Follow, and Assist actions preserve the same large action word while their tile fills with its action-specific color and the icon animates in dark ink. Other pending and error states replace only the operated key with recovery amber or error coral iconography plus 15px “WORKING” or “FAILED” copy and a fitted 15px message. Empty character actions remain explicit with 15px “NOT LOADED.”
 
 ### Motion and Accessibility States
-- **Boot:** Shipped key contexts advance through static boot frames at 0ms, 160ms, 620ms, and 1050ms; motion is a bounded handoff into authoritative live state, not a source of information.
+- **Boot:** Visible non-logo actions advance through synchronized, position-independent static boot frames at 0ms, 160ms, 620ms, and 1050ms; motion is a bounded handoff into authoritative live state, not a source of information. Logo remains stable throughout.
 - **Feedback:** Group, Follow, and Assist redraw one filled active 72px key at 8fps only while their bounded input operation is running. Armed Swap uses the same filled-state treatment and animation budget until the user picks a character or cancels. The large action word remains stable throughout motion.
 - **Connection:** Pairing, connecting, and reconnecting dots breathe over 1.2s with `ease-in-out`; reduced-motion preference collapses the animation to 1ms.
 - **Access:** Property-inspector fields have explicit labels and described-by help/error relationships; status regions are live, busy state is exposed, errors use role alerts, and steady-state meaning remains available without animation or color perception.
@@ -257,4 +258,4 @@ Corners are compact and consistent: Stream Deck artwork and property-inspector i
 - Don't use solid broadcast red for any state except confirmed broadcast on.
 - Don't introduce a separate fantasy-game palette, invented icons, or decorative assets when Stonemite identity already exists.
 - Don't rely on color alone, hide failures in logs, or replace actionable error copy with a generic warning mark.
-- Don't promote the v0 5 × 3 deck map into a universal layout rule for unrelated Stonemite surfaces.
+- Don't make an action's behavior depend on its physical row or column; the 5 × 3 profile is only the shipped default.

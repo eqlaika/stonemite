@@ -5,7 +5,6 @@ import {
   buildGrid,
   buildSwapPlan,
   SLOT_COLORS,
-  unsupportedCell,
 } from "../src/state/layout";
 import type { DashboardView } from "../src/state/store";
 import { ACTION_COLORS, escapeXml, renderCell } from "../src/render/key-svg";
@@ -47,7 +46,7 @@ function sixClients() {
   }));
 }
 
-describe("5 by 3 layout", () => {
+describe("default 5 by 3 layout", () => {
   it("builds exactly one deterministic cell for every coordinate", () => {
     const grid = buildGrid(view());
     expect(grid).toHaveLength(15);
@@ -83,7 +82,7 @@ describe("5 by 3 layout", () => {
     expect(empty.filter((cell) => cell.type === "empty")).toHaveLength(6);
     expect(
       empty.find((cell) => cell.row === 2 && cell.column === 0),
-    ).toMatchObject({ type: "blank" });
+    ).toMatchObject({ type: "logo" });
 
     const clients = [
       ...sixClients(),
@@ -101,7 +100,7 @@ describe("5 by 3 layout", () => {
     expect(extra.filter((cell) => cell.type === "character")).toHaveLength(6);
     expect(
       extra.find((cell) => cell.row === 2 && cell.column === 0),
-    ).toMatchObject({ type: "blank" });
+    ).toMatchObject({ type: "logo" });
 
     const unknown = buildCell(
       view({
@@ -544,11 +543,13 @@ describe("5 by 3 layout", () => {
     });
   });
 
-  it("renders unsupported coordinates as a static 5 by 3 requirement", () => {
-    const svg = decodeSvg(renderCell(unsupportedCell(3, 0)));
-    expect(svg).toContain("5 × 3");
-    expect(svg).toContain("LAYOUT REQUIRED");
-    expect(svg).not.toContain("REV ");
+  it("places the inert Stonemite logo at bottom left", () => {
+    const logo = buildCell(view(), 2, 0);
+    const svg = decodeSvg(renderCell(logo));
+    expect(logo).toMatchObject({ type: "logo", row: 2, column: 0 });
+    expect(svg).toContain("<image");
+    expect(svg).not.toContain("<text");
+    expect(svg).not.toContain("<path");
   });
 });
 
@@ -574,10 +575,9 @@ describe("SVG rendering", () => {
     expect(svg).not.toContain(`<Mora & "Rook">`);
   });
 
-  it("keeps the paired, client-count, active, and server cells blank", () => {
+  it("keeps the three remaining reserved cells blank", () => {
     const coordinates = [
       [1, 4],
-      [2, 0],
       [2, 1],
       [2, 2],
     ] as const;
@@ -619,7 +619,6 @@ describe("SVG rendering", () => {
     );
     const cells = [
       ...buildGrid(view()),
-      unsupportedCell(3, 0),
       buildCell(view({ bootStage: 1 }), 0, 0),
       feedback,
     ];

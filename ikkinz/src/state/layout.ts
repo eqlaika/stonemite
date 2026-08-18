@@ -4,14 +4,21 @@ import type { TrusharClient, TrusharState } from "../types/trushar";
 export const GRID_COLUMNS = 5;
 export const GRID_ROWS = 3;
 
-const CHARACTER_POSITIONS = [
-  [0, 0],
-  [0, 1],
-  [0, 2],
-  [1, 0],
-  [1, 1],
-  [1, 2],
-] as const;
+export type CharacterSlot = 1 | 2 | 3 | 4 | 5 | 6;
+export type DashboardKey =
+  | `character-${CharacterSlot}`
+  | "group"
+  | "broadcast"
+  | "follow"
+  | "assist"
+  | "swap"
+  | "logo";
+
+export const DEFAULT_LAYOUT = [
+  ["character-1", "character-2", "character-3", "group", "broadcast"],
+  ["character-4", "character-5", "character-6", "follow", "blank"],
+  ["logo", "blank", "blank", "assist", "swap"],
+] as const satisfies ReadonlyArray<ReadonlyArray<DashboardKey | "blank">>;
 
 export const SLOT_COLORS = [
   "#4a86d4",
@@ -30,60 +37,49 @@ export const BADGE_COLORS = [
   "#38a888",
 ] as const;
 
-export type GridCell =
-  | { type: "unsupported"; row: number; column: number }
-  | { type: "boot"; row: number; column: number; stage: number }
-  | { type: "feedback"; row: number; column: number; feedback: Feedback }
+export type KeyCell = { row?: number; column?: number } & (
+  | { type: "boot"; stage: number }
+  | { type: "feedback"; feedback: Feedback }
   | {
       type: "character";
-      row: number;
-      column: number;
       client: TrusharClient;
-      slot: number;
+      slot: CharacterSlot;
       enabled: boolean;
       interaction: "activate" | "swap";
     }
-  | { type: "empty"; row: number; column: number; slot: number }
-  | { type: "blank"; row: number; column: number }
+  | { type: "empty"; slot: CharacterSlot }
+  | { type: "blank" }
+  | { type: "logo" }
   | {
       type: "group";
-      row: number;
-      column: number;
       available: boolean;
       ready: number;
       status: string;
     }
   | {
       type: "follow";
-      row: number;
-      column: number;
       available: boolean;
       ready: number;
       status: string;
     }
   | {
       type: "assist";
-      row: number;
-      column: number;
       available: boolean;
       ready: number;
       status: string;
     }
   | {
       type: "broadcast";
-      row: number;
-      column: number;
       available: boolean;
       enabled: boolean;
     }
   | {
       type: "swap";
-      row: number;
-      column: number;
       available: boolean;
       armed: boolean;
       status: string;
-    };
+    }
+);
 
 export interface SwapPlan {
   active: TrusharClient | null;
@@ -103,7 +99,7 @@ export function buildSwapPlan(view: DashboardView): SwapPlan {
       (client) =>
         client.id !== active.id &&
         client.window_number >= 1 &&
-        client.window_number <= CHARACTER_POSITIONS.length,
+        client.window_number <= 6,
     ),
   );
   const available =
@@ -249,12 +245,8 @@ export function cellKey(row: number, column: number): string {
   return `${row},${column}`;
 }
 
-export function unsupportedCell(row: number, column: number): GridCell {
-  return { type: "unsupported", row, column };
-}
-
-export function buildGrid(view: DashboardView): GridCell[] {
-  const cells: GridCell[] = [];
+export function buildGrid(view: DashboardView): KeyCell[] {
+  const cells: KeyCell[] = [];
   for (let row = 0; row < GRID_ROWS; row += 1) {
     for (let column = 0; column < GRID_COLUMNS; column += 1) {
       cells.push(buildCell(view, row, column));
@@ -268,33 +260,44 @@ export function buildCell(
   row: number,
   column: number,
   swapArmed = false,
-): GridCell {
+): KeyCell {
   if (!isCoordinate(row, column)) {
     throw new RangeError(`Grid coordinate is outside 5 by 3: ${row},${column}`);
   }
 
-  const feedback = view.feedback.get(cellKey(row, column));
+  const key = DEFAULT_LAYOUT[row]?.[column];
+  if (!key || key === "blank") return { type: "blank", row, column };
+  return {
+    ...buildKey(view, key, cellKey(row, column), swapArmed),
+    row,
+    column,
+  };
+}
+
+export function buildKey(
+  view: DashboardView,
+  key: DashboardKey,
+  feedbackKey: string = key,
+  swapArmed = false,
+): KeyCell {
+  if (key === "logo") return { type: "logo" };
+
+  const feedback = view.feedback.get(feedbackKey);
   if (feedback && feedback.until > Date.now())
-    return { type: "feedback", row, column, feedback };
+    return { type: "feedback", feedback };
 
-  if (view.bootStage < 3)
-    return { type: "boot", row, column, stage: view.bootStage };
+  if (view.bootStage < 3) return { type: "boot", stage: view.bootStage };
 
-  const swapPlan = buildSwapPlan(view);
-  const swapMode = swapArmed && swapPlan.available;
-  const characterIndex = CHARACTER_POSITIONS.findIndex(
-    ([r, c]) => r === row && c === column,
-  );
-  if (characterIndex >= 0) {
-    const slot = characterIndex + 1;
+  const slot = characterSlot(key);
+  if (slot !== null) {
+    const swapPlan = buildSwapPlan(view);
+    const swapMode = swapArmed && swapPlan.available;
     const client = view.snapshot?.clients.find(
       (candidate) => candidate.window_number === slot,
     );
-    if (!client) return { type: "empty", row, column, slot };
+    if (!client) return { type: "empty", slot };
     return {
       type: "character",
-      row,
-      column,
       client,
       slot,
       enabled:
@@ -304,69 +307,73 @@ export function buildCell(
     };
   }
 
-  if (row === 0 && column === 3) {
-    const plan = buildGroupPlan(view);
-    return {
-      type: "group",
-      row,
-      column,
-      available: plan.available,
-      ready: plan.invitees.length,
-      status: plan.status,
-    };
+  switch (key) {
+    case "group": {
+      const plan = buildGroupPlan(view);
+      return {
+        type: "group",
+        available: plan.available,
+        ready: plan.invitees.length,
+        status: plan.status,
+      };
+    }
+    case "broadcast":
+      return {
+        type: "broadcast",
+        available:
+          view.connection.state === "connected" &&
+          Boolean(view.snapshot?.broadcast.available),
+        enabled: Boolean(view.snapshot?.broadcast.enabled),
+      };
+    case "follow": {
+      const plan = buildFollowPlan(view);
+      return {
+        type: "follow",
+        available: plan.available,
+        ready: plan.followers.length,
+        status: plan.status,
+      };
+    }
+    case "assist": {
+      const plan = buildAssistPlan(view);
+      return {
+        type: "assist",
+        available: plan.available,
+        ready: plan.assistants.length,
+        status: plan.status,
+      };
+    }
+    case "swap": {
+      const plan = buildSwapPlan(view);
+      return {
+        type: "swap",
+        available: plan.available,
+        armed: swapArmed && plan.available,
+        status: plan.status,
+      };
+    }
+    default:
+      throw new Error(`Unsupported dashboard key: ${key}.`);
   }
+}
 
-  if (row === 0 && column === 4) {
-    return {
-      type: "broadcast",
-      row,
-      column,
-      available:
-        view.connection.state === "connected" &&
-        Boolean(view.snapshot?.broadcast.available),
-      enabled: Boolean(view.snapshot?.broadcast.enabled),
-    };
+function characterSlot(key: DashboardKey): CharacterSlot | null {
+  switch (key) {
+    case "character-1":
+      return 1;
+    case "character-2":
+      return 2;
+    case "character-3":
+      return 3;
+    case "character-4":
+      return 4;
+    case "character-5":
+      return 5;
+    case "character-6":
+      return 6;
+    default:
+      return null;
   }
-
-  if (row === 1 && column === 3) {
-    const plan = buildFollowPlan(view);
-    return {
-      type: "follow",
-      row,
-      column,
-      available: plan.available,
-      ready: plan.followers.length,
-      status: plan.status,
-    };
-  }
-
-  if (
-    (row === 1 && column === 4) ||
-    (row === 2 && column >= 0 && column <= 2)
-  ) {
-    return { type: "blank", row, column };
-  }
-
-  if (row === 2 && column === 3) {
-    const plan = buildAssistPlan(view);
-    return {
-      type: "assist",
-      row,
-      column,
-      available: plan.available,
-      ready: plan.assistants.length,
-      status: plan.status,
-    };
-  }
-
-  return {
-    type: "swap",
-    row,
-    column,
-    available: swapPlan.available,
-    armed: swapMode,
-    status: swapPlan.status,
-  };
 }
 
 function isCoordinate(row: number, column: number): boolean {

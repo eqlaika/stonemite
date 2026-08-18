@@ -1,5 +1,8 @@
 import streamDeck from "@elgato/streamdeck";
-import { GridKeyAction, type PluginSettings } from "./actions/grid-key";
+import {
+  createDashboardKeyActions,
+  type PluginSettings,
+} from "./actions/dashboard-key";
 import { DashboardStore, type ConnectionStatus } from "./state/store";
 import { normalizeAddress, TrusharClient } from "./trushar/client";
 
@@ -18,7 +21,9 @@ const client = new TrusharClient({
   log: (message) => streamDeck.logger.info(message),
 });
 
-streamDeck.actions.registerAction(new GridKeyAction(store, client));
+for (const action of createDashboardKeyActions(store, client)) {
+  streamDeck.actions.registerAction(action);
+}
 streamDeck.system.onSystemDidWakeUp(() => client.reconnect());
 streamDeck.settings.onDidReceiveGlobalSettings<PluginSettings>((event) => {
   applySettings(event.settings);

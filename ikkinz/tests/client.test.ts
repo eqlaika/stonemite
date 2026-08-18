@@ -19,8 +19,8 @@ afterEach(async () => {
 
 describe("address validation", () => {
   it.each([
-    ["jaggedpine.local:19720", "jaggedpine.local:19720"],
-    [" WS://JaggedPine.Local:19720 ", "jaggedpine.local:19720"],
+    ["stonemite-pc.local:19720", "stonemite-pc.local:19720"],
+    [" WS://STONEMITE-PC.Local:19720 ", "stonemite-pc.local:19720"],
     ["[::1]:19720", "[::1]:19720"],
   ])("normalizes %s", (input, expected) => {
     expect(normalizeAddress(input)).toBe(expected);

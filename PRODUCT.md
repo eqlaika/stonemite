@@ -15,7 +15,7 @@ web
 
 EverQuest multiboxers who run several EQ clients through Stonemite and want a compact, glanceable control surface on Stream Deck hardware or Stream Deck Mobile.
 
-The first Ikkinz tester runs Stonemite on the Windows PC `jaggedpine` and Stream Deck Desktop on a Mac paired to a 5×3 Stream Deck Mobile device. Ikkinz therefore connects to Stonemite across a trusted private LAN.
+A typical setup runs Stonemite on a Windows PC and Stream Deck Desktop on the same computer or another device paired to Stream Deck hardware or Mobile. Cross-device installations connect to Stonemite over a trusted private LAN.
 
 ## Product purpose
 
@@ -32,19 +32,19 @@ Stonemite derives character identity from the running EQ clients and controls an
 - Stonemite v0.5.0 runs on Windows with **Integrations** enabled and **Devices on my local network** selected.
 - Stonemite displays a `hostname.local:port` address and a single-use six-digit pairing code.
 - Stream Deck Desktop runs the Ikkinz Node plugin. Stream Deck Mobile is only the paired key surface; it does not connect to Stonemite directly.
-- The intended steady-state layout is 5 columns × 3 rows.
+- The included steady-state profile is 5 columns × 3 rows, while every character slot and control remains independently placeable.
 - Users may start Stonemite, Stream Deck, the Mac, and the mobile device in any order, so reconnection is normal rather than exceptional.
 
 ## Capabilities and constraints
 
 - Protocol v1 provides complete pushed state, exact client activation, active-to-selected window-number swaps, explicit broadcast state, exact-client text/key delivery, request correlation, and six-digit LAN pairing.
-- Ikkinz v0 is the core deck only: boot/handoff, live character tiles, exact activation, window-number swaps, broadcast, group, follow, and assist actions, connection status, pairing, and honest error states.
+- Ikkinz v0 is the core deck only: position-independent boot/handoff, six separately placeable character slots, window-number swaps, broadcast, group, follow, assist, an inert Stonemite logo, connection status, pairing, and honest error states.
 - Assist has one explicit policy: concurrently send `/assist <active character>` to every input-ready background client. Burn, Camp, heals, spells, and other semantic actions remain outside v0 until their EQ commands, hotkeys, timing, and target policy are defined.
 - An input result proves delivery to the intended process, not an observed spell, target, buff, or combat result. The interface must never claim otherwise.
 - Client IDs are opaque and valid only for the current Stonemite run. Reconnect state is authoritative.
 - Character, server, and class can be temporarily unknown. Clients can be absent, extra, unactivatable, or not ready for targeted input.
 - LAN transport is authenticated `ws://`, not encrypted. It is intended only for a trusted private network.
-- A 15-key layout requires Stream Deck Mobile Pro.
+- The included 15-key mobile profile requires Stream Deck Mobile Pro; custom layouts may use fewer keys.
 
 ## Brand commitments
 

@@ -8,14 +8,11 @@ import streamDeck, {
 import type { JsonObject, JsonValue } from "@elgato/utils";
 import {
   buildAssistPlan,
-  buildCell,
   buildFollowPlan,
   buildGroupPlan,
+  buildKey,
   buildSwapPlan,
-  cellKey,
-  GRID_COLUMNS,
-  GRID_ROWS,
-  unsupportedCell,
+  type DashboardKey,
 } from "../state/layout";
 import { DashboardStore } from "../state/store";
 import { renderCell } from "../render/key-svg";
@@ -25,6 +22,7 @@ import {
   TrusharClient,
   type Credentials,
 } from "../trushar/client";
+import { keyForManifestId } from "./key-definitions";
 
 const GROUP_ACCEPT_DELAY_MS = 1_000;
 const ACTION_FEEDBACK_TIMEOUT_MS = 60_000;
@@ -38,12 +36,11 @@ export interface PluginSettings extends JsonObject {
 
 export interface VisibleKey {
   action: KeyAction;
-  row: number;
-  column: number;
+  key: DashboardKey;
   lastImage?: string;
 }
 
-export class GridKeyController {
+export class DashboardController {
   readonly #store: DashboardStore;
   readonly #client: TrusharClient;
   readonly #keys = new Map<string, VisibleKey>();
@@ -53,6 +50,8 @@ export class GridKeyController {
   #motionTimer: ReturnType<typeof setInterval> | null = null;
   #bootStarted = false;
   #credentialEpoch = 0;
+  readonly #activationsInFlight = new Set<string>();
+  #broadcastInFlight = false;
   #groupInFlight = false;
   #followInFlight = false;
   #assistInFlight = false;
@@ -70,26 +69,9 @@ export class GridKeyController {
 
   async onWillAppear(event: WillAppearEvent): Promise<void> {
     if (!event.action.isKey() || event.action.isInMultiAction()) return;
-    const coordinates = event.action.coordinates;
-    if (
-      !coordinates ||
-      coordinates.row < 0 ||
-      coordinates.column < 0 ||
-      coordinates.row >= GRID_ROWS ||
-      coordinates.column >= GRID_COLUMNS
-    ) {
-      await event.action.setImage(
-        renderCell(
-          unsupportedCell(coordinates?.row ?? -1, coordinates?.column ?? -1),
-        ),
-      );
-      return;
-    }
-    this.#keys.set(event.action.id, {
-      action: event.action,
-      row: coordinates.row,
-      column: coordinates.column,
-    });
+    const key = keyForManifestId(event.action.manifestId);
+    if (!key) return;
+    this.#keys.set(event.action.id, { action: event.action, key });
     this.#startBoot();
     this.#queueRender();
   }
@@ -103,10 +85,10 @@ export class GridKeyController {
     if (!event.action.isKey()) return;
     const key = this.#keys.get(event.action.id);
     if (!key) return;
-    const cell = buildCell(
+    const cell = buildKey(
       this.#store.view,
-      key.row,
-      key.column,
+      key.key,
+      key.action.id,
       this.#swapArmed,
     );
 
@@ -123,7 +105,7 @@ export class GridKeyController {
         this.#queueRender();
         if (cell.client.active) return;
 
-        const feedbackKey = cellKey(key.row, key.column);
+        const feedbackKey = key.action.id;
         this.#swapInFlight = true;
         this.#store.setFeedback(
           feedbackKey,
@@ -144,24 +126,33 @@ export class GridKeyController {
         }
         return;
       }
-      if (cell.type === "character" && cell.enabled) {
-        const feedbackKey = cellKey(key.row, key.column);
+      if (
+        cell.type === "character" &&
+        cell.enabled &&
+        !this.#activationsInFlight.has(cell.client.id)
+      ) {
+        const feedbackKey = key.action.id;
+        this.#activationsInFlight.add(cell.client.id);
         this.#store.setFeedback(
           feedbackKey,
           { kind: "pending", message: "Activating" },
           10_000,
         );
-        const result = await this.#client.activate(cell.client.id);
-        if (result.result.type !== "activated")
-          throw new CommandError(
-            "protocol_error",
-            "Stonemite returned the wrong activation result.",
-          );
-        this.#store.clearFeedback(feedbackKey);
+        try {
+          const result = await this.#client.activate(cell.client.id);
+          if (result.result.type !== "activated")
+            throw new CommandError(
+              "protocol_error",
+              "Stonemite returned the wrong activation result.",
+            );
+          this.#store.clearFeedback(feedbackKey);
+        } finally {
+          this.#activationsInFlight.delete(cell.client.id);
+        }
         return;
       }
       if (cell.type === "group" && cell.available && !this.#groupInFlight) {
-        const feedbackKey = cellKey(key.row, key.column);
+        const feedbackKey = key.action.id;
         this.#groupInFlight = true;
         this.#setActionFeedback(feedbackKey, "Inviting", "group");
         try {
@@ -173,7 +164,7 @@ export class GridKeyController {
         return;
       }
       if (cell.type === "follow" && cell.available && !this.#followInFlight) {
-        const feedbackKey = cellKey(key.row, key.column);
+        const feedbackKey = key.action.id;
         this.#followInFlight = true;
         this.#setActionFeedback(feedbackKey, "Following", "follow");
         try {
@@ -185,7 +176,7 @@ export class GridKeyController {
         return;
       }
       if (cell.type === "assist" && cell.available && !this.#assistInFlight) {
-        const feedbackKey = cellKey(key.row, key.column);
+        const feedbackKey = key.action.id;
         this.#assistInFlight = true;
         this.#setActionFeedback(feedbackKey, "Sending", "assist");
         try {
@@ -196,18 +187,27 @@ export class GridKeyController {
         }
         return;
       }
-      if (cell.type === "broadcast" && cell.available) {
-        const feedbackKey = cellKey(key.row, key.column);
+      if (
+        cell.type === "broadcast" &&
+        cell.available &&
+        !this.#broadcastInFlight
+      ) {
+        const feedbackKey = key.action.id;
+        this.#broadcastInFlight = true;
         this.#store.setFeedback(
           feedbackKey,
           { kind: "pending", message: "Updating" },
           10_000,
         );
-        await this.#client.setBroadcast(!cell.enabled);
-        this.#store.clearFeedback(feedbackKey);
+        try {
+          await this.#client.setBroadcast(!cell.enabled);
+          this.#store.clearFeedback(feedbackKey);
+        } finally {
+          this.#broadcastInFlight = false;
+        }
       }
     } catch (error) {
-      this.#store.setFeedback(cellKey(key.row, key.column), {
+      this.#store.setFeedback(key.action.id, {
         kind: "error",
         message: friendlyError(error),
       });
@@ -468,10 +468,10 @@ export class GridKeyController {
 
   #syncMotion(): void {
     const active = [...this.#keys.values()].some((key) => {
-      const cell = buildCell(
+      const cell = buildKey(
         this.#store.view,
-        key.row,
-        key.column,
+        key.key,
+        key.action.id,
         this.#swapArmed,
       );
       return (
@@ -503,7 +503,7 @@ export class GridKeyController {
     const updates: Promise<void>[] = [];
     for (const key of this.#keys.values()) {
       const image = renderCell(
-        buildCell(this.#store.view, key.row, key.column, this.#swapArmed),
+        buildKey(this.#store.view, key.key, key.action.id, this.#swapArmed),
         this.#motionFrame,
       );
       if (image === key.lastImage) continue;

@@ -9,7 +9,8 @@
   },
   "scripts": {
     "assets": "node scripts/generate-assets.mjs",
-    "build": "npm run assets && rollup -c",
+    "profiles": "node scripts/generate-profiles.mjs",
+    "build": "npm run assets && npm run profiles && rollup -c",
     "watch": "npm run assets && rollup -c -w --watch.onEnd=\"streamdeck restart co.laikasoft.ikkinz\"",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

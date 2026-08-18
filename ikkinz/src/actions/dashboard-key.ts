@@ -1,5 +1,4 @@
 import {
-  action,
   type KeyDownEvent,
   type SendToPluginEvent,
   SingletonAction,
@@ -9,17 +8,35 @@ import {
 import type { JsonObject, JsonValue } from "@elgato/utils";
 import { DashboardStore } from "../state/store";
 import { TrusharClient } from "../trushar/client";
-import { GridKeyController } from "./grid-key-controller";
+import { DashboardController } from "./dashboard-controller";
+import {
+  DASHBOARD_ACTION_DEFINITIONS,
+  type DashboardActionDefinition,
+} from "./key-definitions";
 
-export type { PluginSettings } from "./grid-key-controller";
+export type { PluginSettings } from "./dashboard-controller";
 
-@action({ UUID: "co.laikasoft.ikkinz.grid-key" })
-export class GridKeyAction extends SingletonAction {
-  readonly #controller: GridKeyController;
+export function createDashboardKeyActions(
+  store: DashboardStore,
+  client: TrusharClient,
+): DashboardKeyAction[] {
+  const controller = new DashboardController(store, client);
+  return DASHBOARD_ACTION_DEFINITIONS.map(
+    (definition) => new DashboardKeyAction(controller, definition),
+  );
+}
 
-  constructor(store: DashboardStore, client: TrusharClient) {
+export class DashboardKeyAction extends SingletonAction {
+  override readonly manifestId: string;
+  readonly #controller: DashboardController;
+
+  constructor(
+    controller: DashboardController,
+    definition: DashboardActionDefinition,
+  ) {
     super();
-    this.#controller = new GridKeyController(store, client);
+    this.#controller = controller;
+    this.manifestId = definition.uuid;
   }
 
   override onWillAppear(event: WillAppearEvent): Promise<void> {

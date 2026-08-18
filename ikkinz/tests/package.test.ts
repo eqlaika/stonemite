@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { strFromU8, unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
+import { DASHBOARD_ACTION_DEFINITIONS } from "../src/actions/key-definitions";
 import { CLASS_IMAGES } from "../src/render/assets.generated";
 
 const EXPECTED_CLASSES = [
@@ -22,11 +23,22 @@ const EXPECTED_CLASSES = [
   "WIZ",
 ];
 
-const EXPECTED_POSITIONS = Array.from({ length: 15 }, (_, index) => {
-  const column = Math.floor(index / 3);
-  const row = index % 3;
-  return `${column},${row}`;
-});
+const EXPECTED_PROFILE_ACTIONS = {
+  "0,0": "co.laikasoft.ikkinz.character-slot-1",
+  "1,0": "co.laikasoft.ikkinz.character-slot-2",
+  "2,0": "co.laikasoft.ikkinz.character-slot-3",
+  "3,0": "co.laikasoft.ikkinz.group",
+  "4,0": "co.laikasoft.ikkinz.broadcast",
+  "0,1": "co.laikasoft.ikkinz.character-slot-4",
+  "1,1": "co.laikasoft.ikkinz.character-slot-5",
+  "2,1": "co.laikasoft.ikkinz.character-slot-6",
+  "3,1": "co.laikasoft.ikkinz.follow",
+  "0,2": "co.laikasoft.ikkinz.logo",
+  "3,2": "co.laikasoft.ikkinz.assist",
+  "4,2": "co.laikasoft.ikkinz.swap",
+} as const;
+
+const EXPECTED_POSITIONS = Object.keys(EXPECTED_PROFILE_ACTIONS).sort();
 
 const PROFILE_CASES = [
   {
@@ -47,6 +59,7 @@ const PROFILE_CASES = [
 
 type ProfileAction = {
   ActionID: string;
+  Name?: string;
   Plugin?: { Name?: string; UUID?: string };
   UUID?: string;
 };
@@ -66,7 +79,7 @@ function parseArchiveJson<T>(
 }
 
 describe("release inputs", () => {
-  it("keeps the packed manifest free of the Node inspector", async () => {
+  it("ships every customizable action and keeps Node inspection disabled", async () => {
     const manifest = JSON.parse(
       await readFile(
         new URL(
@@ -76,6 +89,13 @@ describe("release inputs", () => {
         "utf8",
       ),
     ) as {
+      Actions?: Array<{
+        Icon?: string;
+        Name?: string;
+        PropertyInspectorPath?: string;
+        Tooltip?: string;
+        UUID?: string;
+      }>;
       Category?: string;
       Name?: string;
       Nodejs?: { Debug?: string; Version?: string };
@@ -84,6 +104,23 @@ describe("release inputs", () => {
     expect(manifest.Category).toBe("Stonemite · EQ boxing");
     expect(manifest.Nodejs?.Version).toBe("24");
     expect(manifest.Nodejs?.Debug).toBeUndefined();
+    expect(
+      manifest.Actions?.map(({ Name, Tooltip, UUID }) => ({
+        name: Name,
+        tooltip: Tooltip,
+        uuid: UUID,
+      })),
+    ).toEqual(
+      DASHBOARD_ACTION_DEFINITIONS.map(({ name, tooltip, uuid }) => ({
+        name,
+        tooltip,
+        uuid,
+      })),
+    );
+    for (const action of manifest.Actions ?? []) {
+      expect(action.Icon).toBe("imgs/actions/stonemite/icon");
+      expect(action.PropertyInspectorPath).toBe("ui/pairing.html");
+    }
   });
 
   it("bundles complete editable 5 by 3 profiles", async () => {
@@ -163,11 +200,19 @@ describe("release inputs", () => {
       expect(
         new Set(Object.values(actions ?? {}).map((action) => action.ActionID))
           .size,
-      ).toBe(15);
-      for (const action of Object.values(actions ?? {})) {
+      ).toBe(EXPECTED_POSITIONS.length);
+      for (const [position, action] of Object.entries(actions ?? {})) {
+        const expectedUuid =
+          EXPECTED_PROFILE_ACTIONS[
+            position as keyof typeof EXPECTED_PROFILE_ACTIONS
+          ];
+        const definition = DASHBOARD_ACTION_DEFINITIONS.find(
+          (candidate) => candidate.uuid === expectedUuid,
+        );
         expect(action.Plugin?.Name).toBe("Stonemite · EQ boxing");
         expect(action.Plugin?.UUID).toBe("co.laikasoft.ikkinz");
-        expect(action.UUID).toBe("co.laikasoft.ikkinz.grid-key");
+        expect(action.UUID).toBe(expectedUuid);
+        expect(action.Name).toBe(definition?.name);
       }
     }
   });

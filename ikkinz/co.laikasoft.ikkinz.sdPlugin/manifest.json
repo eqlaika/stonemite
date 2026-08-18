@@ -45,21 +45,148 @@
   ],
   "Actions": [
     {
-      "Name": "Grid key",
-      "UUID": "co.laikasoft.ikkinz.grid-key",
-      "Icon": "imgs/actions/grid-key/icon",
-      "Tooltip": "A position-aware key in the Stonemite · EQ boxing dashboard.",
+      "Name": "Character slot 1",
+      "UUID": "co.laikasoft.ikkinz.character-slot-1",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Activate the character in Stonemite slot 1, or select it while Swap is armed.",
       "PropertyInspectorPath": "ui/pairing.html",
       "Controllers": ["Keypad"],
       "SupportedInMultiActions": false,
       "SupportedInKeyLogicActions": false,
       "UserTitleEnabled": false,
-      "States": [
-        {
-          "Image": "imgs/actions/grid-key/key",
-          "ShowTitle": false
-        }
-      ]
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
+      "Name": "Character slot 2",
+      "UUID": "co.laikasoft.ikkinz.character-slot-2",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Activate the character in Stonemite slot 2, or select it while Swap is armed.",
+      "PropertyInspectorPath": "ui/pairing.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
+      "Name": "Character slot 3",
+      "UUID": "co.laikasoft.ikkinz.character-slot-3",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Activate the character in Stonemite slot 3, or select it while Swap is armed.",
+      "PropertyInspectorPath": "ui/pairing.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
+      "Name": "Character slot 4",
+      "UUID": "co.laikasoft.ikkinz.character-slot-4",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Activate the character in Stonemite slot 4, or select it while Swap is armed.",
+      "PropertyInspectorPath": "ui/pairing.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
+      "Name": "Character slot 5",
+      "UUID": "co.laikasoft.ikkinz.character-slot-5",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Activate the character in Stonemite slot 5, or select it while Swap is armed.",
+      "PropertyInspectorPath": "ui/pairing.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
+      "Name": "Character slot 6",
+      "UUID": "co.laikasoft.ikkinz.character-slot-6",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Activate the character in Stonemite slot 6, or select it while Swap is armed.",
+      "PropertyInspectorPath": "ui/pairing.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
+      "Name": "Group",
+      "UUID": "co.laikasoft.ikkinz.group",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Invite every ready character and accept the invitations.",
+      "PropertyInspectorPath": "ui/pairing.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
+      "Name": "Broadcast",
+      "UUID": "co.laikasoft.ikkinz.broadcast",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Turn Stonemite key broadcasting on or off.",
+      "PropertyInspectorPath": "ui/pairing.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
+      "Name": "Follow",
+      "UUID": "co.laikasoft.ikkinz.follow",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Tell every ready background character to follow the active character.",
+      "PropertyInspectorPath": "ui/pairing.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
+      "Name": "Assist",
+      "UUID": "co.laikasoft.ikkinz.assist",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Tell every ready background character to assist the active character.",
+      "PropertyInspectorPath": "ui/pairing.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
+      "Name": "Swap",
+      "UUID": "co.laikasoft.ikkinz.swap",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Arm a window-number swap, then choose a character slot.",
+      "PropertyInspectorPath": "ui/pairing.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
+      "Name": "Stonemite logo",
+      "UUID": "co.laikasoft.ikkinz.logo",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "An inert Stonemite logo tile.",
+      "PropertyInspectorPath": "ui/pairing.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
     }
   ]
 }

@@ -2,6 +2,8 @@ import { once } from "node:events";
 import { WebSocketServer } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandError } from "../src/trushar/client";
+import { definitionForKey } from "../src/actions/key-definitions";
+import { DEFAULT_LAYOUT, type DashboardKey } from "../src/state/layout";
 import { DashboardStore } from "../src/state/store";
 import { stateFixture } from "./fixtures";
 
@@ -23,10 +25,10 @@ vi.mock("@elgato/streamdeck", () => ({
 
 import {
   credentialsForReconnect,
-  GridKeyController,
+  DashboardController,
   updateVisibleKeyImage,
   type VisibleKey,
-} from "../src/actions/grid-key-controller";
+} from "../src/actions/dashboard-controller";
 
 beforeEach(() => {
   sdk.getGlobalSettings.mockReset();
@@ -38,7 +40,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("GridKeyController", () => {
+describe("DashboardController", () => {
   it("dispatches exact opaque activation and explicit broadcast once while in flight", async () => {
     vi.useFakeTimers();
     const store = connectedStore();
@@ -46,7 +48,7 @@ describe("GridKeyController", () => {
     const client = fakeClient();
     client.activate.mockReturnValue(activation.promise);
     client.setBroadcast.mockResolvedValue(broadcastResult(true));
-    const action = new GridKeyController(store, client as never);
+    const action = new DashboardController(store, client as never);
     const character = fakeKey("character", 0, 0);
     const broadcast = fakeKey("broadcast", 0, 4);
 
@@ -66,13 +68,52 @@ describe("GridKeyController", () => {
     expect(client.setBroadcast).toHaveBeenCalledWith(true);
   });
 
+  it("keeps duplicate action contexts synchronized without duplicate commands", async () => {
+    vi.useFakeTimers();
+    const store = connectedStore();
+    const activation = deferred<ReturnType<typeof activatedResult>>();
+    const client = fakeClient();
+    client.activate.mockReturnValue(activation.promise);
+    const action = new DashboardController(store, client as never);
+    const first = fakeKey("character-primary", 0, 0, "character-1");
+    const duplicate = fakeKey("character-duplicate", 2, 4, "character-1");
+
+    await action.onWillAppear({ action: first } as never);
+    await action.onWillAppear({ action: duplicate } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+
+    const firstPress = action.onKeyDown({ action: first } as never);
+    await action.onKeyDown({ action: duplicate } as never);
+    expect(client.activate).toHaveBeenCalledTimes(1);
+    expect(client.activate).toHaveBeenCalledWith("opaque-client-id");
+
+    const snapshot = store.view.snapshot!;
+    store.setSnapshot({
+      ...snapshot,
+      revision: snapshot.revision + 1,
+      active_client_id: "opaque-client-id",
+      clients: snapshot.clients.map((candidate) => ({
+        ...candidate,
+        active: candidate.id === "opaque-client-id",
+      })),
+    });
+    activation.resolve(activatedResult());
+    await firstPress;
+    await vi.advanceTimersByTimeAsync(0);
+
+    for (const key of [first, duplicate]) {
+      const image = key.setImage.mock.calls.at(-1)?.[0] as string;
+      expect(decodeURIComponent(image)).toContain(">ACTIVE</text>");
+    }
+  });
+
   it("arms the Swap key, then swaps the active and selected character numbers", async () => {
     vi.useFakeTimers();
     const store = groupStore();
     const swapRequest = deferred<ReturnType<typeof swapResult>>();
     const client = fakeClient();
     client.swapWindowNumbers.mockReturnValue(swapRequest.promise);
-    const action = new GridKeyController(store, client as never);
+    const action = new DashboardController(store, client as never);
     const swap = fakeKey("swap", 2, 4);
     const current = fakeKey("current", 0, 0);
     const selected = fakeKey("selected", 0, 1);
@@ -130,7 +171,7 @@ describe("GridKeyController", () => {
     client.sendKeys
       .mockReturnValueOnce(firstAcceptance.promise)
       .mockResolvedValue(inputResult("keys"));
-    const action = new GridKeyController(store, client as never);
+    const action = new DashboardController(store, client as never);
     const group = fakeKey("group", 0, 3);
 
     await action.onWillAppear({ action: group } as never);
@@ -198,7 +239,7 @@ describe("GridKeyController", () => {
       .mockRejectedValueOnce(new CommandError("send_failed", "missed"))
       .mockResolvedValue(inputResult("text"));
     client.sendKeys.mockResolvedValue(inputResult("keys"));
-    const action = new GridKeyController(store, client as never);
+    const action = new DashboardController(store, client as never);
     const group = fakeKey("group", 0, 3);
 
     await action.onWillAppear({ action: group } as never);
@@ -236,7 +277,7 @@ describe("GridKeyController", () => {
       .mockReturnValueOnce(deliveries[0]!.promise)
       .mockReturnValueOnce(deliveries[1]!.promise)
       .mockReturnValueOnce(deliveries[2]!.promise);
-    const action = new GridKeyController(store, client as never);
+    const action = new DashboardController(store, client as never);
     const follow = fakeKey("follow", 1, 3);
 
     await action.onWillAppear({ action: follow } as never);
@@ -271,7 +312,7 @@ describe("GridKeyController", () => {
       .mockResolvedValueOnce(inputResult("text"))
       .mockRejectedValueOnce(new CommandError("send_failed", "missed"))
       .mockResolvedValueOnce(inputResult("text"));
-    const action = new GridKeyController(store, client as never);
+    const action = new DashboardController(store, client as never);
     const follow = fakeKey("follow", 1, 3);
 
     await action.onWillAppear({ action: follow } as never);
@@ -299,7 +340,7 @@ describe("GridKeyController", () => {
       .mockReturnValueOnce(deliveries[0]!.promise)
       .mockReturnValueOnce(deliveries[1]!.promise)
       .mockReturnValueOnce(deliveries[2]!.promise);
-    const action = new GridKeyController(store, client as never);
+    const action = new DashboardController(store, client as never);
     const assist = fakeKey("assist", 2, 3);
 
     await action.onWillAppear({ action: assist } as never);
@@ -334,7 +375,7 @@ describe("GridKeyController", () => {
       .mockResolvedValueOnce(inputResult("text"))
       .mockRejectedValueOnce(new CommandError("send_failed", "missed"))
       .mockResolvedValueOnce(inputResult("text"));
-    const action = new GridKeyController(store, client as never);
+    const action = new DashboardController(store, client as never);
     const assist = fakeKey("assist", 2, 3);
 
     await action.onWillAppear({ action: assist } as never);
@@ -357,7 +398,7 @@ describe("GridKeyController", () => {
     const client = fakeClient();
     client.activate.mockReturnValue(activation.promise);
     client.setBroadcast.mockReturnValue(broadcast.promise);
-    const action = new GridKeyController(store, client as never);
+    const action = new DashboardController(store, client as never);
     const character = fakeKey("character", 0, 0);
     const broadcastKey = fakeKey("broadcast", 0, 4);
 
@@ -406,13 +447,12 @@ describe("GridKeyController", () => {
     expect(decodeURIComponent(broadcastImage)).not.toContain("DONE");
   });
 
-  it("keeps reserved dashboard cells inert", async () => {
+  it("keeps the Logo action inert and ignores unknown actions", async () => {
     vi.useFakeTimers();
     const store = groupStore();
     const client = fakeClient();
-    const action = new GridKeyController(store, client as never);
+    const action = new DashboardController(store, client as never);
     const reserved = [
-      fakeKey("paired", 1, 4),
       fakeKey("client-count", 2, 0),
       fakeKey("active", 2, 1),
       fakeKey("server", 2, 2),
@@ -436,15 +476,19 @@ describe("GridKeyController", () => {
     for (const key of reserved) expect(key.showAlert).not.toHaveBeenCalled();
   });
 
-  it("renders a dedicated static image outside the 5 by 3 grid", async () => {
+  it("renders an action by identity at any key position", async () => {
+    vi.useFakeTimers();
     const store = connectedStore();
     const client = fakeClient();
-    const action = new GridKeyController(store, client as never);
-    const unsupported = fakeKey("unsupported", 3, 0);
-    await action.onWillAppear({ action: unsupported } as never);
-    const image = unsupported.setImage.mock.calls[0]?.[0] as string;
-    expect(decodeURIComponent(image)).toContain("LAYOUT REQUIRED");
-    expect(decodeURIComponent(image)).not.toContain("REV ");
+    const action = new DashboardController(store, client as never);
+    const character = fakeKey("custom-character", 2, 4, "character-1");
+
+    await action.onWillAppear({ action: character } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+
+    const image = character.setImage.mock.calls.at(-1)?.[0] as string;
+    expect(decodeURIComponent(image)).toContain("Laika");
+    expect(decodeURIComponent(image)).toContain(">1</text>");
   });
 
   it("cannot restore forgotten credentials from a delayed reconnect or pair", async () => {
@@ -452,7 +496,7 @@ describe("GridKeyController", () => {
     sdk.getGlobalSettings.mockReturnValue(settings.promise);
     const store = connectedStore();
     const client = fakeClient();
-    const action = new GridKeyController(store, client as never);
+    const action = new DashboardController(store, client as never);
 
     const reconnect = action.onSendToPlugin({
       payload: {
@@ -511,7 +555,7 @@ describe("GridKeyController", () => {
     });
     const store = connectedStore();
     const client = fakeClient();
-    const action = new GridKeyController(store, client as never);
+    const action = new DashboardController(store, client as never);
     sdk.getGlobalSettings.mockResolvedValue({
       address: "server-a.local:19720",
       authToken: "server-a-token",
@@ -552,8 +596,7 @@ describe("action helpers", () => {
       .mockResolvedValueOnce(undefined);
     const key = {
       action: { setImage },
-      row: 0,
-      column: 0,
+      key: "character-1",
     } as unknown as VisibleKey;
     await expect(updateVisibleKeyImage(key, "image-a")).rejects.toThrow(
       "temporary SDK failure",
@@ -663,9 +706,21 @@ function fakeClient() {
   };
 }
 
-function fakeKey(id: string, row: number, column: number) {
+function fakeKey(
+  label: string,
+  row: number,
+  column: number,
+  keyOverride?: DashboardKey,
+) {
+  const defaultKey = DEFAULT_LAYOUT[row]?.[column];
+  const key =
+    keyOverride ?? (defaultKey && defaultKey !== "blank" ? defaultKey : null);
   return {
-    id,
+    id: `${row},${column}`,
+    label,
+    manifestId: key
+      ? definitionForKey(key).uuid
+      : "co.laikasoft.ikkinz.unknown",
     coordinates: { row, column },
     isKey: () => true,
     isInMultiAction: () => false,

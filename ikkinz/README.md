@@ -1,6 +1,6 @@
 # Ikkinz
 
-Ikkinz is the internal codename for the **Stonemite · EQ boxing** 5×3 Stream Deck control surface. It shows the current six-client roster, activates an exact loaded EQ client, swaps the window numbers of the active and selected clients, forms a group, directs ready background clients to follow or assist the active character, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting.
+Ikkinz is the internal codename for the customizable **Stonemite · EQ boxing** Stream Deck controls. It shows the current six-client roster, activates an exact loaded EQ client, swaps the window numbers of the active and selected clients, forms a group, directs ready background clients to follow or assist the active character, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting. An editable 5×3 profile ships as the default layout.
 
 The Group key invites every other named, input-ready client from the active box, waits one second, then sends `Ctrl+I` to those invited clients. Boxes without a detected character name or ready targeted-input channel are skipped.
 
@@ -12,7 +12,7 @@ The Swap key replaces the old MITE ambient key. Press **Swap**, then press a cha
 
 The Bcast key explicitly toggles Stonemite broadcasting. Its label stays **Bcast** in both states; a solid red surface means enabled. Group is blue, Follow green, Assist gold, and Swap cyan. Each uses a dark surface while idle and fills with its action color only while running or armed.
 
-The former paired, client-count, active, and server cells are intentionally blank while their next uses are decided.
+The inert Stonemite logo key adds a decorative tile without triggering a command. The default profile places it at bottom left and leaves three cells blank.
 
 V0 is intentionally the core deck. Burn, Camp, heals, spells, live EQ targets, buffs, and cooldowns are not implemented until their commands and failure policy are defined.
 
@@ -21,7 +21,7 @@ V0 is intentionally the core deck. Burn, Camp, heals, spells, live EQ targets, b
 - Stonemite v0.5.0 or later on Windows 10+
 - Stream Deck Desktop 7.4 or later on macOS 12+ or Windows 10+
 - Node.js 24+ for development
-- Stream Deck Mobile Pro for the 5×3 layout
+- Stream Deck Mobile Pro for the included 5×3 mobile profile
 - A trusted private network between Stream Deck Desktop and the Stonemite PC
 
 Stonemite's LAN API uses authenticated `ws://`. Pairing proves which client may control Stonemite, but traffic is not encrypted. Do not use it on an untrusted network.
@@ -62,22 +62,22 @@ npm run watch
 
 Linking restarts or changes the user's Stream Deck installation, so it is a deliberate manual step rather than part of tests. The tracked manifest keeps Node inspection disabled so packaged credentials are not exposed to a debugger. For a local debugging session only, temporarily add `"Debug": "enabled"` under `Nodejs`, restart the linked plugin, and remove it before validation or packaging.
 
-## Install the 5×3 dashboard
+## Install the default dashboard
 
-Ikkinz includes preset profiles for the 15-key Stream Deck and Stream Deck Mobile. Accept the profile installation when Stream Deck prompts after installing Ikkinz; the complete dashboard appears without placing each action manually. The installed profile remains editable.
+Ikkinz includes preset 5×3 profiles for the 15-key Stream Deck and Stream Deck Mobile. Accept the profile installation when Stream Deck prompts after installing Ikkinz; the complete dashboard appears without placing each action manually. The installed profile remains editable.
 
-Every placed action is the same. Ikkinz uses the key's zero-based row and column to render and handle that cell. Leave each action image at its default: a user-defined image takes precedence over Ikkinz's live rendering, and Ikkinz disables user titles for this action.
+Character slots 1–6, Group, Broadcast, Follow, Assist, Swap, and the Stonemite logo are separate actions in the Stream Deck action list. Drag any of them to any key position to create your own layout; behavior follows the action rather than its row and column. Duplicate actions are supported. Leave each action image at its default because a user-defined image takes precedence over Ikkinz's live rendering. Ikkinz disables user titles for these actions.
 
-## Pair with Jaggedpine
+## Pair with Stonemite
 
-1. In Stonemite, choose **Pair a device**. Stonemite shows an address such as `jaggedpine.local:19720` and a six-digit code for five minutes.
-2. In Stream Deck Desktop, select any Ikkinz grid key to open its property inspector.
+1. In Stonemite, choose **Pair a device**. Stonemite shows an address such as `stonemite-pc.local:19720` and a six-digit code for five minutes.
+2. In Stream Deck Desktop, select any Ikkinz action to open its property inspector.
 3. Enter the displayed address and six digits, then choose **Pair with Stonemite**.
 4. Ikkinz exchanges the code once, stores only the address and long credential in Stream Deck's plugin-wide settings, and reconnects automatically afterward.
 
 Use **Reconnect** after changing the address or recovering the network. Use **Forget this device** to remove the saved credential; pair again before control is restored.
 
-If `jaggedpine.local` does not resolve from the Mac, use the private IPv4 address Stonemite is listening on, for example `192.168.1.50:19720`.
+If the `.local` address does not resolve from the Stream Deck computer, use the private IPv4 address Stonemite is listening on, for example `192.168.1.50:19720`.
 
 ## Package
 
