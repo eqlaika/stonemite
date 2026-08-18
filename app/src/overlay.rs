@@ -15,6 +15,7 @@ use windows::Win32::Graphics::Gdi::{
     RoundRect, SelectObject, SetBkMode, SetTextColor, BACKGROUND_MODE, BLACK_BRUSH, DT_CENTER,
     DT_LEFT, DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_HEAVY, HBRUSH, PAINTSTRUCT, PS_NULL,
 };
+use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -1813,6 +1814,114 @@ unsafe extern "system" fn foreground_event_proc(
 // Swap
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ForegroundRequest {
+    Confirmed,
+    TargetDisappeared,
+    TargetUnresponsive,
+    Denied,
+}
+
+unsafe fn window_is_responsive(hwnd: HWND) -> bool {
+    let mut result = 0usize;
+    SendMessageTimeoutW(
+        hwnd,
+        WM_NULL,
+        WPARAM(0),
+        LPARAM(0),
+        SMTO_ABORTIFHUNG,
+        50,
+        Some(&mut result),
+    )
+    .0 != 0
+}
+
+/// Bring one live EQ HWND to the actual Windows foreground without changing
+/// Stonemite's active/PiP model. The model is committed only after confirmation.
+unsafe fn denied_or_disappeared(hwnd: HWND) -> ForegroundRequest {
+    if IsWindow(hwnd).as_bool() {
+        ForegroundRequest::Denied
+    } else {
+        ForegroundRequest::TargetDisappeared
+    }
+}
+
+unsafe fn request_foreground(hwnd: HWND) -> ForegroundRequest {
+    if !IsWindow(hwnd).as_bool() {
+        return ForegroundRequest::TargetDisappeared;
+    }
+    if GetForegroundWindow() == hwnd {
+        return ForegroundRequest::Confirmed;
+    }
+
+    if IsIconic(hwnd).as_bool() {
+        let _ = ShowWindowAsync(hwnd, SW_RESTORE);
+    }
+    let _ = SetForegroundWindow(hwnd);
+    if GetForegroundWindow() == hwnd {
+        return ForegroundRequest::Confirmed;
+    }
+
+    // A remote integration command does not carry Windows foreground rights.
+    // For responsive windows only, briefly share the current foreground input
+    // queue, retry synchronously, and always detach before returning.
+    if !window_is_responsive(hwnd) {
+        return if IsWindow(hwnd).as_bool() {
+            ForegroundRequest::TargetUnresponsive
+        } else {
+            ForegroundRequest::TargetDisappeared
+        };
+    }
+    let foreground = GetForegroundWindow();
+    if foreground.is_invalid() || !window_is_responsive(foreground) {
+        return denied_or_disappeared(hwnd);
+    }
+    let current_thread = GetCurrentThreadId();
+    let foreground_thread = GetWindowThreadProcessId(foreground, None);
+    if foreground_thread == 0 {
+        return denied_or_disappeared(hwnd);
+    }
+    let attached = current_thread != foreground_thread
+        && AttachThreadInput(current_thread, foreground_thread, true).as_bool();
+    if current_thread != foreground_thread && !attached {
+        return denied_or_disappeared(hwnd);
+    }
+
+    let _ = BringWindowToTop(hwnd);
+    let _ = SetForegroundWindow(hwnd);
+    if attached {
+        let _ = AttachThreadInput(current_thread, foreground_thread, false);
+    }
+
+    if GetForegroundWindow() == hwnd {
+        ForegroundRequest::Confirmed
+    } else {
+        denied_or_disappeared(hwnd)
+    }
+}
+
+fn foreground_request_error(request: ForegroundRequest) -> trushar::control::ControlError {
+    let (code, message) = match request {
+        ForegroundRequest::TargetDisappeared => (
+            trushar::control::ErrorCode::TargetDisappeared,
+            "the target EQ window is no longer loaded",
+        ),
+        ForegroundRequest::TargetUnresponsive => (
+            trushar::control::ErrorCode::ActivationFailed,
+            "the target EQ window is not responding",
+        ),
+        ForegroundRequest::Denied => (
+            trushar::control::ErrorCode::ActivationFailed,
+            "Windows did not bring the target EQ window to the foreground",
+        ),
+        ForegroundRequest::Confirmed => (
+            trushar::control::ErrorCode::ActivationFailed,
+            "the target EQ window activation failed",
+        ),
+    };
+    trushar::control::ControlError::new(code, message)
+}
+
 /// Swap to the window with the given stable number (1-based).
 /// Called from hotkey handlers.
 pub unsafe fn swap_to_number(number: usize) {
@@ -1844,10 +1953,9 @@ pub unsafe fn activate_pid(
         ));
     };
     if s.active_pid == Some(target_pid) {
-        return Ok(trushar::control::CommandOutcome::Activated {
-            status: trushar::control::ActivationStatus::AlreadyActive,
-            foreground_confirmed: GetForegroundWindow() == target_window.hwnd,
-        });
+        let target_hwnd = target_window.hwnd;
+        let _ = s;
+        return reassert_active_foreground(target_hwnd);
     }
     let Some(pip_index) = s.pip_order.iter().position(|pid| *pid == target_pid) else {
         return Err(trushar::control::ControlError::new(
@@ -1857,6 +1965,26 @@ pub unsafe fn activate_pid(
     };
     let _ = s;
     swap_to(pip_index)
+}
+
+unsafe fn reassert_active_foreground(
+    target_hwnd: HWND,
+) -> Result<trushar::control::CommandOutcome, trushar::control::ControlError> {
+    if IN_OVERLAY.replace(true) {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::InternalError,
+            "overlay is already handling a window transition",
+        ));
+    }
+    let request = request_foreground(target_hwnd);
+    IN_OVERLAY.set(false);
+    if request != ForegroundRequest::Confirmed {
+        return Err(foreground_request_error(request));
+    }
+    Ok(trushar::control::CommandOutcome::Activated {
+        status: trushar::control::ActivationStatus::AlreadyActive,
+        foreground_confirmed: true,
+    })
 }
 
 unsafe fn swap_to(
@@ -1892,62 +2020,53 @@ unsafe fn swap_to_guarded(
             "the target disappeared before activation",
         ));
     }
-    let Some(old_active_pid) = s.active_pid else {
+    if s.active_pid.is_none() {
         return Err(trushar::control::ControlError::new(
             trushar::control::ErrorCode::ActivationFailed,
             "there is no active EQ client to exchange",
         ));
-    };
+    }
     let new_active_pid = s.pip_order[pip_index];
+    let Some(new_active_hwnd) = s
+        .eq_windows
+        .iter()
+        .find(|window| window.pid == new_active_pid)
+        .map(|window| window.hwnd)
+    else {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::TargetDisappeared,
+            "the target disappeared before activation",
+        ));
+    };
 
+    let request = request_foreground(new_active_hwnd);
+    if request != ForegroundRequest::Confirmed {
+        return Err(foreground_request_error(request));
+    }
+
+    let previous_active_pid = s.active_pid;
+    let previous_pip_order = s.pip_order.clone();
     if !exchange_active_with_pip(&mut s.active_pid, &mut s.pip_order, new_active_pid) {
         return Err(trushar::control::ControlError::new(
             trushar::control::ErrorCode::InternalError,
             "the active/PiP partition changed during activation",
         ));
     }
-    crate::broadcast::set_active_pid(new_active_pid);
+    // Confirm again after the pure partition exchange but before any detached
+    // style work. Rollback is then limited to in-memory state and cannot race
+    // asynchronous Alt-Tab style changes.
+    let final_request = request_foreground(new_active_hwnd);
+    if final_request != ForegroundRequest::Confirmed {
+        s.active_pid = previous_active_pid;
+        s.pip_order = previous_pip_order;
+        return Err(foreground_request_error(final_request));
+    }
 
+    crate::broadcast::set_active_pid(new_active_pid);
     if config::Config::load().auto_order {
         apply_auto_order(s);
     }
-
     apply_alt_tab_hiding(s);
-
-    if let Some(w) = s.eq_windows.iter().find(|w| w.pid == new_active_pid) {
-        // SWP_ASYNCWINDOWPOS posts the z-order change instead of sending
-        // synchronous WM_WINDOWPOSCHANGING/CHANGED — won't block on a
-        // hung target (e.g. EQ zoning). SetForegroundWindow is already
-        // async for cross-thread calls (posts activation, changes input
-        // queue routing immediately in kernel mode). No AttachThreadInput
-        // — that converts the async call to synchronous.
-        let _ = SetWindowPos(
-            w.hwnd,
-            HWND_TOP,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS,
-        );
-        let _ = SetForegroundWindow(w.hwnd);
-
-        // If the target is hung, SWP_ASYNCWINDOWPOS can't take effect
-        // until it processes messages. Make it visible immediately by
-        // pushing the old active window to the bottom instead.
-        if let Some(old) = s.eq_windows.iter().find(|w| w.pid == old_active_pid) {
-            let _ = SetWindowPos(
-                old.hwnd,
-                HWND_BOTTOM,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-        }
-    }
-
     rebuild_thumbnails(s);
     update_visibility(s);
 
@@ -1964,16 +2083,11 @@ unsafe fn swap_to_guarded(
         ));
     };
     show_toast_inner(s, &toast_label);
-    let foreground_confirmed = s
-        .eq_windows
-        .iter()
-        .find(|window| window.pid == new_active_pid)
-        .is_some_and(|window| GetForegroundWindow() == window.hwnd);
     debug_assert_client_partition(s);
     publish_control_state(s);
     Ok(trushar::control::CommandOutcome::Activated {
         status: trushar::control::ActivationStatus::Activated,
-        foreground_confirmed,
+        foreground_confirmed: true,
     })
 }
 

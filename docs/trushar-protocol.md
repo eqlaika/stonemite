@@ -171,7 +171,7 @@ Every successful request returns the authoritative current snapshot as well as a
 }
 ```
 
-Activation status is `activated` or `already_active`. `foreground_confirmed` reports whether Windows identified the requested HWND as foreground immediately after the existing asynchronous foreground request; `false` does not falsely claim OS confirmation even though Stonemite applied its internal active/PiP exchange.
+Activation status is `activated` or `already_active`. A successful activation is returned only after Windows identifies the requested HWND as foreground, so production success results set `foreground_confirmed` to `true`; the field remains in protocol v1 for compatibility. If Windows denies foreground acquisition or the target is unresponsive, Stonemite returns `activation_failed` without applying a speculative active/PiP exchange. A target HWND that disappears during acquisition returns `target_disappeared`.
 
 A completed input operation returns `{"type":"input_delivered","input":"text|keys","strokes":N}`. This confirms that Stonemite wrote and released every requested stroke through the intended live process's shared-memory channel. It does not claim that EQ accepted the input or performed a resulting action.
 
