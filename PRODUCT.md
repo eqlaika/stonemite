@@ -58,7 +58,7 @@ Stonemite derives character identity from the running EQ clients and controls an
 - `target/tmp/stonemite-stream-deck-demo.html` demonstrates the intended key composition and state language.
 - `app/assets/app.png` and `app/assets/class_icons/` contain the real product and class artwork.
 - `app/src/overlay.rs` contains the six slot and badge palettes used by Stonemite.
-- `docs/trushar-protocol.md` is the normative integration contract.
+- `trushar/README.md` is the normative integration contract.
 - `trushar/tests/control.rs` and `trushar/tests/network.rs` exercise the state/control and transport seams.
 - There are no user testimonials, performance claims, or observed in-game outcome signals to present.
 
