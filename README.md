@@ -64,7 +64,11 @@ The app checks for updates against [eqlaika/stonemite](https://github.com/eqlaik
 
 **When to use ISBoxer:** You need mouse broadcasting, round-robin input, or you're already comfortable with the Inner Space ecosystem.
 
-## Auto-login
+## Stonemite is not an automation tool
+
+Stonemite does not automate gameplay. Every gameplay input must originate from an immediate physical user action; Stonemite never decides when an action should occur. Sequences, timers, loops, game-state reactions, and other forms of automated or unattended gameplay are intentionally unsupported. Pull requests that add these capabilities will not be accepted. Stonemite is designed to comply fully with EverQuest's Terms of Service and EULA.
+
+## Account login
 
 Stonemite can launch your EQ accounts and log them in automatically — no patcher, no typing passwords, no clicking through server select. Add your accounts in Settings > Accounts, and Stonemite handles the rest.
 
