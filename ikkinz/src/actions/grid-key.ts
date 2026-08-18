@@ -13,7 +13,7 @@ import { GridKeyController } from "./grid-key-controller";
 
 export type { PluginSettings } from "./grid-key-controller";
 
-@action({ UUID: "com.laikasoft.ikkinz.grid-key" })
+@action({ UUID: "co.laikasoft.ikkinz.grid-key" })
 export class GridKeyAction extends SingletonAction {
   readonly #controller: GridKeyController;
 

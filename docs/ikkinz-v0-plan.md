@@ -32,7 +32,7 @@ Create `ikkinz/` with:
 - `src/render/assets.generated.ts` — generated app/class PNG data URLs sourced from `app/assets/`.
 - `src/types/trushar.ts` — strict wire types and runtime parsers that tolerate additive fields but reject invalid required fields.
 - `src/ui/` plus the compiled plugin `ui/` — property inspector for address, six-digit pairing, reconnect, forget-device, and status.
-- `com.laikasoft.ikkinz.sdPlugin/` — manifest, built bundle, local `sdpi-components.js`, icons, and the bundled Mobile profile.
+- `co.laikasoft.ikkinz.sdPlugin/` — manifest, built bundle, local `sdpi-components.js`, icons, and the bundled Mobile profile.
 
 Use plugin-wide global settings for `{ address, authToken }`. A six-digit code is sent from the property inspector to the Node application layer and is never persisted. The Node layer performs pairing because browser-originated pairing is correctly rejected by Stonemite and authenticated WebSocket upgrades need an `Authorization` header.
 
@@ -49,7 +49,7 @@ Use plugin-wide global settings for `{ address, authToken }`. A six-digit code i
 
 ## Packaging and profile
 
-- Plugin UUID: `com.laikasoft.ikkinz`; action UUID: `com.laikasoft.ikkinz.grid-key`.
+- Plugin UUID: `co.laikasoft.ikkinz`; action UUID: `co.laikasoft.ikkinz.grid-key`.
 - Node runtime 24, SDK version 3, Stream Deck minimum 7.4 (latest schema currently documented), OS entries for macOS and Windows because Stream Deck Desktop may run on either.
 - One action is repeated across all 15 slots; logical view/state changes redraw those instances and never switch Stream Deck profiles.
 - Keep the action visible in the action list so a user can repair a profile manually.

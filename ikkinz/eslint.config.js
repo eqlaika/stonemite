@@ -4,7 +4,7 @@ import tseslint from "typescript-eslint";
 export default tseslint.config(
   {
     ignores: [
-      "com.laikasoft.ikkinz.sdPlugin/bin/**",
+      "co.laikasoft.ikkinz.sdPlugin/bin/**",
       "dist/**",
       "src/render/assets.generated.ts",
     ],

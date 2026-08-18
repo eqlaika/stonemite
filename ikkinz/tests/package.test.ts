@@ -26,7 +26,7 @@ describe("release inputs", () => {
     const manifest = JSON.parse(
       await readFile(
         new URL(
-          "../com.laikasoft.ikkinz.sdPlugin/manifest.json",
+          "../co.laikasoft.ikkinz.sdPlugin/manifest.json",
           import.meta.url,
         ),
         "utf8",

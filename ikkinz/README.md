@@ -38,13 +38,13 @@ npm run build
 npm run validate
 ```
 
-The asset step generates data URLs from `../app/assets/app.png` and `../app/assets/class_icons/`; the generated TypeScript file is intentionally ignored. The Stream Deck bundle is written to `com.laikasoft.ikkinz.sdPlugin/bin/`.
+The asset step generates data URLs from `../app/assets/app.png` and `../app/assets/class_icons/`; the generated TypeScript file is intentionally ignored. The Stream Deck bundle is written to `co.laikasoft.ikkinz.sdPlugin/bin/`.
 
 To link a development build after validation:
 
 ```sh
 npx streamdeck dev
-npx streamdeck link com.laikasoft.ikkinz.sdPlugin
+npx streamdeck link co.laikasoft.ikkinz.sdPlugin
 npm run watch
 ```
 

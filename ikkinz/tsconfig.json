@@ -13,5 +13,5 @@
     "types": ["node", "vitest/globals"]
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"],
-  "exclude": ["node_modules", "com.laikasoft.ikkinz.sdPlugin/bin"]
+  "exclude": ["node_modules", "co.laikasoft.ikkinz.sdPlugin/bin"]
 }

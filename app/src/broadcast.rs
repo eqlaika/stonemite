@@ -13,7 +13,8 @@ use windows::Win32::System::Memory::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, SetWindowsHookExW,
-    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
+    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, WH_KEYBOARD_LL, WM_KEYDOWN,
+    WM_SYSKEYDOWN,
 };
 
 use crate::config::Config;
@@ -408,8 +409,17 @@ fn combined_key_value(broadcast: bool, targeted: bool) -> u8 {
     }
 }
 
+/// Convert the physical scan code from the low-level hook to a DirectInput
+/// keyboard offset. DirectInput marks E0-prefixed keys by setting bit 7;
+/// without it, navigation keys are mistaken for their numpad counterparts.
+fn direct_input_scan_code(scan_code: u32, extended: bool) -> Option<u8> {
+    let scan = u8::try_from(scan_code).ok()?;
+    let scan = if extended { scan | 0x80 } else { scan };
+    (1..=254).contains(&scan).then_some(scan)
+}
+
 /// Low-level keyboard hook callback.
-/// Converts VK to DIK scan code, writes to all background target shm regions.
+/// Converts physical scan codes to DIK offsets and writes to background targets.
 unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let Some(s) = state().as_mut() else {
         return CallNextHookEx(HHOOK(std::ptr::null_mut()), code, wparam, lparam);
@@ -441,11 +451,11 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
         s.eq_was_foreground = true;
 
         let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-        let vk = kb.vkCode;
         let msg = wparam.0 as u32;
 
-        let scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) as u8;
-        if scan > 0 && scan < 255 && passes_filter(s, scan) {
+        if let Some(scan) = direct_input_scan_code(kb.scanCode, kb.flags.contains(LLKHF_EXTENDED))
+            .filter(|&scan| passes_filter(s, scan))
+        {
             let pressed = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
             let value: u8 = if pressed { 0x80 } else { 0x00 };
 
@@ -466,6 +476,22 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extended_navigation_keys_use_directinput_offsets() {
+        assert_eq!(direct_input_scan_code(0x48, true), Some(0xc8));
+        assert_eq!(direct_input_scan_code(0x50, true), Some(0xd0));
+        assert_eq!(direct_input_scan_code(0x4b, true), Some(0xcb));
+        assert_eq!(direct_input_scan_code(0x4d, true), Some(0xcd));
+        assert_eq!(direct_input_scan_code(0x48, false), Some(0x48));
+    }
+
+    #[test]
+    fn invalid_hook_scan_codes_are_ignored() {
+        assert_eq!(direct_input_scan_code(0, false), None);
+        assert_eq!(direct_input_scan_code(0x7f, true), None);
+        assert_eq!(direct_input_scan_code(0x100, false), None);
+    }
 
     #[test]
     fn broadcast_and_targeted_sources_cannot_release_each_other() {

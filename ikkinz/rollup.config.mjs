@@ -6,7 +6,7 @@ import path from "node:path";
 import url from "node:url";
 
 const isWatching = Boolean(process.env.ROLLUP_WATCH);
-const sdPlugin = "com.laikasoft.ikkinz.sdPlugin";
+const sdPlugin = "co.laikasoft.ikkinz.sdPlugin";
 
 /** @type {import("rollup").RollupOptions} */
 export default {

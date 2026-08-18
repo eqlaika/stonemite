@@ -2,8 +2,8 @@
 /dist
 /ikkinz/node_modules/
 /ikkinz/dist/
-/ikkinz/com.laikasoft.ikkinz.sdPlugin/bin/
-/ikkinz/com.laikasoft.ikkinz.sdPlugin/logs/
+/ikkinz/co.laikasoft.ikkinz.sdPlugin/bin/
+/ikkinz/co.laikasoft.ikkinz.sdPlugin/logs/
 /ikkinz/src/render/assets.generated.ts
 tools/*/target/
 .claude/

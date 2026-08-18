@@ -1,6 +1,6 @@
 node_modules/
 dist/
-com.laikasoft.ikkinz.sdPlugin/bin/
+co.laikasoft.ikkinz.sdPlugin/bin/
 src/render/assets.generated.ts
-com.laikasoft.ikkinz.sdPlugin/ui/sdpi-components.js
+co.laikasoft.ikkinz.sdPlugin/ui/sdpi-components.js
 package-lock.json

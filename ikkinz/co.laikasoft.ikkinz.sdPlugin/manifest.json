@@ -3,7 +3,7 @@
   "Name": "Ikkinz",
   "Version": "0.1.0.0",
   "Author": "Laikasoft",
-  "UUID": "com.laikasoft.ikkinz",
+  "UUID": "co.laikasoft.ikkinz",
   "Description": "Live Stonemite character switching and broadcast control.",
   "Category": "Ikkinz",
   "CategoryIcon": "imgs/plugin/category-icon",
@@ -30,7 +30,7 @@
   "Actions": [
     {
       "Name": "Grid key",
-      "UUID": "com.laikasoft.ikkinz.grid-key",
+      "UUID": "co.laikasoft.ikkinz.grid-key",
       "Icon": "imgs/actions/grid-key/icon",
       "Tooltip": "A position-aware key in the Ikkinz 5 by 3 dashboard.",
       "PropertyInspectorPath": "ui/pairing.html",

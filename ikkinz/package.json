@@ -10,7 +10,7 @@
   "scripts": {
     "assets": "node scripts/generate-assets.mjs",
     "build": "npm run assets && rollup -c",
-    "watch": "npm run assets && rollup -c -w --watch.onEnd=\"streamdeck restart com.laikasoft.ikkinz\"",
+    "watch": "npm run assets && rollup -c -w --watch.onEnd=\"streamdeck restart co.laikasoft.ikkinz\"",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint src tests scripts --max-warnings=0",

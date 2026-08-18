@@ -10,7 +10,7 @@ if (command !== "validate" && command !== "pack") {
 }
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const pluginName = "com.laikasoft.ikkinz.sdPlugin";
+const pluginName = "co.laikasoft.ikkinz.sdPlugin";
 const source = path.join(root, pluginName);
 const cli = path.join(root, "node_modules/@elgato/cli/bin/streamdeck.mjs");
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "ikkinz-plugin-"));
@@ -22,7 +22,7 @@ try {
   const args = [cli, command, temporaryPlugin];
   if (command === "pack") {
     const dist = path.join(root, "dist");
-    const artifact = path.join(dist, "com.laikasoft.ikkinz.streamDeckPlugin");
+    const artifact = path.join(dist, "co.laikasoft.ikkinz.streamDeckPlugin");
     await mkdir(dist, { recursive: true });
     await rm(artifact, { force: true });
     args.push("--output", dist, "--force");
