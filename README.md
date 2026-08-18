@@ -10,6 +10,9 @@ EverQuest multiboxing tool for Windows.
 
 Stonemite makes multiboxing EQ easy — PiP overlays with click-to-swap, swap hotkeys, key broadcasting, auto-login, automatic character detection, and a drag-and-drop layout editor. No subscription, no setup wizard.
 
+> [!WARNING]
+> **Stonemite is not an automation tool.** Stonemite does not automate gameplay. Every gameplay input must originate from an immediate physical user action; Stonemite never decides when an action should occur. Sequences, timers, loops, game-state reactions, and other forms of automated or unattended gameplay are intentionally unsupported. Pull requests that add these capabilities will not be accepted. Stonemite is designed to comply fully with EverQuest's Terms of Service and EULA.
+
 ## Install
 
 Download the latest release from [GitHub Releases](https://github.com/eqlaika/stonemite/releases):
@@ -64,10 +67,6 @@ The app checks for updates against [eqlaika/stonemite](https://github.com/eqlaik
 
 **When to use ISBoxer:** You need mouse broadcasting, round-robin input, or you're already comfortable with the Inner Space ecosystem.
 
-## Stonemite is not an automation tool
-
-Stonemite does not automate gameplay. Every gameplay input must originate from an immediate physical user action; Stonemite never decides when an action should occur. Sequences, timers, loops, game-state reactions, and other forms of automated or unattended gameplay are intentionally unsupported. Pull requests that add these capabilities will not be accepted. Stonemite is designed to comply fully with EverQuest's Terms of Service and EULA.
-
 ## Account login
 
 Stonemite can launch your EQ accounts and log them in automatically — no patcher, no typing passwords, no clicking through server select. Add your accounts in Settings > Accounts, and Stonemite handles the rest.
@@ -88,11 +87,9 @@ Config lives at `%APPDATA%\Stonemite\config.toml`. See [config/example.toml](con
 
 ## Disclaimer
 
-Stonemite uses standard Windows DWM thumbnail APIs to display copies of your game windows — the same mechanism Windows uses for taskbar previews and Alt-Tab. The DLL proxy handles character detection (reading log file names), key broadcasting (forwarding keystrokes to background windows), and auto-login (typing credentials into the game client).
+Stonemite uses standard Windows DWM thumbnail APIs to display copies of game windows. Its DLL proxy intercepts DirectInput only to discover EQ log paths and forward user-initiated keystrokes. It does not intercept rendering, read or modify game memory, or inspect network traffic. It cannot run sequences, react to game state, or otherwise automate gameplay.
 
-Stonemite is substantially less invasive than [ISBoxer](https://isboxer.com/multiboxing/is-isboxer-allowed), which injects into the rendering pipeline and intercepts DirectX calls, and has been widely used for years without bans. Stonemite's DLL proxy only intercepts DirectInput to read log paths and forward keystrokes. It does not touch rendering, read or modify game memory, or sniff network traffic.
-
-Use Stonemite at your own risk. The author is not responsible for any account actions including suspensions, bans, or other consequences resulting from its use.
+Stonemite is intentionally designed to minimize account risk by avoiding automation and other invasive techniques. The risk of account action is believed to be low when the app is used as intended, but Daybreak has final authority over its rules and enforcement. As with any third-party tool, use Stonemite at your own discretion.
 
 ## License
 
