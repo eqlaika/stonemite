@@ -125,9 +125,20 @@ fn main() {
         AddVectoredExceptionHandler(1, crash_handler);
     }
 
+    let args: Vec<String> = std::env::args().collect();
+
+    // Exit an existing tray instance through its normal shutdown path. Build
+    // tooling uses this instead of terminating the process and its LAN socket.
+    if args.iter().any(|arg| arg == "--quit") {
+        if !tray::quit_existing_instance() {
+            std::process::exit(1);
+        }
+        return;
+    }
+
     // `--settings` flag: run the settings dialog as a standalone window and exit.
     // The tray app spawns us with this flag so eframe gets a clean main thread.
-    if std::env::args().any(|a| a == "--settings") {
+    if args.iter().any(|arg| arg == "--settings") {
         settings_dialog::run_standalone();
         return;
     }

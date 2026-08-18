@@ -55,9 +55,9 @@ release new_version: (bump new_version) build-release
     @Write-Host "  3. git push && git push --tags"
     @Write-Host "  4. gh release create v{{new_version}} dist/{{zip_name}} dist/stonemite-{{new_version}}-setup.exe --title 'v{{new_version}}' --notes-file dist/release-notes.md"
 
-# Quit a running instance
+# Quit a running instance through its message loop so LAN sockets close cleanly
 quit:
-    @try { Stop-Process -Name stonemite -ErrorAction Stop } catch { }; exit 0
+    @$running = Get-Process -Name stonemite -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1; if (-not $running) { exit 0 }; $helper = Start-Process -FilePath $running.Path -ArgumentList "--quit" -Wait -PassThru; if ($helper.ExitCode -ne 0) { throw "Stonemite did not exit cleanly; refusing to force-terminate it" }
 
 # Build debug, quitting any running instance first
 run: quit build

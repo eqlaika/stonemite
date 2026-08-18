@@ -354,6 +354,28 @@ fn next_available_number(eq_windows: &[EqWindow]) -> usize {
     n
 }
 
+/// Exchange a PiP client with the active client while preserving the partition.
+/// Returns false when the target is already active or is not currently a PiP.
+fn exchange_active_with_pip(
+    active_pid: &mut Option<u32>,
+    pip_order: &mut Vec<u32>,
+    target_pid: u32,
+) -> bool {
+    if *active_pid == Some(target_pid) {
+        return false;
+    }
+    let Some(position) = pip_order.iter().position(|pid| *pid == target_pid) else {
+        return false;
+    };
+    if let Some(old_active) = *active_pid {
+        pip_order[position] = old_active;
+    } else {
+        pip_order.remove(position);
+    }
+    *active_pid = Some(target_pid);
+    true
+}
+
 /// Sort pip_order so windows appear in slot-number order (1, 2, 3, …).
 fn apply_auto_order(s: &mut OverlayState) {
     s.pip_order.sort_by_key(|pid| {
@@ -363,6 +385,19 @@ fn apply_auto_order(s: &mut OverlayState) {
             .map_or(usize::MAX, |w| w.number)
     });
 }
+
+#[cfg(debug_assertions)]
+fn debug_assert_client_partition(s: &OverlayState) {
+    let known: HashSet<u32> = s.eq_windows.iter().map(|window| window.pid).collect();
+    let unique_pips: HashSet<u32> = s.pip_order.iter().copied().collect();
+    debug_assert_eq!(unique_pips.len(), s.pip_order.len());
+    debug_assert!(s.active_pid.is_none_or(|pid| known.contains(&pid)));
+    debug_assert!(s.active_pid.is_none_or(|pid| !unique_pips.contains(&pid)));
+    debug_assert!(s.pip_order.iter().all(|pid| known.contains(pid)));
+}
+
+#[cfg(not(debug_assertions))]
+fn debug_assert_client_partition(_s: &OverlayState) {}
 
 /// Save original extended style and apply WS_EX_TOOLWINDOW to hide from Alt-Tab.
 unsafe fn hide_window_from_alt_tab(s: &mut OverlayState, hwnd: HWND) {
@@ -989,6 +1024,24 @@ unsafe fn poll_inner_guarded() {
                 }
             }
         }
+        // A foreground WinEvent can be suppressed while an overlay transaction
+        // is guarded. Reconcile on every poll so that skipped callbacks cannot
+        // leave the active/PiP partition stale indefinitely.
+        let foreground_pid = {
+            let foreground = GetForegroundWindow();
+            s.eq_windows
+                .iter()
+                .find(|window| window.hwnd == foreground)
+                .map(|window| window.pid)
+        };
+        let foreground_changed = foreground_pid.is_some_and(|pid| {
+            let changed = exchange_active_with_pip(&mut s.active_pid, &mut s.pip_order, pid);
+            if changed && config::Config::load().auto_order {
+                apply_auto_order(s);
+            }
+            crate::broadcast::set_active_pid(pid);
+            changed
+        });
         // Poll trusik shared memory for character names.
         if s.trusik_enabled {
             trusik_poll_characters(s);
@@ -1008,7 +1061,7 @@ unsafe fn poll_inner_guarded() {
             .map(|w| w.hwnd)
             .unwrap_or(s.active_label_hwnd);
         let new_dpi = get_dpi_scale(dpi_hwnd);
-        if hwnd_changed || (new_dpi - s.dpi_scale).abs() > 0.001 {
+        if foreground_changed || hwnd_changed || (new_dpi - s.dpi_scale).abs() > 0.001 {
             s.dpi_scale = new_dpi;
             rebuild_thumbnails(s);
         } else {
@@ -1016,6 +1069,7 @@ unsafe fn poll_inner_guarded() {
         }
         apply_alt_tab_hiding(s);
         update_visibility(s);
+        debug_assert_client_partition(s);
         publish_control_state(s);
         return;
     }
@@ -1078,16 +1132,12 @@ unsafe fn poll_inner_guarded() {
     }
 
     if let Some(fg) = fg_pid {
-        if s.active_pid != Some(fg) {
-            if let Some(pos) = s.pip_order.iter().position(|p| *p == fg) {
-                if let Some(old_active) = s.active_pid {
-                    s.pip_order[pos] = old_active;
-                } else {
-                    s.pip_order.remove(pos);
-                }
-                s.active_pid = Some(fg);
-            }
+        if exchange_active_with_pip(&mut s.active_pid, &mut s.pip_order, fg)
+            && config::Config::load().auto_order
+        {
+            apply_auto_order(s);
         }
+        crate::broadcast::set_active_pid(fg);
     }
 
     s.pip_order.truncate(MAX_PIPS);
@@ -1116,6 +1166,7 @@ unsafe fn poll_inner_guarded() {
     apply_alt_tab_hiding(s);
     rebuild_thumbnails(s);
     update_visibility(s);
+    debug_assert_client_partition(s);
     publish_control_state(s);
 }
 
@@ -1340,6 +1391,14 @@ unsafe fn compute_positions(s: &OverlayState) -> (Vec<RECT>, i32, i32) {
 // ---------------------------------------------------------------------------
 
 unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
+    // Every rebuild creates and destroys Win32 windows, which can pump messages.
+    // Preserve an outer transaction guard or establish one for unguarded UI paths.
+    let was_guarded = IN_OVERLAY.replace(true);
+    rebuild_thumbnails_guarded(s);
+    IN_OVERLAY.set(was_guarded);
+}
+
+unsafe fn rebuild_thumbnails_guarded(s: &mut OverlayState) {
     // Destroy existing PiP windows and unregister thumbnails.
     for pw in s.pip_windows.drain(..) {
         if pw.thumb != 0 {
@@ -1726,22 +1785,18 @@ unsafe extern "system" fn foreground_event_proc(
     };
 
     let fg = GetForegroundWindow();
-    if let Some(fg_eq) = s.eq_windows.iter().find(|w| w.hwnd == fg) {
-        let fg_pid = fg_eq.pid;
-        if s.active_pid != Some(fg_pid) {
-            if let Some(pos) = s.pip_order.iter().position(|p| *p == fg_pid) {
-                if let Some(old_active) = s.active_pid {
-                    s.pip_order[pos] = old_active;
-                } else {
-                    s.pip_order.remove(pos);
-                }
-                s.active_pid = Some(fg_pid);
-                if config::Config::load().auto_order {
-                    apply_auto_order(s);
-                }
-                apply_alt_tab_hiding(s);
-                rebuild_thumbnails(s);
+    if let Some(fg_pid) = s
+        .eq_windows
+        .iter()
+        .find(|window| window.hwnd == fg)
+        .map(|window| window.pid)
+    {
+        if exchange_active_with_pip(&mut s.active_pid, &mut s.pip_order, fg_pid) {
+            if config::Config::load().auto_order {
+                apply_auto_order(s);
             }
+            apply_alt_tab_hiding(s);
+            rebuild_thumbnails(s);
         }
         // Keep broadcast suppression synchronized with WinEvent foreground
         // changes immediately instead of waiting for the next process poll.
@@ -1749,6 +1804,7 @@ unsafe extern "system" fn foreground_event_proc(
     }
 
     update_visibility(s);
+    debug_assert_client_partition(s);
     publish_control_state(s);
     IN_OVERLAY.set(false);
 }
@@ -1806,7 +1862,24 @@ pub unsafe fn activate_pid(
 unsafe fn swap_to(
     pip_index: usize,
 ) -> Result<trushar::control::CommandOutcome, trushar::control::ControlError> {
-    let Some(s) = state().as_mut() else {
+    // DWM and window-management calls below can pump messages. Guard the whole
+    // state transition so a reentrant foreground callback cannot alias and
+    // mutate OverlayState while the active/PiP partition is being rebuilt.
+    if IN_OVERLAY.replace(true) {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::InternalError,
+            "overlay is already handling a window transition",
+        ));
+    }
+    let result = swap_to_guarded(pip_index);
+    IN_OVERLAY.set(false);
+    result
+}
+
+unsafe fn swap_to_guarded(
+    pip_index: usize,
+) -> Result<trushar::control::CommandOutcome, trushar::control::ControlError> {
+    let Some(s) = state_unguarded().as_mut() else {
         return Err(trushar::control::ControlError::new(
             trushar::control::ErrorCode::InternalError,
             "overlay is unavailable",
@@ -1827,8 +1900,12 @@ unsafe fn swap_to(
     };
     let new_active_pid = s.pip_order[pip_index];
 
-    s.pip_order[pip_index] = old_active_pid;
-    s.active_pid = Some(new_active_pid);
+    if !exchange_active_with_pip(&mut s.active_pid, &mut s.pip_order, new_active_pid) {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::InternalError,
+            "the active/PiP partition changed during activation",
+        ));
+    }
     crate::broadcast::set_active_pid(new_active_pid);
 
     if config::Config::load().auto_order {
@@ -1892,6 +1969,7 @@ unsafe fn swap_to(
         .iter()
         .find(|window| window.pid == new_active_pid)
         .is_some_and(|window| GetForegroundWindow() == window.hwnd);
+    debug_assert_client_partition(s);
     publish_control_state(s);
     Ok(trushar::control::CommandOutcome::Activated {
         status: trushar::control::ActivationStatus::Activated,
@@ -4064,6 +4142,24 @@ mod tests {
             server: None,
             class: None,
         }
+    }
+
+    #[test]
+    fn rapid_out_of_order_foreground_changes_preserve_the_client_partition() {
+        let mut active = Some(1);
+        let mut pips = vec![2, 3, 4];
+
+        for target in [2, 3, 2, 4, 3, 1, 4] {
+            assert!(exchange_active_with_pip(&mut active, &mut pips, target));
+            let mut partition = vec![active.expect("an active client")];
+            partition.extend(pips.iter().copied());
+            partition.sort_unstable();
+            assert_eq!(partition, vec![1, 2, 3, 4]);
+        }
+
+        let before = (active, pips.clone());
+        assert!(!exchange_active_with_pip(&mut active, &mut pips, 99));
+        assert_eq!((active, pips), before);
     }
 
     #[test]

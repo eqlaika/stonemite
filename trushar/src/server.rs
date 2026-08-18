@@ -33,6 +33,41 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const CONNECTION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_IN_FLIGHT_COMMANDS: usize = 16;
 
+#[cfg(windows)]
+fn prevent_listener_socket_inheritance(listener: &TcpListener) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawSocket;
+    prevent_raw_socket_inheritance(listener.as_raw_socket())
+}
+
+#[cfg(not(windows))]
+fn prevent_listener_socket_inheritance(_listener: &TcpListener) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn prevent_stream_socket_inheritance(stream: &TcpStream) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawSocket;
+    prevent_raw_socket_inheritance(stream.as_raw_socket())
+}
+
+#[cfg(not(windows))]
+fn prevent_stream_socket_inheritance(_stream: &TcpStream) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn prevent_raw_socket_inheritance(socket: std::os::windows::io::RawSocket) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+
+    let handle = socket as usize as *mut std::ffi::c_void;
+    let succeeded = unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
+    if succeeded == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct ServerConfig {
     pub bind: SocketAddr,
@@ -291,6 +326,12 @@ async fn run_server(
             return;
         }
     };
+    if let Err(error) = prevent_listener_socket_inheritance(&listener) {
+        let _ = startup.send(Err(StartError::Runtime(format!(
+            "failed to protect the listener from child-process inheritance: {error}"
+        ))));
+        return;
+    }
     let local_addr = match listener.local_addr() {
         Ok(address) => address,
         Err(error) => {
@@ -318,6 +359,9 @@ async fn run_server(
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, peer)) => {
+                        if prevent_stream_socket_inheritance(&stream).is_err() {
+                            continue;
+                        }
                         let config = config.clone();
                         let controller = controller.clone();
                         let pairing = pairing.clone();
@@ -811,6 +855,26 @@ pub fn is_non_loopback_or_wildcard(ip: IpAddr) -> bool {
 mod tests {
     use super::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
+
+    #[cfg(windows)]
+    #[test]
+    fn listener_socket_handle_is_not_inheritable() {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT};
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            prevent_listener_socket_inheritance(&listener).unwrap();
+            let handle = listener.as_raw_socket() as usize as *mut std::ffi::c_void;
+            let mut flags = 0;
+            assert_ne!(unsafe { GetHandleInformation(handle, &mut flags) }, 0);
+            assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+        });
+    }
 
     #[test]
     fn validates_loopback_ipv4_and_ipv6_without_authentication() {

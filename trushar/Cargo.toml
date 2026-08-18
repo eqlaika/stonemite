@@ -10,5 +10,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "rt", "sync", "time"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation"] }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "rt", "sync", "time"] }

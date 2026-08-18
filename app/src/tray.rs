@@ -1,7 +1,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS,
 };
@@ -10,11 +11,12 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconFromResourceEx, CreateMenu, CreatePopupMenu, CreateWindowExW,
-    DefWindowProcW, DestroyIcon, DestroyWindow, GetCursorPos, GetMessageW, KillTimer, PostMessageW,
-    PostQuitMessage, RegisterClassW, SetForegroundWindow, SetTimer, TrackPopupMenu, CS_HREDRAW,
-    CS_VREDRAW, LR_DEFAULTCOLOR, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
-    TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_TIMER,
-    WM_USER, WNDCLASSW, WS_EX_TOOLWINDOW,
+    DefWindowProcW, DestroyIcon, DestroyWindow, FindWindowW, GetCursorPos, GetMessageW,
+    GetWindowThreadProcessId, KillTimer, PostMessageW, PostQuitMessage, RegisterClassW,
+    SetForegroundWindow, SetTimer, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, LR_DEFAULTCOLOR,
+    MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_TIMER, WM_USER,
+    WNDCLASSW, WS_EX_TOOLWINDOW,
 };
 
 use crate::broadcast;
@@ -109,6 +111,31 @@ const POLL_INTERVAL_MS: u32 = 2000;
 const WM_UPDATE_AVAILABLE: u32 = WM_USER + 2;
 
 static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Ask an existing tray instance to exit through its normal message loop.
+/// This lets the trushar runtime close and join before the process disappears.
+pub fn quit_existing_instance() -> bool {
+    unsafe {
+        let Ok(hwnd) = FindWindowW(w!("StonemiteTrayClass"), w!("Stonemite")) else {
+            return false;
+        };
+        if hwnd.is_invalid() {
+            return false;
+        }
+        let mut process_id = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+        if process_id == 0 {
+            return false;
+        }
+        let Ok(process) = OpenProcess(PROCESS_SYNCHRONIZE, false, process_id) else {
+            return false;
+        };
+        let posted = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0)).is_ok();
+        let stopped = posted && WaitForSingleObject(process, 10_000).0 == 0;
+        let _ = CloseHandle(process);
+        stopped
+    }
+}
 
 /// Run the tray icon and message loop. Returns whether the application should relaunch.
 pub fn run() -> bool {

@@ -4296,6 +4296,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
