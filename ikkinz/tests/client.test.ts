@@ -154,7 +154,7 @@ describe("LAN pairing and commands", () => {
     expect(normalSocket?.readyState).toBe(1);
   });
 
-  it("sends exact-client text submission and semantic key chords", async () => {
+  it("sends exact-client number swaps, text submission, and semantic key chords", async () => {
     const server = await startServer();
     const requests: Array<Record<string, unknown>> = [];
     server.wss.on("connection", (socket) => {
@@ -169,11 +169,18 @@ describe("LAN pairing and commands", () => {
             type: "result",
             version: 1,
             request_id: request.request_id,
-            result: {
-              type: "input_delivered",
-              input: request.type === "send_text" ? "text" : "keys",
-              strokes: 1,
-            },
+            result:
+              request.type === "swap_window_numbers"
+                ? {
+                    type: "window_numbers_swapped",
+                    active_previous_number: 1,
+                    selected_previous_number: 2,
+                  }
+                : {
+                    type: "input_delivered",
+                    input: request.type === "send_text" ? "text" : "keys",
+                    strokes: 1,
+                  },
             state: stateFixture(),
           }),
         );
@@ -190,20 +197,26 @@ describe("LAN pairing and commands", () => {
     });
     await vi.waitFor(() => expect(server.wss.clients.size).toBe(1));
 
+    await client.swapWindowNumbers("serein-id");
     await client.sendText("leader-id", "/invite Serein", true);
     await client.sendKeys("serein-id", [
       { keys: ["left_control", "i"], hold_ms: 50, pause_ms: 40 },
     ]);
 
-    expect(requests).toHaveLength(2);
+    expect(requests).toHaveLength(3);
     expect(requests[0]).toMatchObject({
+      type: "swap_window_numbers",
+      version: 1,
+      target: { type: "client_id", client_id: "serein-id" },
+    });
+    expect(requests[1]).toMatchObject({
       type: "send_text",
       version: 1,
       client_id: "leader-id",
       text: "/invite Serein",
       submit: true,
     });
-    expect(requests[1]).toMatchObject({
+    expect(requests[2]).toMatchObject({
       type: "send_keys",
       version: 1,
       client_id: "serein-id",

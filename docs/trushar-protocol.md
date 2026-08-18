@@ -1,6 +1,6 @@
 # trushar WebSocket protocol
 
-`trushar` is Stonemite's generic semantic control/state interface. It provides current EQ-client state, pushed changes, exact activation, explicit broadcast enable/disable operations, and bounded input delivery to one exact loaded client. It has no client-hardware, layout, icon, button, or vendor protocol model. A future device-specific integration can use it as one ordinary client.
+`trushar` is Stonemite's generic semantic control/state interface. It provides current EQ-client state, pushed changes, exact activation, active-to-selected window-number swaps, explicit broadcast enable/disable operations, and bounded input delivery to one exact loaded client. It has no client-hardware, layout, icon, button, or vendor protocol model. A future device-specific integration can use it as one ordinary client.
 
 ## Endpoint and security
 
@@ -89,7 +89,7 @@ The server sends a complete `state` message immediately after a successful upgra
     ],
     "active_client_id": "client-0000000000000001",
     "broadcast": { "available": true, "enabled": false },
-    "capabilities": { "activate": true, "set_broadcast": true, "send_text": true, "send_keys": true }
+    "capabilities": { "activate": true, "swap_window_numbers": true, "set_broadcast": true, "send_text": true, "send_keys": true }
   }
 }
 ```
@@ -102,7 +102,7 @@ The server sends a complete `state` message immediately after a successful upgra
 
 `broadcast.available` is false when trusik/broadcast support was not initialized. In that state `enabled` is false, `set_broadcast` capability is false, and mutation requests return `broadcast_unavailable`.
 
-`send_text` and `send_keys` capabilities are true when at least one loaded client has `input_ready: true`. They require `trusik = true` but do not depend on whether broadcasting is enabled. Consumers must still check the selected client's `input_ready`; command-time validation is authoritative because readiness can change after a snapshot.
+`swap_window_numbers` is true when the server supports exchanging the active client's stable window number with one selected client without changing the foreground client. `send_text` and `send_keys` capabilities are true when at least one loaded client has `input_ready: true`. They require `trusik = true` but do not depend on whether broadcasting is enabled. Consumers must still check the selected client's `input_ready`; command-time validation is authoritative because readiness can change after a snapshot.
 
 ## Client requests
 
@@ -128,6 +128,14 @@ Window-number and identity targets are also available when useful:
 ```
 
 Identity matching is case-insensitive. Omitting `server` can be ambiguous when the same character name occurs on multiple servers; the command then returns `ambiguous_target`. Character name is never the only implicit activation key.
+
+Swap the active client's user-visible window number with an exact selected client. This does not activate either client or change the foreground window:
+
+```json
+{"type":"swap_window_numbers","version":1,"request_id":"swap-numbers-1","target":{"type":"client_id","client_id":"client-0000000000000002"}}
+```
+
+The same exact target forms accepted by `activate` are supported. Selecting the already-active client is a successful no-op. If there is no active client, the command returns `window_number_swap_failed`.
 
 Set broadcast state explicitly (there is no required read-modify-write toggle):
 
@@ -167,11 +175,13 @@ Every successful request returns the authoritative current snapshot as well as a
     "status": "activated",
     "foreground_confirmed": true
   },
-  "state": { "revision": 5, "clients": [], "active_client_id": null, "broadcast": { "available": false, "enabled": false }, "capabilities": { "activate": true, "set_broadcast": false, "send_text": false, "send_keys": false } }
+  "state": { "revision": 5, "clients": [], "active_client_id": null, "broadcast": { "available": false, "enabled": false }, "capabilities": { "activate": true, "swap_window_numbers": true, "set_broadcast": false, "send_text": false, "send_keys": false } }
 }
 ```
 
 Activation status is `activated` or `already_active`. A successful activation is returned only after Windows identifies the requested HWND as foreground and its window tree owns keyboard focus, so production success results set `foreground_confirmed` to `true`; the field remains in protocol v1 for compatibility. If Windows denies foreground or keyboard-focus acquisition, or the target is unresponsive, Stonemite returns `activation_failed` without applying a speculative active/PiP exchange. A target HWND that disappears during acquisition returns `target_disappeared`.
+
+A completed window-number swap returns `{"type":"window_numbers_swapped","active_previous_number":1,"selected_previous_number":3}` plus the authoritative state showing the exchanged numbers. The active client remains active. Equal previous numbers indicate the selected target was already active and no state changed.
 
 A completed input operation returns `{"type":"input_delivered","input":"text|keys","strokes":N}`. This confirms that Stonemite wrote and released every requested stroke through the intended live process's shared-memory channel. It does not claim that EQ accepted the input or performed a resulting action.
 
@@ -181,7 +191,7 @@ Errors have stable machine codes and concise messages:
 {"type":"error","version":1,"request_id":"activate-1","error":{"code":"client_not_found","message":"no loaded client matches the target"}}
 ```
 
-Version 1 defines: `malformed_request`, `unsupported_protocol_version`, `unauthorized` (HTTP upgrade failures use HTTP 401), `invalid_argument`, `client_not_found`, `ambiguous_target`, `target_disappeared`, `broadcast_unavailable`, `activation_failed`, `broadcast_operation_failed`, `input_unavailable`, `input_operation_failed`, `command_timeout`, and `internal_error`.
+Version 1 defines: `malformed_request`, `unsupported_protocol_version`, `unauthorized` (HTTP upgrade failures use HTTP 401), `invalid_argument`, `client_not_found`, `ambiguous_target`, `target_disappeared`, `broadcast_unavailable`, `activation_failed`, `window_number_swap_failed`, `broadcast_operation_failed`, `input_unavailable`, `input_operation_failed`, `command_timeout`, and `internal_error`.
 
 Unknown request types, invalid fields, and malformed JSON receive `malformed_request` without affecting other clients. Binary data messages receive a structured `malformed_request`; only UTF-8 JSON text is accepted. Text messages and individual frames are limited to 16 KiB. Oversized input closes the connection with WebSocket code 1009. Tungstenite handles matching Pong responses to Ping frames. On client Close the server completes the close exchange; on application shutdown it sends code 1001, stops accepting, drains connection tasks for a bounded interval, and joins the dedicated runtime thread before overlay/broadcast teardown.
 
@@ -193,7 +203,7 @@ The repository includes a generic interactive client. Start Stonemite, then from
 cargo run -p trushar --example client -- ws://127.0.0.1:19720/trushar/v1
 ```
 
-The initial snapshot prints immediately. Paste any request above as one line to get state, activate a currently listed ID, type `/who` into one exact current ID, send a bounded key chord, change broadcast state, and continue watching pushed updates.
+The initial snapshot prints immediately. Paste any request above as one line to get state, activate a currently listed ID, swap the active and selected window numbers, type `/who` into one exact current ID, send a bounded key chord, change broadcast state, and continue watching pushed updates.
 
 For an authenticated endpoint, set the token without putting it in the URL:
 

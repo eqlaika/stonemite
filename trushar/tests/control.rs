@@ -53,6 +53,7 @@ fn maps_zero_and_multiple_loaded_clients_without_confusing_window_number_with_la
     assert!(!mapped.clients[1].activatable);
     assert!(!mapped.clients[1].input_ready);
     assert!(mapped.clients[0].input_ready);
+    assert!(mapped.capabilities.swap_window_numbers);
     assert!(mapped.capabilities.send_text && mapped.capabilities.send_keys);
     assert_eq!(mapped.clients[1].class_code.as_deref(), Some("SHM"));
 }
@@ -195,6 +196,49 @@ fn activates_exact_id_and_reports_already_active() {
             ..
         }
     ));
+}
+
+#[test]
+fn swaps_active_and_selected_window_numbers_without_changing_the_active_client() {
+    let control = InMemoryController::new(available(false));
+    let active = control.add_client(1, Some("One"), Some("A"), None, true, true);
+    let selected = control.add_client(3, Some("Three"), Some("A"), None, false, true);
+
+    let result = block_on(control.swap_window_numbers(ClientTarget::Id(selected.clone()))).unwrap();
+    assert_eq!(
+        result,
+        CommandOutcome::WindowNumbersSwapped {
+            active_previous_number: 1,
+            selected_previous_number: 3,
+        }
+    );
+    let snapshot = control.snapshot();
+    let active_state = snapshot
+        .clients
+        .iter()
+        .find(|client| client.id == active)
+        .unwrap();
+    let selected_state = snapshot
+        .clients
+        .iter()
+        .find(|client| client.id == selected)
+        .unwrap();
+    assert!(active_state.active);
+    assert_eq!(active_state.window_number, 3);
+    assert!(!selected_state.active);
+    assert_eq!(selected_state.window_number, 1);
+}
+
+#[test]
+fn swapping_requires_a_loaded_target_and_an_active_client() {
+    let control = InMemoryController::new(available(false));
+    let selected = control.add_client(2, Some("Two"), None, None, false, true);
+    let error = block_on(control.swap_window_numbers(ClientTarget::Id(selected))).unwrap_err();
+    assert_eq!(error.code, ErrorCode::WindowNumberSwapFailed);
+
+    let missing =
+        block_on(control.swap_window_numbers(ClientTarget::WindowNumber(99))).unwrap_err();
+    assert_eq!(missing.code, ErrorCode::ClientNotFound);
 }
 
 #[test]

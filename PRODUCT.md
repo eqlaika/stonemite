@@ -21,7 +21,7 @@ The first Ikkinz tester runs Stonemite on the Windows PC `jaggedpine` and Stream
 
 Stonemite makes a six-client EverQuest setup visible and controllable without repeatedly navigating Windows. Ikkinz extends the same live character identity and narrowly bounded controls onto Stream Deck.
 
-Ikkinz v0 succeeds when the user can pair once, see up to six current clients and their readiness at a glance, activate an exact client, explicitly enable or disable broadcast, survive either app reconnecting, and understand failures without looking at logs.
+Ikkinz v0 succeeds when the user can pair once, see up to six current clients and their readiness at a glance, activate an exact client, swap the active and selected clients' window numbers, explicitly enable or disable broadcast, survive either app reconnecting, and understand failures without looking at logs.
 
 ## Positioning
 
@@ -37,8 +37,8 @@ Stonemite derives character identity from the running EQ clients and controls an
 
 ## Capabilities and constraints
 
-- Protocol v1 provides complete pushed state, exact client activation, explicit broadcast state, exact-client text/key delivery, request correlation, and six-digit LAN pairing.
-- Ikkinz v0 is the core deck only: boot/handoff, live character tiles, exact activation, broadcast, group and follow actions, connection status, pairing, and honest error states.
+- Protocol v1 provides complete pushed state, exact client activation, active-to-selected window-number swaps, explicit broadcast state, exact-client text/key delivery, request correlation, and six-digit LAN pairing.
+- Ikkinz v0 is the core deck only: boot/handoff, live character tiles, exact activation, window-number swaps, broadcast, group and follow actions, connection status, pairing, and honest error states.
 - Semantic actions such as Assist, Burn, Camp, heals, and spells are deliberately outside v0 because their EQ commands, hotkeys, timing, and target policy are not yet defined.
 - An input result proves delivery to the intended process, not an observed spell, target, buff, or combat result. The interface must never claim otherwise.
 - Client IDs are opaque and valid only for the current Stonemite run. Reconnect state is authoritative.

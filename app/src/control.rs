@@ -31,6 +31,10 @@ enum UiCommand {
         target: ClientTarget,
         reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
     },
+    SwapWindowNumbers {
+        target: ClientTarget,
+        reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
+    },
     SetBroadcast {
         enabled: bool,
         reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
@@ -160,6 +164,16 @@ impl Controller for ProductionController {
         target: ClientTarget,
     ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>> {
         self.enqueue(COMMAND_TIMEOUT, move |reply| UiCommand::Activate {
+            target,
+            reply,
+        })
+    }
+
+    fn swap_window_numbers(
+        &self,
+        target: ClientTarget,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>> {
+        self.enqueue(COMMAND_TIMEOUT, move |reply| UiCommand::SwapWindowNumbers {
             target,
             reply,
         })
@@ -316,6 +330,10 @@ pub fn drain_commands() {
                 let result = activate_on_ui(target);
                 let _ = reply.send(result);
             }
+            UiCommand::SwapWindowNumbers { target, reply } => {
+                let result = swap_window_numbers_on_ui(target);
+                let _ = reply.send(result);
+            }
             UiCommand::SetBroadcast { enabled, reply } => {
                 let result = set_broadcast_on_ui(enabled, true);
                 let _ = reply.send(result);
@@ -335,55 +353,68 @@ pub fn drain_commands() {
     }
 }
 
-fn activate_on_ui(target: ClientTarget) -> Result<CommandOutcome, ControlError> {
-    let private_key = {
-        let Some(state) = ui().as_ref() else {
-            return Err(ControlError::new(
-                ErrorCode::InternalError,
-                "control dispatcher is stopped",
-            ));
-        };
-        let matches: Vec<&SourceClient> = state
-            .latest_sources
-            .iter()
-            .filter(|source| match &target {
-                ClientTarget::Id(id) => state.mapper.id_for_key(source.private_key) == Some(id),
-                ClientTarget::WindowNumber(number) => source.window_number == *number,
-                ClientTarget::Identity { character, server } => {
-                    source
-                        .character
-                        .as_deref()
-                        .is_some_and(|actual| actual.eq_ignore_ascii_case(character))
-                        && server.as_ref().is_none_or(|expected| {
-                            source
-                                .server
-                                .as_deref()
-                                .is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
-                        })
-                }
-            })
-            .collect();
-        if matches.is_empty() {
-            if matches!(&target, ClientTarget::Id(id) if state.mapper.is_retired(id)) {
-                return Err(ControlError::new(
-                    ErrorCode::TargetDisappeared,
-                    "the target is no longer loaded",
-                ));
+fn resolve_target_private_key(state: &UiState, target: &ClientTarget) -> Result<u64, ControlError> {
+    let matches: Vec<&SourceClient> = state
+        .latest_sources
+        .iter()
+        .filter(|source| match target {
+            ClientTarget::Id(id) => state.mapper.id_for_key(source.private_key) == Some(id),
+            ClientTarget::WindowNumber(number) => source.window_number == *number,
+            ClientTarget::Identity { character, server } => {
+                source
+                    .character
+                    .as_deref()
+                    .is_some_and(|actual| actual.eq_ignore_ascii_case(character))
+                    && server.as_ref().is_none_or(|expected| {
+                        source
+                            .server
+                            .as_deref()
+                            .is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
+                    })
             }
+        })
+        .collect();
+    if matches.is_empty() {
+        if matches!(target, ClientTarget::Id(id) if state.mapper.is_retired(id)) {
             return Err(ControlError::new(
-                ErrorCode::ClientNotFound,
-                "no loaded client matches the target",
+                ErrorCode::TargetDisappeared,
+                "the target is no longer loaded",
             ));
         }
-        if matches.len() > 1 {
-            return Err(ControlError::new(
-                ErrorCode::AmbiguousTarget,
-                "more than one loaded client matches the target",
-            ));
-        }
-        matches[0].private_key
+        return Err(ControlError::new(
+            ErrorCode::ClientNotFound,
+            "no loaded client matches the target",
+        ));
+    }
+    if matches.len() > 1 {
+        return Err(ControlError::new(
+            ErrorCode::AmbiguousTarget,
+            "more than one loaded client matches the target",
+        ));
+    }
+    Ok(matches[0].private_key)
+}
+
+fn activate_on_ui(target: ClientTarget) -> Result<CommandOutcome, ControlError> {
+    let Some(state) = ui().as_ref() else {
+        return Err(ControlError::new(
+            ErrorCode::InternalError,
+            "control dispatcher is stopped",
+        ));
     };
+    let private_key = resolve_target_private_key(state, &target)?;
     unsafe { crate::overlay::activate_pid(private_key as u32) }
+}
+
+fn swap_window_numbers_on_ui(target: ClientTarget) -> Result<CommandOutcome, ControlError> {
+    let Some(state) = ui().as_ref() else {
+        return Err(ControlError::new(
+            ErrorCode::InternalError,
+            "control dispatcher is stopped",
+        ));
+    };
+    let private_key = resolve_target_private_key(state, &target)?;
+    unsafe { crate::overlay::swap_active_window_numbers(private_key as u32) }
 }
 
 pub fn set_broadcast_on_ui(

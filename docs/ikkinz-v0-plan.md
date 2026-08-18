@@ -11,9 +11,10 @@ V0 includes:
 - a coordinated 15-key boot/handoff into the dashboard;
 - up to six live character tiles with Stonemite slot colors, number badges, class artwork, identity/readiness, and active state;
 - exact activation by current opaque client ID;
+- a two-step active-to-selected window-number swap;
 - explicit broadcast enable/disable with solid red on-state;
 - connection, group, follow, active-client, and server utility/action tiles;
-- intentional noninteractive brand/ambient cells where the mockup's later semantic actions would live;
+- one intentional noninteractive brand/ambient cell;
 - clear pairing, disconnected, unavailable, in-flight, success, and error feedback;
 - an installable `.streamDeckPlugin` package.
 
@@ -27,7 +28,7 @@ Create `ikkinz/` with:
 - `src/actions/grid-key.ts` — track visible key instances by device and zero-based coordinates; dispatch presses from the current logical surface.
 - `src/trushar/client.ts` — one `ws` client for pairing and authenticated protocol v1; bounded backoff, request correlation, message validation, and latest snapshot.
 - `src/state/store.ts` — connection/pairing/dashboard state and subscriptions.
-- `src/state/layout.ts` — pure 5×3 cell model; at most six sorted clients, exact action mapping, and utility/ambient cells.
+- `src/state/layout.ts` — pure 5×3 cell model; at most six sorted clients, exact action mapping, a two-step swap mode, and utility/ambient cells.
 - `src/render/key-svg.ts` — deterministic 72×72 SVG data URLs with escaped dynamic text and embedded class art.
 - `src/render/assets.generated.ts` — generated app/class PNG data URLs sourced from `app/assets/`.
 - `src/types/trushar.ts` — strict wire types and runtime parsers that tolerate additive fields but reject invalid required fields.
@@ -41,6 +42,7 @@ Use plugin-wide global settings for `{ address, authToken }`. A six-digit code i
 - Sort clients by `window_number`; map windows 1–6 to the same two-row positions as the mockup.
 - Use the exact `LABEL_COLORS` and `BADGE_COLORS` from `app/src/overlay.rs`.
 - Character press sends `activate` only when the current client is activatable and the connection is ready.
+- Swap press arms a selection mode; the next non-active character press exchanges its window number with the active client's number without changing the active client. Pressing Swap again or selecting the active character cancels.
 - Broadcast press sends explicit `enabled: !current.enabled`, disables while its request is in flight, and reconciles from returned/pushed state.
 - Empty character slots explain absence without looking actionable.
 - Utility cells report only protocol truth: connected/disconnected, loaded count, active identity, common server, ready-client count, and broadcast availability.
@@ -67,7 +69,7 @@ Use plugin-wide global settings for `{ address, authToken }`. A six-digit code i
 - `npm run build`
 - `npm run validate` with current Elgato CLI
 - Protocol fixture tests: initial/pushed state, results between state messages, out-of-order results, errors, additive fields, malformed/oversized frames, and stale IDs.
-- Layout/render tests: all 15 coordinates, zero/six/more-than-six clients, unknown identity, active/disabled/input-unready states, XML escaping, broadcast unavailable/off/on, and deterministic SVG.
+- Layout/render tests: all 15 coordinates, zero/six/more-than-six clients, unknown identity, active/disabled/input-unready states, swap idle/armed/unavailable states, XML escaping, broadcast unavailable/off/on, and deterministic SVG.
 - Connection tests against a local `ws` fixture for pairing, Authorization header, reconnect, startup-order inversion, and token clearing/re-pairing.
 
 ### Hardware-free integration
@@ -88,6 +90,7 @@ Run Stonemite's real in-memory trushar example server and connect the built Ikki
 - Confirm the token is exchanged once and later reconnects need no code.
 - Observe real six-client identity/readiness.
 - Activate each available character and confirm pushed active state.
+- Arm Swap, select a background character, and confirm the two window numbers exchange while the active character does not.
 - Toggle broadcast off/on explicitly and confirm desktop/deck stay synchronized.
 - Restart Stonemite, Stream Deck, Mac networking, and Mobile in different orders.
 - Confirm no token or pairing code appears in logs or packaged files.

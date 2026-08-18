@@ -152,6 +152,30 @@ async fn real_network_listener_upgrade_commands_fanout_reconnect_and_shutdown() 
 
     send(
         &mut one,
+        ClientMessage::SwapWindowNumbers {
+            version: 1,
+            request_id: "swap-numbers-1".into(),
+            target: Target::ClientId {
+                client_id: first.as_str().into(),
+            },
+        },
+    )
+    .await;
+    assert!(matches!(
+        receive_result(&mut one, "swap-numbers-1").await,
+        ServerMessage::Result {
+            result: Success::WindowNumbersSwapped {
+                active_previous_number: 2,
+                selected_previous_number: 1,
+            },
+            ref state,
+            ..
+        } if state.active_client_id.as_deref() == Some(second.as_str())
+            && state.clients.iter().any(|client| client.id == second.as_str() && client.window_number == 1)
+    ));
+
+    send(
+        &mut one,
         ClientMessage::SetBroadcast {
             version: 1,
             request_id: "broadcast-1".into(),

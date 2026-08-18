@@ -10,6 +10,7 @@ import {
   buildCell,
   buildFollowPlan,
   buildGroupPlan,
+  buildSwapPlan,
   cellKey,
   GRID_COLUMNS,
   GRID_ROWS,
@@ -48,11 +49,16 @@ export class GridKeyController {
   #credentialEpoch = 0;
   #groupInFlight = false;
   #followInFlight = false;
+  #swapArmed = false;
+  #swapInFlight = false;
 
   constructor(store: DashboardStore, client: TrusharClient) {
     this.#store = store;
     this.#client = client;
-    this.#store.subscribe(() => this.#queueRender());
+    this.#store.subscribe((view) => {
+      if (!buildSwapPlan(view).available) this.#swapArmed = false;
+      this.#queueRender();
+    });
   }
 
   async onWillAppear(event: WillAppearEvent): Promise<void> {
@@ -89,9 +95,47 @@ export class GridKeyController {
     if (!event.action.isKey()) return;
     const key = this.#keys.get(event.action.id);
     if (!key) return;
-    const cell = buildCell(this.#store.view, key.row, key.column);
+    const cell = buildCell(
+      this.#store.view,
+      key.row,
+      key.column,
+      this.#swapArmed,
+    );
 
     try {
+      if (this.#swapInFlight) return;
+      if (cell.type === "swap" && cell.available) {
+        this.#swapArmed = !this.#swapArmed;
+        this.#queueRender();
+        return;
+      }
+      if (this.#swapArmed) {
+        if (cell.type !== "character" || !cell.enabled) return;
+        this.#swapArmed = false;
+        this.#queueRender();
+        if (cell.client.active) return;
+
+        const feedbackKey = cellKey(key.row, key.column);
+        this.#swapInFlight = true;
+        this.#store.setFeedback(
+          feedbackKey,
+          { kind: "pending", message: "Swapping" },
+          10_000,
+        );
+        try {
+          const result = await this.#client.swapWindowNumbers(cell.client.id);
+          if (result.result.type !== "window_numbers_swapped")
+            throw new CommandError(
+              "protocol_error",
+              "Stonemite returned the wrong window-number swap result.",
+            );
+          this.#store.clearFeedback(feedbackKey);
+        } finally {
+          this.#swapInFlight = false;
+          this.#queueRender();
+        }
+        return;
+      }
       if (cell.type === "character" && cell.enabled) {
         const feedbackKey = cellKey(key.row, key.column);
         this.#store.setFeedback(
@@ -365,7 +409,7 @@ export class GridKeyController {
     const updates: Promise<void>[] = [];
     for (const key of this.#keys.values()) {
       const image = renderCell(
-        buildCell(this.#store.view, key.row, key.column),
+        buildCell(this.#store.view, key.row, key.column, this.#swapArmed),
       );
       if (image === key.lastImage) continue;
       updates.push(updateVisibleKeyImage(key, image));
@@ -408,6 +452,8 @@ function friendlyError(error: unknown): string {
         return "Client left";
       case "activation_failed":
         return "Activation failed";
+      case "window_number_swap_failed":
+        return "Swap unavailable";
       case "broadcast_unavailable":
         return "Broadcast unavailable";
       case "command_timeout":

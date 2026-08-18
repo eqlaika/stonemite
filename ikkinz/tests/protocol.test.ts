@@ -45,9 +45,13 @@ describe("trushar parser", () => {
     });
     const raw = JSON.parse(JSON.stringify(state)) as {
       clients: Array<Record<string, unknown>>;
+      capabilities: Record<string, unknown>;
     };
     delete raw.clients[1]!.input_ready;
+    const capabilities = raw.capabilities as Record<string, unknown>;
+    delete capabilities.swap_window_numbers;
     const parsed = parseState(raw);
+    expect(parsed.capabilities.swap_window_numbers).toBe(false);
     expect(parsed.clients.map((client) => client.id)).toEqual([
       "client-1",
       "client-2",
@@ -73,6 +77,24 @@ describe("trushar parser", () => {
         }),
       ).type,
     ).toBe("result");
+    expect(
+      parseServerMessage(
+        JSON.stringify({
+          type: "result",
+          version: 1,
+          request_id: "swap",
+          result: {
+            type: "window_numbers_swapped",
+            active_previous_number: 1,
+            selected_previous_number: 3,
+          },
+          state,
+        }),
+      ),
+    ).toMatchObject({
+      type: "result",
+      result: { type: "window_numbers_swapped" },
+    });
     expect(
       parseServerMessage(
         JSON.stringify({
@@ -115,6 +137,20 @@ describe("trushar parser", () => {
         version: 1,
         request_id: "x",
         result: { type: "activated", status: "surprised" },
+        state: stateFixture(),
+      }),
+    ],
+    [
+      "malformed window-number swap result",
+      JSON.stringify({
+        type: "result",
+        version: 1,
+        request_id: "x",
+        result: {
+          type: "window_numbers_swapped",
+          active_previous_number: 0,
+          selected_previous_number: 2,
+        },
         state: stateFixture(),
       }),
     ],

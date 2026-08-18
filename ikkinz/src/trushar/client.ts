@@ -275,6 +275,20 @@ export class TrusharClient {
     );
   }
 
+  async swapWindowNumbers(
+    clientId: string,
+  ): Promise<Extract<ServerMessage, { type: "result" }>> {
+    return this.#request(
+      {
+        type: "swap_window_numbers",
+        version: PROTOCOL_VERSION,
+        request_id: this.#nextRequestId("swap-numbers"),
+        target: { type: "client_id", client_id: clientId },
+      },
+      "window_numbers_swapped",
+    );
+  }
+
   async setBroadcast(
     enabled: boolean,
   ): Promise<Extract<ServerMessage, { type: "result" }>> {

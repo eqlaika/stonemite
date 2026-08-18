@@ -19,6 +19,7 @@ export interface TrusharState {
   broadcast: { available: boolean; enabled: boolean };
   capabilities: {
     activate: boolean;
+    swap_window_numbers: boolean;
     set_broadcast: boolean;
     send_text: boolean;
     send_keys: boolean;
@@ -38,6 +39,11 @@ export type Success =
       type: "activated";
       status: ActivationStatus;
       foreground_confirmed: boolean;
+    }
+  | {
+      type: "window_numbers_swapped";
+      active_previous_number: number;
+      selected_previous_number: number;
     }
   | { type: "broadcast_set"; enabled: boolean }
   | { type: "input_delivered"; input: "text" | "keys"; strokes: number };
@@ -64,6 +70,12 @@ export type ClientMessage =
   | { type: "get_state"; version: 1; request_id: string }
   | {
       type: "activate";
+      version: 1;
+      request_id: string;
+      target: { type: "client_id"; client_id: string };
+    }
+  | {
+      type: "swap_window_numbers";
       version: 1;
       request_id: string;
       target: { type: "client_id"; client_id: string };
@@ -173,6 +185,20 @@ export function parseSuccess(value: unknown): Success {
         status: value.status,
         foreground_confirmed: value.foreground_confirmed,
       };
+    case "window_numbers_swapped":
+      if (
+        !Number.isSafeInteger(value.active_previous_number) ||
+        (value.active_previous_number as number) < 1 ||
+        !Number.isSafeInteger(value.selected_previous_number) ||
+        (value.selected_previous_number as number) < 1
+      ) {
+        throw new ProtocolError("Window-number swap result is malformed.");
+      }
+      return {
+        type: "window_numbers_swapped",
+        active_previous_number: value.active_previous_number as number,
+        selected_previous_number: value.selected_previous_number as number,
+      };
     case "broadcast_set":
       if (!isBoolean(value.enabled)) {
         throw new ProtocolError("Broadcast result is malformed.");
@@ -244,6 +270,9 @@ export function parseState(value: unknown): TrusharState {
     },
     capabilities: {
       activate: value.capabilities.activate as boolean,
+      swap_window_numbers: isBoolean(value.capabilities.swap_window_numbers)
+        ? value.capabilities.swap_window_numbers
+        : false,
       set_broadcast: value.capabilities.set_broadcast as boolean,
       send_text: value.capabilities.send_text as boolean,
       send_keys: value.capabilities.send_keys as boolean,

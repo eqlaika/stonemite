@@ -51,6 +51,7 @@ impl BroadcastState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Capabilities {
     pub activate: bool,
+    pub swap_window_numbers: bool,
     pub set_broadcast: bool,
     pub send_text: bool,
     pub send_keys: bool,
@@ -70,6 +71,7 @@ impl Default for StateData {
             broadcast: BroadcastState::UNAVAILABLE,
             capabilities: Capabilities {
                 activate: true,
+                swap_window_numbers: true,
                 set_broadcast: false,
                 send_text: false,
                 send_keys: false,
@@ -336,6 +338,10 @@ pub enum CommandOutcome {
         /// Whether the OS reported the target as foreground immediately.
         foreground_confirmed: bool,
     },
+    WindowNumbersSwapped {
+        active_previous_number: usize,
+        selected_previous_number: usize,
+    },
     BroadcastSet {
         enabled: bool,
     },
@@ -356,6 +362,7 @@ pub enum ErrorCode {
     TargetDisappeared,
     BroadcastUnavailable,
     ActivationFailed,
+    WindowNumberSwapFailed,
     BroadcastOperationFailed,
     InputUnavailable,
     InputOperationFailed,
@@ -375,6 +382,7 @@ impl ErrorCode {
             Self::TargetDisappeared => "target_disappeared",
             Self::BroadcastUnavailable => "broadcast_unavailable",
             Self::ActivationFailed => "activation_failed",
+            Self::WindowNumberSwapFailed => "window_number_swap_failed",
             Self::BroadcastOperationFailed => "broadcast_operation_failed",
             Self::InputUnavailable => "input_unavailable",
             Self::InputOperationFailed => "input_operation_failed",
@@ -403,6 +411,10 @@ pub trait Controller: Send + Sync + 'static {
     fn snapshot(&self) -> StateSnapshot;
     fn subscribe(&self) -> watch::Receiver<StateSnapshot>;
     fn activate(
+        &self,
+        target: ClientTarget,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>>;
+    fn swap_window_numbers(
         &self,
         target: ClientTarget,
     ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>>;
@@ -494,6 +506,7 @@ impl SnapshotMapper {
             broadcast,
             capabilities: Capabilities {
                 activate: true,
+                swap_window_numbers: true,
                 set_broadcast: broadcast.available,
                 send_text: input_available,
                 send_keys: input_available,
@@ -551,6 +564,7 @@ impl InMemoryController {
             broadcast,
             capabilities: Capabilities {
                 activate: true,
+                swap_window_numbers: true,
                 set_broadcast: broadcast.available,
                 send_text: false,
                 send_keys: false,
@@ -741,6 +755,7 @@ fn memory_data(state: &MemoryState) -> StateData {
         broadcast: state.broadcast,
         capabilities: Capabilities {
             activate: true,
+            swap_window_numbers: true,
             set_broadcast: state.broadcast.available,
             send_text: input_available,
             send_keys: input_available,
@@ -825,6 +840,65 @@ impl Controller for InMemoryController {
                             ActivationStatus::Activated
                         },
                         foreground_confirmed: true,
+                    },
+                    memory_data(&state),
+                )
+            };
+            inner.hub.publish(data);
+            Ok(result)
+        })
+    }
+
+    fn swap_window_numbers(
+        &self,
+        target: ClientTarget,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            let (result, data) = {
+                let mut state = inner.state.lock().expect("memory controller poisoned");
+                let matches: Vec<usize> = state
+                    .clients
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, client)| target_matches(client, &target).then_some(index))
+                    .collect();
+                if matches.is_empty() {
+                    if matches!(&target, ClientTarget::Id(id) if state.retired_ids.contains(id)) {
+                        return Err(ControlError::new(
+                            ErrorCode::TargetDisappeared,
+                            "the target is no longer loaded",
+                        ));
+                    }
+                    return Err(ControlError::new(
+                        ErrorCode::ClientNotFound,
+                        "no loaded client matches the target",
+                    ));
+                }
+                if matches.len() > 1 {
+                    return Err(ControlError::new(
+                        ErrorCode::AmbiguousTarget,
+                        "more than one loaded client matches the target",
+                    ));
+                }
+                let selected_index = matches[0];
+                let Some(active_index) = state.clients.iter().position(|client| client.active)
+                else {
+                    return Err(ControlError::new(
+                        ErrorCode::WindowNumberSwapFailed,
+                        "there is no active client whose window number can be swapped",
+                    ));
+                };
+                let active_previous_number = state.clients[active_index].window_number;
+                let selected_previous_number = state.clients[selected_index].window_number;
+                if active_index != selected_index {
+                    state.clients[active_index].window_number = selected_previous_number;
+                    state.clients[selected_index].window_number = active_previous_number;
+                }
+                (
+                    CommandOutcome::WindowNumbersSwapped {
+                        active_previous_number,
+                        selected_previous_number,
                     },
                     memory_data(&state),
                 )

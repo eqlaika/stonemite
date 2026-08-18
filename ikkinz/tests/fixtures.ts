@@ -21,6 +21,7 @@ export function stateFixture(
     broadcast: { available: true, enabled: false },
     capabilities: {
       activate: true,
+      swap_window_numbers: true,
       set_broadcast: true,
       send_text: true,
       send_keys: true,

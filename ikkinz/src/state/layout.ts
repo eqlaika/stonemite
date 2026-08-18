@@ -41,6 +41,7 @@ export type GridCell =
       client: TrusharClient;
       slot: number;
       enabled: boolean;
+      interaction: "activate" | "swap";
     }
   | { type: "empty"; row: number; column: number; slot: number }
   | {
@@ -78,12 +79,59 @@ export type GridCell =
       enabled: boolean;
     }
   | {
+      type: "swap";
+      row: number;
+      column: number;
+      available: boolean;
+      armed: boolean;
+      status: string;
+    }
+  | {
       type: "ambient";
       row: number;
       column: number;
       label: string;
       position: "left" | "right";
     };
+
+export interface SwapPlan {
+  active: TrusharClient | null;
+  available: boolean;
+  status: string;
+}
+
+export function buildSwapPlan(view: DashboardView): SwapPlan {
+  const snapshot = view.snapshot;
+  const active = activeClient(snapshot);
+  const capabilityAvailable = Boolean(
+    snapshot?.capabilities.swap_window_numbers,
+  );
+  const hasVisibleTarget = Boolean(
+    active &&
+    snapshot?.clients.some(
+      (client) =>
+        client.id !== active.id &&
+        client.window_number >= 1 &&
+        client.window_number <= CHARACTER_POSITIONS.length,
+    ),
+  );
+  const available =
+    view.connection.state === "connected" &&
+    capabilityAvailable &&
+    Boolean(active) &&
+    hasVisibleTarget;
+
+  let status: string;
+  if (view.connection.state !== "connected") status = "OFFLINE";
+  else if (!snapshot) status = "NO STATE";
+  else if (!capabilityAvailable) status = "UPDATE STONEMITE";
+  else if (!active) status = "NO ACTIVE BOX";
+  else if (snapshot.clients.length < 2) status = "ONE CLIENT";
+  else if (!hasVisibleTarget) status = "NO VISIBLE TARGET";
+  else status = "PRESS THEN PICK";
+
+  return { active, available, status };
+}
 
 export type GroupInvitee = TrusharClient & { character: string };
 
@@ -206,6 +254,7 @@ export function buildCell(
   view: DashboardView,
   row: number,
   column: number,
+  swapArmed = false,
 ): GridCell {
   if (!isCoordinate(row, column)) {
     throw new RangeError(`Grid coordinate is outside 5 by 3: ${row},${column}`);
@@ -218,6 +267,8 @@ export function buildCell(
   if (view.bootStage < 3)
     return { type: "boot", row, column, stage: view.bootStage };
 
+  const swapPlan = buildSwapPlan(view);
+  const swapMode = swapArmed && swapPlan.available;
   const characterIndex = CHARACTER_POSITIONS.findIndex(
     ([r, c]) => r === row && c === column,
   );
@@ -233,7 +284,10 @@ export function buildCell(
       column,
       client,
       slot,
-      enabled: view.connection.state === "connected" && client.activatable,
+      enabled:
+        view.connection.state === "connected" &&
+        (swapMode ? swapPlan.available : client.activatable),
+      interaction: swapMode ? "swap" : "activate",
     };
   }
 
@@ -347,12 +401,23 @@ export function buildCell(
     };
   }
 
+  if (row === 2 && column === 4) {
+    return {
+      type: "swap",
+      row,
+      column,
+      available: swapPlan.available,
+      armed: swapMode,
+      status: swapPlan.status,
+    };
+  }
+
   return {
     type: "ambient",
     row,
     column,
-    label: column === 3 ? "STONE" : "MITE",
-    position: column === 3 ? "left" : "right",
+    label: "STONE",
+    position: "left",
   };
 }
 

@@ -355,6 +355,27 @@ fn next_available_number(eq_windows: &[EqWindow]) -> usize {
     n
 }
 
+/// Exchange the stable window numbers of two loaded clients.
+fn exchange_window_numbers(
+    eq_windows: &mut [EqWindow],
+    first_pid: u32,
+    second_pid: u32,
+) -> Option<(usize, usize)> {
+    let first_index = eq_windows
+        .iter()
+        .position(|window| window.pid == first_pid)?;
+    let second_index = eq_windows
+        .iter()
+        .position(|window| window.pid == second_pid)?;
+    let first_number = eq_windows[first_index].number;
+    let second_number = eq_windows[second_index].number;
+    if first_index != second_index {
+        eq_windows[first_index].number = second_number;
+        eq_windows[second_index].number = first_number;
+    }
+    Some((first_number, second_number))
+}
+
 /// Exchange a PiP client with the active client while preserving the partition.
 /// Returns false when the target is already active or is not currently a PiP.
 fn exchange_active_with_pip(
@@ -2039,6 +2060,75 @@ pub unsafe fn swap_to_number(number: usize) {
     if let Some(target_pid) = target_pid {
         let _ = activate_pid(target_pid);
     }
+}
+
+/// Swap the selected client's stable window number with the active client's number.
+/// The foreground client does not change.
+pub unsafe fn swap_active_window_numbers(
+    target_pid: u32,
+) -> Result<trushar::control::CommandOutcome, trushar::control::ControlError> {
+    if IN_OVERLAY.replace(true) {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::InternalError,
+            "overlay is already handling a window transition",
+        ));
+    }
+    let result = swap_active_window_numbers_guarded(target_pid);
+    IN_OVERLAY.set(false);
+    result
+}
+
+unsafe fn swap_active_window_numbers_guarded(
+    target_pid: u32,
+) -> Result<trushar::control::CommandOutcome, trushar::control::ControlError> {
+    let Some(s) = state_unguarded().as_mut() else {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::InternalError,
+            "overlay is unavailable",
+        ));
+    };
+    let Some(active_pid) = s.active_pid else {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::WindowNumberSwapFailed,
+            "there is no active EQ client whose window number can be swapped",
+        ));
+    };
+    if !s.eq_windows.iter().any(|window| window.pid == target_pid) {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::TargetDisappeared,
+            "the selected EQ window is no longer loaded",
+        ));
+    }
+    let Some((active_previous_number, selected_previous_number)) =
+        exchange_window_numbers(&mut s.eq_windows, active_pid, target_pid)
+    else {
+        return Err(trushar::control::ControlError::new(
+            trushar::control::ErrorCode::WindowNumberSwapFailed,
+            "the active EQ window is no longer loaded",
+        ));
+    };
+
+    if active_pid != target_pid {
+        if config::Config::load().auto_order {
+            apply_auto_order(s);
+        }
+        rebuild_thumbnails_guarded(s);
+        update_visibility(s);
+        show_toast_inner(
+            s,
+            &format!(
+                "Swapped window numbers #{} and #{}",
+                active_previous_number, selected_previous_number
+            ),
+        );
+        debug_assert_client_partition(s);
+        publish_control_state(s);
+    }
+
+    Ok(trushar::control::CommandOutcome::WindowNumbersSwapped {
+        active_previous_number,
+        selected_previous_number,
+    })
 }
 
 /// Authoritative semantic activation operation used by local UI and trushar.
@@ -4361,6 +4451,25 @@ mod tests {
             server: None,
             class: None,
         }
+    }
+
+    #[test]
+    fn swapping_window_numbers_preserves_identity_and_supports_a_no_op() {
+        let mut windows = vec![window(10), window(20), window(30)];
+        windows[0].number = 1;
+        windows[1].number = 2;
+        windows[2].number = 3;
+
+        assert_eq!(exchange_window_numbers(&mut windows, 10, 30), Some((1, 3)));
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| (window.pid, window.number))
+                .collect::<Vec<_>>(),
+            vec![(10, 3), (20, 2), (30, 1)]
+        );
+        assert_eq!(exchange_window_numbers(&mut windows, 20, 20), Some((2, 2)));
+        assert!(exchange_window_numbers(&mut windows, 10, 99).is_none());
     }
 
     #[test]

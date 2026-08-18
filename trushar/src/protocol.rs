@@ -21,6 +21,11 @@ pub enum ClientMessage {
         request_id: String,
         target: Target,
     },
+    SwapWindowNumbers {
+        version: u16,
+        request_id: String,
+        target: Target,
+    },
     SetBroadcast {
         version: u16,
         request_id: String,
@@ -47,6 +52,7 @@ impl ClientMessage {
         match self {
             Self::GetState { version, .. }
             | Self::Activate { version, .. }
+            | Self::SwapWindowNumbers { version, .. }
             | Self::SetBroadcast { version, .. }
             | Self::SendText { version, .. }
             | Self::SendKeys { version, .. } => *version,
@@ -57,6 +63,7 @@ impl ClientMessage {
         match self {
             Self::GetState { request_id, .. }
             | Self::Activate { request_id, .. }
+            | Self::SwapWindowNumbers { request_id, .. }
             | Self::SetBroadcast { request_id, .. }
             | Self::SendText { request_id, .. }
             | Self::SendKeys { request_id, .. } => request_id,
@@ -81,7 +88,7 @@ impl ClientMessage {
                 "request_id must contain 1 to 128 bytes",
             ));
         }
-        if let Self::Activate { target, .. } = self {
+        if let Self::Activate { target, .. } | Self::SwapWindowNumbers { target, .. } = self {
             target.validate()?;
         }
         match self {
@@ -300,6 +307,10 @@ pub enum Success {
         status: WireActivationStatus,
         foreground_confirmed: bool,
     },
+    WindowNumbersSwapped {
+        active_previous_number: usize,
+        selected_previous_number: usize,
+    },
     BroadcastSet {
         enabled: bool,
     },
@@ -318,6 +329,13 @@ impl From<CommandOutcome> for Success {
             } => Self::Activated {
                 status: status.into(),
                 foreground_confirmed,
+            },
+            CommandOutcome::WindowNumbersSwapped {
+                active_previous_number,
+                selected_previous_number,
+            } => Self::WindowNumbersSwapped {
+                active_previous_number,
+                selected_previous_number,
             },
             CommandOutcome::BroadcastSet { enabled } => Self::BroadcastSet { enabled },
             CommandOutcome::InputDelivered { kind, strokes } => Self::InputDelivered {
@@ -385,6 +403,7 @@ impl From<&StateSnapshot> for WireState {
             },
             capabilities: WireCapabilities {
                 activate: value.capabilities.activate,
+                swap_window_numbers: value.capabilities.swap_window_numbers,
                 set_broadcast: value.capabilities.set_broadcast,
                 send_text: value.capabilities.send_text,
                 send_keys: value.capabilities.send_keys,
@@ -433,6 +452,8 @@ pub struct WireBroadcast {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WireCapabilities {
     pub activate: bool,
+    #[serde(default)]
+    pub swap_window_numbers: bool,
     pub set_broadcast: bool,
     pub send_text: bool,
     pub send_keys: bool,
@@ -586,21 +607,28 @@ mod tests {
                     server: Some("Xegony".into()),
                 },
             },
-            ClientMessage::SetBroadcast {
+            ClientMessage::SwapWindowNumbers {
                 version: 1,
                 request_id: "five".into(),
+                target: Target::ClientId {
+                    client_id: "client-2".into(),
+                },
+            },
+            ClientMessage::SetBroadcast {
+                version: 1,
+                request_id: "six".into(),
                 enabled: true,
             },
             ClientMessage::SendText {
                 version: 1,
-                request_id: "six".into(),
+                request_id: "seven".into(),
                 client_id: "client-1".into(),
                 text: "/who".into(),
                 submit: true,
             },
             ClientMessage::SendKeys {
                 version: 1,
-                request_id: "seven".into(),
+                request_id: "eight".into(),
                 client_id: "client-1".into(),
                 strokes: vec![WireKeyStroke {
                     keys: vec!["left_control".into(), "1".into()],
@@ -634,6 +662,7 @@ mod tests {
             },
             capabilities: Capabilities {
                 activate: true,
+                swap_window_numbers: true,
                 set_broadcast: true,
                 send_text: true,
                 send_keys: true,
@@ -652,6 +681,14 @@ mod tests {
             ),
             ServerMessage::success(
                 "three".into(),
+                Success::WindowNumbersSwapped {
+                    active_previous_number: 1,
+                    selected_previous_number: 2,
+                },
+                &snapshot,
+            ),
+            ServerMessage::success(
+                "four".into(),
                 Success::BroadcastSet { enabled: false },
                 &snapshot,
             ),
@@ -664,7 +701,7 @@ mod tests {
                 &snapshot,
             ),
             ServerMessage::error(
-                Some("four".into()),
+                Some("five".into()),
                 ControlError::new(ErrorCode::ClientNotFound, "not found"),
             ),
             ServerMessage::paired("secret-token".into()),
@@ -681,12 +718,18 @@ mod tests {
     }
 
     #[test]
-    fn older_wire_clients_default_to_not_input_ready() {
+    fn older_wire_state_defaults_new_capabilities_and_client_readiness() {
         let client: WireClient = serde_json::from_str(
             r#"{"id":"client-1","window_number":1,"active":true,"activatable":true}"#,
         )
         .unwrap();
         assert!(!client.input_ready);
+
+        let capabilities: WireCapabilities = serde_json::from_str(
+            r#"{"activate":true,"set_broadcast":true,"send_text":true,"send_keys":true}"#,
+        )
+        .unwrap();
+        assert!(!capabilities.swap_window_numbers);
     }
 
     #[test]

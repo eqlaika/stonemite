@@ -1,10 +1,12 @@
 # Ikkinz
 
-Ikkinz is the internal codename for the **Stonemite · EQ boxing** 5×3 Stream Deck control surface. It shows the current six-client roster, activates an exact loaded EQ client, forms and follows a group from the active client, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting.
+Ikkinz is the internal codename for the **Stonemite · EQ boxing** 5×3 Stream Deck control surface. It shows the current six-client roster, activates an exact loaded EQ client, swaps the window numbers of the active and selected clients, forms and follows a group from the active client, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting.
 
 The Group key invites every other named, input-ready client from the active box, waits one second, then sends `Ctrl+I` to those invited clients. Boxes without a detected character name or ready targeted-input channel are skipped.
 
 The Follow key identifies the active named leader and concurrently sends `/follow <leader>` to every other input-ready client.
+
+The Swap key replaces the old MITE ambient key. Press **Swap**, then press a character. Stonemite exchanges that character's window number with the currently active character's number without activating a different window. Press Swap again or select the current character to cancel.
 
 V0 is intentionally the core deck. Assist, Burn, Camp, heals, spells, live EQ targets, buffs, and cooldowns are not implemented until their commands and failure policy are defined.
 
@@ -82,6 +84,7 @@ The command builds, validates with the current Elgato CLI schema, and writes an 
 ## What the deck can truthfully report
 
 - **Activated** means Stonemite accepted an exact-client activation request and returned authoritative current state.
+- **Window numbers swapped** means Stonemite exchanged the active and selected clients' stable numbers and returned authoritative current state; it does not change the active client.
 - **Broadcast on/off** is Stonemite's pushed broadcast state, not a blind local toggle.
 - **Input ready** means that client's compatible trusik input channel acknowledged readiness.
 - Group progress confirms exact-client input delivery only; it does not prove that EQ formed the group.

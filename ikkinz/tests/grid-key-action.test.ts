@@ -66,6 +66,55 @@ describe("GridKeyController", () => {
     expect(client.setBroadcast).toHaveBeenCalledWith(true);
   });
 
+  it("arms the Swap key, then swaps the active and selected character numbers", async () => {
+    vi.useFakeTimers();
+    const store = groupStore();
+    const swapRequest = deferred<ReturnType<typeof swapResult>>();
+    const client = fakeClient();
+    client.swapWindowNumbers.mockReturnValue(swapRequest.promise);
+    const action = new GridKeyController(store, client as never);
+    const swap = fakeKey("swap", 2, 4);
+    const current = fakeKey("current", 0, 0);
+    const selected = fakeKey("selected", 0, 1);
+    const other = fakeKey("other", 0, 2);
+
+    for (const key of [swap, current, selected, other]) {
+      await action.onWillAppear({ action: key } as never);
+    }
+    await vi.advanceTimersByTimeAsync(1_100);
+
+    await action.onKeyDown({ action: swap } as never);
+    expect(decodeURIComponent(swap.setImage.mock.calls.at(-1)?.[0])).toContain(
+      ">ARMED</text>",
+    );
+    expect(
+      decodeURIComponent(current.setImage.mock.calls.at(-1)?.[0]),
+    ).toContain(">CURRENT</text>");
+    expect(
+      decodeURIComponent(selected.setImage.mock.calls.at(-1)?.[0]),
+    ).toContain(">SELECT</text>");
+
+    const press = action.onKeyDown({ action: selected } as never);
+    expect(client.swapWindowNumbers).toHaveBeenCalledWith("serein-id");
+    expect(store.view.feedback.get("0,1")).toMatchObject({
+      kind: "pending",
+      message: "Swapping",
+    });
+    await action.onKeyDown({ action: other } as never);
+    expect(client.activate).not.toHaveBeenCalled();
+
+    swapRequest.resolve(swapResult());
+    await press;
+    expect(store.view.feedback.get("0,1")).toBeUndefined();
+    expect(decodeURIComponent(swap.setImage.mock.calls.at(-1)?.[0])).toContain(
+      ">NUMBERS</text>",
+    );
+
+    await action.onKeyDown({ action: swap } as never);
+    await action.onKeyDown({ action: current } as never);
+    expect(client.swapWindowNumbers).toHaveBeenCalledTimes(1);
+  });
+
   it("invites ready named boxes, waits one second, then sends Ctrl+I", async () => {
     vi.useFakeTimers();
     const store = groupStore();
@@ -501,6 +550,7 @@ function groupStore(): DashboardStore {
 function fakeClient() {
   return {
     activate: vi.fn(),
+    swapWindowNumbers: vi.fn(),
     setBroadcast: vi.fn(),
     sendText: vi.fn(),
     sendKeys: vi.fn(),
@@ -540,6 +590,20 @@ function activatedResult() {
       type: "activated" as const,
       status: "activated" as const,
       foreground_confirmed: true,
+    },
+    state: stateFixture(),
+  };
+}
+
+function swapResult() {
+  return {
+    type: "result" as const,
+    version: 1 as const,
+    request_id: "swap-numbers-1",
+    result: {
+      type: "window_numbers_swapped" as const,
+      active_previous_number: 1,
+      selected_previous_number: 2,
     },
     state: stateFixture(),
   };

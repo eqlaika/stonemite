@@ -699,6 +699,30 @@ async fn handle_frame(
                     commands.push(Box::pin(async move { (request_id, future.await) }));
                     true
                 }
+                Ok(ClientMessage::SwapWindowNumbers {
+                    request_id, target, ..
+                }) => {
+                    if commands.len() >= MAX_IN_FLIGHT_COMMANDS {
+                        let response = ServerMessage::error(
+                            Some(request_id),
+                            ControlError::new(
+                                ErrorCode::InvalidArgument,
+                                "too many commands are already in flight",
+                            ),
+                        );
+                        return send_message(websocket, &response).await.is_ok();
+                    }
+                    let target = match crate::control::ClientTarget::try_from(target) {
+                        Ok(target) => target,
+                        Err(error) => {
+                            let response = ServerMessage::error(Some(request_id), error);
+                            return send_message(websocket, &response).await.is_ok();
+                        }
+                    };
+                    let future = controller.swap_window_numbers(target);
+                    commands.push(Box::pin(async move { (request_id, future.await) }));
+                    true
+                }
                 Ok(ClientMessage::SetBroadcast {
                     request_id,
                     enabled,

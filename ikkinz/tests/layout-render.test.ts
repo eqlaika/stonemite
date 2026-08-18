@@ -3,6 +3,7 @@ import {
   BADGE_COLORS,
   buildCell,
   buildGrid,
+  buildSwapPlan,
   SLOT_COLORS,
   unsupportedCell,
 } from "../src/state/layout";
@@ -225,6 +226,87 @@ describe("5 by 3 layout", () => {
       available: false,
       ready: 0,
       status: "LEADER UNKNOWN",
+    });
+  });
+
+  it("turns the MITE key into an explicit two-step window-number swap", () => {
+    const snapshot = stateFixture({ clients: sixClients() });
+    const swap = buildCell(view({ snapshot }), 2, 4);
+    expect(buildSwapPlan(view({ snapshot }))).toMatchObject({
+      available: true,
+      status: "PRESS THEN PICK",
+    });
+    expect(swap).toMatchObject({
+      type: "swap",
+      available: true,
+      armed: false,
+    });
+    expect(decodeSvg(renderCell(swap))).toContain(">NUMBERS</text>");
+    expect(decodeSvg(renderCell(swap))).toContain(">SWAP</text>");
+
+    const armedSwap = buildCell(view({ snapshot }), 2, 4, true);
+    expect(armedSwap).toMatchObject({ type: "swap", armed: true });
+    expect(decodeSvg(renderCell(armedSwap))).toContain(">ARMED</text>");
+    expect(decodeSvg(renderCell(armedSwap))).toContain(
+      ">PICK CHARACTER</text>",
+    );
+
+    const current = buildCell(view({ snapshot }), 0, 0, true);
+    const target = buildCell(view({ snapshot }), 0, 1, true);
+    expect(current).toMatchObject({
+      type: "character",
+      interaction: "swap",
+    });
+    expect(target).toMatchObject({
+      type: "character",
+      interaction: "swap",
+    });
+    expect(decodeSvg(renderCell(current))).toContain(">CURRENT</text>");
+    expect(decodeSvg(renderCell(target))).toContain(">SELECT</text>");
+  });
+
+  it("keeps window-number swap unavailable against older Stonemite versions", () => {
+    const snapshot = stateFixture();
+    snapshot.capabilities.swap_window_numbers = false;
+    const swap = buildCell(view({ snapshot }), 2, 4, true);
+    expect(swap).toMatchObject({
+      type: "swap",
+      available: false,
+      armed: false,
+      status: "UPDATE STONEMITE",
+    });
+
+    const noVisibleTarget = buildCell(
+      view({
+        snapshot: stateFixture({
+          clients: [
+            {
+              id: "active",
+              window_number: 1,
+              active: true,
+              activatable: true,
+              input_ready: true,
+            },
+            {
+              id: "extra",
+              window_number: 7,
+              active: false,
+              activatable: false,
+              input_ready: true,
+            },
+          ],
+          active_client_id: "active",
+        }),
+      }),
+      2,
+      4,
+      true,
+    );
+    expect(noVisibleTarget).toMatchObject({
+      type: "swap",
+      available: false,
+      armed: false,
+      status: "NO VISIBLE TARGET",
     });
   });
 

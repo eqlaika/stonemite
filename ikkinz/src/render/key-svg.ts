@@ -24,7 +24,12 @@ export function renderCell(cell: GridCell): string {
       case "feedback":
         return renderFeedback(cell.feedback.kind, cell.feedback.message);
       case "character":
-        return renderCharacter(cell.client, cell.slot, cell.enabled);
+        return renderCharacter(
+          cell.client,
+          cell.slot,
+          cell.enabled,
+          cell.interaction,
+        );
       case "empty":
         return `${base("#3c424b")}<text x="36" y="35" class="muted center medium">Slot ${cell.slot}</text><text x="36" y="49" class="quiet center tiny">NOT LOADED</text>`;
       case "utility":
@@ -45,6 +50,8 @@ export function renderCell(cell: GridCell): string {
         );
       case "broadcast":
         return renderBroadcast(cell.available, cell.enabled);
+      case "swap":
+        return renderSwap(cell.available, cell.armed, cell.status);
       case "ambient":
         return renderAmbient(cell.label, cell.position);
     }
@@ -79,6 +86,7 @@ function renderCharacter(
   client: Extract<GridCell, { type: "character" }>["client"],
   slot: number,
   enabled: boolean,
+  interaction: Extract<GridCell, { type: "character" }>["interaction"],
 ): string {
   const color = SLOT_COLORS[(slot - 1) % SLOT_COLORS.length] ?? SLOT_COLORS[0];
   const badge =
@@ -90,9 +98,12 @@ function renderCharacter(
   const surface = client.active
     ? `<rect width="72" height="72" rx="7" fill="${COLORS.text}"/><rect x="1.5" y="1.5" width="69" height="69" rx="5.5" fill="none" stroke="${color}" stroke-width="3"/>`
     : `<defs><linearGradient id="slot" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${color}"/><stop offset="1" stop-color="#20242b" stop-opacity=".28"/></linearGradient></defs><rect width="72" height="72" rx="7" fill="url(#slot)"/>`;
-  const active = client.active
-    ? `<text x="36" y="44" class="active-text center" font-size="7" letter-spacing=".7px">ACTIVE</text>`
-    : "";
+  const interactionLabel =
+    interaction === "swap"
+      ? `<text x="36" y="44" class="${client.active ? "active-text" : "text"} center" font-size="7" letter-spacing=".7px">${client.active ? "CURRENT" : "SELECT"}</text>`
+      : client.active
+        ? `<text x="36" y="44" class="active-text center" font-size="7" letter-spacing=".7px">ACTIVE</text>`
+        : "";
   const unavailable = !enabled
     ? `<rect width="72" height="72" rx="7" fill="#080a0d" opacity=".24"/>`
     : "";
@@ -107,7 +118,7 @@ function renderCharacter(
     : `<rect x="40" y="5" width="27" height="27" rx="3" fill="#080a0d" opacity=".58"/><text x="53.5" y="22.5" class="text center small">${escapeXml(classCode ?? "?")}</text>`;
   const nameClass = client.active ? "active-text center" : "text center";
 
-  return `${surface}<circle cx="17" cy="18" r="13" fill="${badge}"/><text x="17" y="25" class="text center large">${slot}</text>${identity}${active}<text x="36" y="61" class="${nameClass}" font-size="${nameSize}px">${escapeXml(name)}</text>${ready}${unavailable}`;
+  return `${surface}<circle cx="17" cy="18" r="13" fill="${badge}"/><text x="17" y="25" class="text center large">${slot}</text>${identity}${interactionLabel}<text x="36" y="61" class="${nameClass}" font-size="${nameSize}px">${escapeXml(name)}</text>${ready}${unavailable}`;
 }
 
 function renderUtility(
@@ -118,6 +129,20 @@ function renderUtility(
 ): string {
   const mainSize = main.length > 10 ? 10 : main.length > 7 ? 13 : 18;
   return `${base(accent)}<text x="6" y="15" class="utility-label" fill="${accent}">${escapeXml(top)}</text><text x="36" y="43" class="text center" font-size="${mainSize}px">${escapeXml(main)}</text><text x="36" y="59" class="muted center tiny">${escapeXml(bottom)}</text>`;
+}
+
+function renderSwap(
+  available: boolean,
+  armed: boolean,
+  status: string,
+): string {
+  const accent = armed ? COLORS.cyan : available ? COLORS.green : "#6d737c";
+  return renderUtility(
+    available && !armed ? "NUMBERS" : "SWAP",
+    available ? (armed ? "ARMED" : "SWAP") : "—",
+    armed ? "PICK CHARACTER" : status,
+    accent,
+  );
 }
 
 function renderBroadcast(available: boolean, enabled: boolean): string {
