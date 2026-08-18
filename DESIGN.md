@@ -165,7 +165,7 @@ Charcoal surfaces keep the interface quiet while cyan, green, amber, and coral r
 - **Key depth** (`colors.key-high` to `colors.key-deep`): The restrained diagonal tonal gradient behind utility, boot, broadcast-off, and feedback keys. `colors.key-black` veils unavailable clients and backs class-code fallbacks.
 - **Key structure** (`colors.empty-gray`, `colors.ambient-gray`, `colors.boot-line`): Empty-slot rails, ambient product rails, and quiet boot separators.
 - **Property-inspector depth** (`colors.pi-canvas`, `colors.pi-surface`, `colors.pi-inset`): Canvas, status/help panels, and inset fields. One-pixel `colors.pi-line` borders separate controls without adding shadow.
-- **Text hierarchy** (`colors.text`, `colors.key-muted`, `colors.pi-muted`, `colors.key-quiet`): Primary, secondary, and tertiary information. `colors.active-white` outlines the active client, dark `colors.on-accent` sits on cyan fills, and `colors.setup-muted` marks setup or unknown utility states.
+- **Text hierarchy** (`colors.text`, `colors.key-muted`, `colors.pi-muted`, `colors.key-quiet`): Primary, secondary, and tertiary information. `colors.active-white` fills the active-client tile, dark `colors.on-accent` labels that light surface and sits on cyan fills, and `colors.setup-muted` marks setup or unknown utility states.
 
 ### Named Rules
 
@@ -196,7 +196,7 @@ Charcoal surfaces keep the interface quiet while cyan, green, amber, and coral r
 
 Ikkinz key art is authored at exactly 72 × 72 pixels. The shipped v0 grid is five columns by three rows: the first six positions carry exact-client identity, while the remaining positions carry connection, broadcast, input, pairing, group, active-client, server, and ambient product state. This is the implemented v0 deck map, not a promise that every Stonemite surface uses a 5 × 3 composition.
 
-Every dark utility key begins with a 3px top state rail. Character keys use a 13px-radius badge centered at (17, 18), a 29 × 29 class image at the top right when known, a bottom-centered name, a 3px white active border, and a 3px readiness dot at the lower right. Missing clients and unavailable controls remain in place and explain their state instead of collapsing the grid.
+Every dark utility key begins with a 3px top state rail. Character keys use a 13px-radius badge centered at (17, 18), a 29 × 29 class image at the top right when known, a bottom-centered name, and a 3px readiness dot at the lower right. The active character replaces its slot gradient with an active-white surface, keeps a 3px slot-color outline, switches its labels to dark ink, and states “ACTIVE” explicitly. Missing clients and unavailable controls remain in place and explain their state instead of collapsing the grid.
 
 The property inspector is a compact single column with 12px outer padding. It declares a 260px minimum width, uses full-width 34px fields and the primary action, separates paired actions into two equal columns with an 8px gap, and relies on the observed 5–18px spacing rhythm. There is no width media-query breakpoint in the shipped property inspector.
 
@@ -232,7 +232,7 @@ Corners are compact and consistent: Stream Deck artwork and property-inspector i
 
 ### Key Tiles
 - **Base grammar:** Every tile is a 72px square with the key radius. Utility and state tiles use the restrained key gradient, a 3px accent rail, a small top label, a central value, and a bottom qualifier.
-- **Identity:** Character tiles combine the fixed slot surface, darker number badge, class icon or explicit code fallback, character name, readiness dot, optional unavailable veil, and white active border.
+- **Identity:** Character tiles combine the fixed slot surface, darker number badge, class icon or explicit code fallback, character name, readiness dot, and optional unavailable veil. The active tile becomes active-white with dark labels, a slot-color outline, and an explicit “ACTIVE” marker.
 - **Broadcast:** Off uses the dark base with broadcast-off accent; unavailable switches to broadcast-unavailable and says “UNAVAILABLE.” On replaces the entire surface with solid broadcast red, a white lightning mark, “BROADCAST,” and the softer “ON” label.
 - **Feedback / Error:** Pending, success, and error temporarily replace only the operated key with recovery amber, ready green, or error coral iconography plus “WORKING,” “DONE,” or “FAILED” and a short message. Empty and unsupported positions stay explicit with “NOT LOADED” or “LAYOUT REQUIRED.”
 

@@ -6,6 +6,7 @@ const COLORS = {
   bg: "#171a1f",
   bg2: "#20242b",
   text: "#f5f7fa",
+  ink: "#101615",
   muted: "#a7b0bb",
   cyan: "#59d8d0",
   amber: "#ffc75c",
@@ -53,7 +54,7 @@ export function escapeXml(value: string): string {
 }
 
 function styles(): string {
-  return `.text{fill:${COLORS.text};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:800}.muted{fill:${COLORS.muted};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:750}.quiet{fill:#77818d;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:750}.center{text-anchor:middle}.tiny{font-size:7px;letter-spacing:.35px}.small{font-size:8px}.medium{font-size:10px}.large{font-size:20px}`;
+  return `.text{fill:${COLORS.text};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:800}.active-text{fill:${COLORS.ink};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:850}.utility-label{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:8px;font-weight:800;text-anchor:start}.muted{fill:${COLORS.muted};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:750}.quiet{fill:#77818d;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:750}.center{text-anchor:middle}.tiny{font-size:7px;letter-spacing:.35px}.small{font-size:8px}.medium{font-size:10px}.large{font-size:20px}`;
 }
 
 function base(accent: string): string {
@@ -72,20 +73,27 @@ function renderCharacter(
   const nameSize = name.length > 10 ? 10 : name.length > 7 ? 12 : 15;
   const classCode = client.class_code?.toUpperCase();
   const icon = classCode ? CLASS_IMAGES[classCode] : undefined;
+  const surface = client.active
+    ? `<rect width="72" height="72" rx="7" fill="${COLORS.text}"/><rect x="1.5" y="1.5" width="69" height="69" rx="5.5" fill="none" stroke="${color}" stroke-width="3"/>`
+    : `<defs><linearGradient id="slot" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${color}"/><stop offset="1" stop-color="#20242b" stop-opacity=".28"/></linearGradient></defs><rect width="72" height="72" rx="7" fill="url(#slot)"/>`;
   const active = client.active
-    ? `<rect x="1.5" y="1.5" width="69" height="69" rx="5.5" fill="none" stroke="#fff" stroke-width="3"/>`
+    ? `<text x="36" y="44" class="active-text center" font-size="7" letter-spacing=".7px">ACTIVE</text>`
     : "";
   const unavailable = !enabled
     ? `<rect width="72" height="72" rx="7" fill="#080a0d" opacity=".24"/>`
     : "";
+  const readyStroke = client.active
+    ? ` stroke="${COLORS.ink}" stroke-width="1"`
+    : "";
   const ready = client.input_ready
-    ? `<circle cx="63" cy="63" r="3" fill="${COLORS.green}"/><title>Input ready</title>`
-    : `<circle cx="63" cy="63" r="3" fill="${COLORS.amber}"/><title>Input not ready</title>`;
+    ? `<circle cx="63" cy="63" r="3" fill="${COLORS.green}"${readyStroke}/><title>Input ready</title>`
+    : `<circle cx="63" cy="63" r="3" fill="${COLORS.amber}"${readyStroke}/><title>Input not ready</title>`;
   const identity = icon
     ? `<image href="${icon}" x="39" y="4" width="29" height="29" preserveAspectRatio="xMidYMid meet"/>`
     : `<rect x="40" y="5" width="27" height="27" rx="3" fill="#080a0d" opacity=".58"/><text x="53.5" y="22.5" class="text center small">${escapeXml(classCode ?? "?")}</text>`;
+  const nameClass = client.active ? "active-text center" : "text center";
 
-  return `<defs><linearGradient id="slot" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${color}"/><stop offset="1" stop-color="#20242b" stop-opacity=".28"/></linearGradient></defs><rect width="72" height="72" rx="7" fill="url(#slot)"/><circle cx="17" cy="18" r="13" fill="${badge}"/><text x="17" y="25" class="text center large">${slot}</text>${identity}<text x="36" y="61" class="text center" font-size="${nameSize}px">${escapeXml(name)}</text>${ready}${unavailable}${active}`;
+  return `${surface}<circle cx="17" cy="18" r="13" fill="${badge}"/><text x="17" y="25" class="text center large">${slot}</text>${identity}${active}<text x="36" y="61" class="${nameClass}" font-size="${nameSize}px">${escapeXml(name)}</text>${ready}${unavailable}`;
 }
 
 function renderUtility(
@@ -95,7 +103,7 @@ function renderUtility(
   accent: string,
 ): string {
   const mainSize = main.length > 10 ? 10 : main.length > 7 ? 13 : 18;
-  return `${base(accent)}<text x="6" y="15" class="center" text-anchor="start" fill="${accent}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="8" font-weight="800">${escapeXml(top)}</text><text x="36" y="43" class="text center" font-size="${mainSize}px">${escapeXml(main)}</text><text x="36" y="59" class="muted center tiny">${escapeXml(bottom)}</text>`;
+  return `${base(accent)}<text x="6" y="15" class="utility-label" fill="${accent}">${escapeXml(top)}</text><text x="36" y="43" class="text center" font-size="${mainSize}px">${escapeXml(main)}</text><text x="36" y="59" class="muted center tiny">${escapeXml(bottom)}</text>`;
 }
 
 function renderBroadcast(available: boolean, enabled: boolean): string {

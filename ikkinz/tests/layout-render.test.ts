@@ -176,7 +176,10 @@ describe("5 by 3 layout", () => {
       expect(svg).toContain(BADGE_COLORS[index]);
     });
     const active = decodeSvg(renderCell(characterCells[0]!));
-    expect(active).toContain('stroke="#fff" stroke-width="3"');
+    expect(active).toContain('fill="#f5f7fa"');
+    expect(active).toContain('class="active-text center"');
+    expect(active).toContain(">ACTIVE</text>");
+    expect(active).toContain(`stroke="${SLOT_COLORS[0]}" stroke-width="3"`);
     const inputUnready = decodeSvg(renderCell(characterCells[4]!));
     expect(inputUnready).toContain('fill="#ffc75c"');
     const disabled = decodeSvg(renderCell(characterCells[5]!));
@@ -216,6 +219,21 @@ describe("SVG rendering", () => {
     const svg = decodeSvg(renderCell(buildCell(view({ snapshot }), 0, 0)));
     expect(svg).toContain("&lt;Mora &amp; &quot;Rook&quot;&gt;");
     expect(svg).not.toContain(`<Mora & "Rook">`);
+  });
+
+  it("keeps utility headers fully visible from the left edge", () => {
+    const coordinates = [
+      [1, 3, "INPUT"],
+      [1, 4, "IKKINZ"],
+      [2, 2, "SERVER"],
+    ] as const;
+
+    for (const [row, column, label] of coordinates) {
+      const svg = decodeSvg(renderCell(buildCell(view(), row, column)));
+      expect(svg).toContain(`<text x="6" y="15" class="utility-label"`);
+      expect(svg).toContain(`>${label}</text>`);
+      expect(svg).not.toContain('class="center" text-anchor="start"');
+    }
   });
 
   it("is deterministic and always targets a 72 pixel canvas", () => {
