@@ -38,8 +38,8 @@ Stonemite derives character identity from the running EQ clients and controls an
 ## Capabilities and constraints
 
 - Protocol v1 provides complete pushed state, exact client activation, active-to-selected window-number swaps, explicit broadcast state, exact-client text/key delivery, request correlation, and six-digit LAN pairing.
-- Ikkinz v0 is the core deck only: boot/handoff, live character tiles, exact activation, window-number swaps, broadcast, group and follow actions, connection status, pairing, and honest error states.
-- Semantic actions such as Assist, Burn, Camp, heals, and spells are deliberately outside v0 because their EQ commands, hotkeys, timing, and target policy are not yet defined.
+- Ikkinz v0 is the core deck only: boot/handoff, live character tiles, exact activation, window-number swaps, broadcast, group, follow, and assist actions, connection status, pairing, and honest error states.
+- Assist has one explicit policy: concurrently send `/assist <active character>` to every input-ready background client. Burn, Camp, heals, spells, and other semantic actions remain outside v0 until their EQ commands, hotkeys, timing, and target policy are defined.
 - An input result proves delivery to the intended process, not an observed spell, target, buff, or combat result. The interface must never claim otherwise.
 - Client IDs are opaque and valid only for the current Stonemite run. Reconnect state is authoritative.
 - Character, server, and class can be temporarily unknown. Clients can be absent, extra, unactivatable, or not ready for targeted input.

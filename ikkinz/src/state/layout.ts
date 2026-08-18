@@ -72,6 +72,15 @@ export type GridCell =
       accent: string;
     }
   | {
+      type: "assist";
+      row: number;
+      column: number;
+      available: boolean;
+      ready: number;
+      status: string;
+      accent: string;
+    }
+  | {
       type: "broadcast";
       row: number;
       column: number;
@@ -85,13 +94,6 @@ export type GridCell =
       available: boolean;
       armed: boolean;
       status: string;
-    }
-  | {
-      type: "ambient";
-      row: number;
-      column: number;
-      label: string;
-      position: "left" | "right";
     };
 
 export interface SwapPlan {
@@ -219,6 +221,28 @@ export function buildFollowPlan(view: DashboardView): FollowPlan {
     status = `${followers.length} ${followers.length === 1 ? "BOX" : "BOXES"} READY`;
 
   return { leader, followers, available, status };
+}
+
+export type AssistMain = FollowLeader;
+
+export interface AssistPlan {
+  main: AssistMain | null;
+  assistants: TrusharClient[];
+  available: boolean;
+  status: string;
+}
+
+export function buildAssistPlan(view: DashboardView): AssistPlan {
+  const followPlan = buildFollowPlan(view);
+  return {
+    main: followPlan.leader,
+    assistants: followPlan.followers,
+    available: followPlan.available,
+    status:
+      followPlan.status === "LEADER UNKNOWN"
+        ? "MAIN UNKNOWN"
+        : followPlan.status,
+  };
 }
 
 function activeClient(snapshot: TrusharState | null): TrusharClient | null {
@@ -401,23 +425,30 @@ export function buildCell(
     };
   }
 
-  if (row === 2 && column === 4) {
+  if (row === 2 && column === 3) {
+    const plan = buildAssistPlan(view);
     return {
-      type: "swap",
+      type: "assist",
       row,
       column,
-      available: swapPlan.available,
-      armed: swapMode,
-      status: swapPlan.status,
+      available: plan.available,
+      ready: plan.assistants.length,
+      status: plan.status,
+      accent: plan.available
+        ? "#80df89"
+        : view.connection.state === "error"
+          ? "#ff826f"
+          : "#ffc75c",
     };
   }
 
   return {
-    type: "ambient",
+    type: "swap",
     row,
     column,
-    label: "STONE",
-    position: "left",
+    available: swapPlan.available,
+    armed: swapMode,
+    status: swapPlan.status,
   };
 }
 

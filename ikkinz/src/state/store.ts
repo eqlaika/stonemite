@@ -12,6 +12,7 @@ export interface ConnectionStatus {
 export interface Feedback {
   kind: "pending" | "error";
   message: string;
+  motion?: "group" | "follow" | "assist";
   until: number;
 }
 

@@ -134,8 +134,12 @@ describe("5 by 3 layout", () => {
       status: "4 BOXES READY",
     });
     const svg = decodeSvg(renderCell(group));
-    expect(svg).toContain(">GROUP</text>");
-    expect(svg).toContain(">FORM</text>");
+    expect(svg).toContain('data-icon="group"');
+    expect(svg).toContain('data-icon-set="lucide-animated"');
+    expect(svg).toContain('d="M18 21a8 8 0 0 0-16 0"');
+    expect(renderCell(group, 0)).toBe(renderCell(group, 6));
+    expect(svg).toContain(">FORM GROUP</text>");
+    expect(svg).not.toContain(">FORM</text>");
     expect(svg).not.toContain(">LIVE</text>");
 
     const unavailable = buildCell(
@@ -178,7 +182,9 @@ describe("5 by 3 layout", () => {
       ready: 0,
       status: "NO READY BOXES",
     });
-    expect(decodeSvg(renderCell(unavailable))).toContain(">—</text>");
+    const unavailableSvg = decodeSvg(renderCell(unavailable));
+    expect(unavailableSvg).toContain('data-icon="group"');
+    expect(unavailableSvg).toContain(">NO READY BOXES</text>");
   });
 
   it("replaces input readiness with Follow for ready background boxes", () => {
@@ -191,8 +197,13 @@ describe("5 by 3 layout", () => {
       status: "4 BOXES READY",
     });
     const svg = decodeSvg(renderCell(follow));
+    expect(svg).toContain('data-icon="follow"');
+    expect(svg).toContain('data-icon-set="lucide-animated"');
+    expect(svg).toContain(
+      'd="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"',
+    );
     expect(svg).toContain(">FOLLOW</text>");
-    expect(svg).toContain(">START</text>");
+    expect(svg).not.toContain(">START</text>");
     expect(svg).not.toContain(">INPUT</text>");
 
     const leaderUnknown = buildCell(
@@ -229,6 +240,104 @@ describe("5 by 3 layout", () => {
     });
   });
 
+  it("replaces the ambient STONE tile with Assist for ready background boxes", () => {
+    const snapshot = stateFixture({ clients: sixClients() });
+    const assist = buildCell(view({ snapshot }), 2, 3);
+    expect(assist).toMatchObject({
+      type: "assist",
+      available: true,
+      ready: 4,
+      status: "4 BOXES READY",
+    });
+    const svg = decodeSvg(renderCell(assist));
+    expect(svg).toContain('data-icon="assist"');
+    expect(svg).toContain('data-icon-set="lucide-animated"');
+    expect(svg).toContain('data-motion-part="outer-target"');
+    expect(svg).toContain(">ASSIST</text>");
+    expect(svg).not.toContain(">STONE</text>");
+
+    const mainUnknown = buildCell(
+      view({
+        snapshot: stateFixture({
+          clients: [
+            {
+              id: "main",
+              window_number: 1,
+              active: true,
+              activatable: true,
+              input_ready: true,
+            },
+            {
+              id: "assistant",
+              character: "Serein",
+              window_number: 2,
+              active: false,
+              activatable: true,
+              input_ready: true,
+            },
+          ],
+          active_client_id: "main",
+        }),
+      }),
+      2,
+      3,
+    );
+    expect(mainUnknown).toMatchObject({
+      type: "assist",
+      available: false,
+      ready: 0,
+      status: "MAIN UNKNOWN",
+    });
+  });
+
+  it("animates action icons while Group, Follow, and Assist are in flight", () => {
+    const pendingGroup = buildCell(
+      view({
+        feedback: new Map([
+          [
+            "0,3",
+            {
+              kind: "pending",
+              message: "Inviting",
+              motion: "group",
+              until: Date.now() + 1_000,
+            },
+          ],
+        ]),
+      }),
+      0,
+      3,
+    );
+    const firstFrame = decodeSvg(renderCell(pendingGroup, 0));
+    const nextFrame = decodeSvg(renderCell(pendingGroup, 3));
+    expect(firstFrame).toContain('data-icon="group"');
+    expect(firstFrame).toContain('data-active="true"');
+    expect(firstFrame).toContain(">FORMING</text>");
+    expect(nextFrame).not.toBe(firstFrame);
+
+    const pendingAssist = buildCell(
+      view({
+        feedback: new Map([
+          [
+            "2,3",
+            {
+              kind: "pending",
+              message: "Sending",
+              motion: "assist",
+              until: Date.now() + 1_000,
+            },
+          ],
+        ]),
+      }),
+      2,
+      3,
+    );
+    const assistFrame = decodeSvg(renderCell(pendingAssist, 3));
+    expect(assistFrame).toContain('data-icon="assist"');
+    expect(assistFrame).toContain('data-active="true"');
+    expect(assistFrame).toContain(">ASSISTING</text>");
+  });
+
   it("turns the MITE key into an explicit two-step window-number swap", () => {
     const snapshot = stateFixture({ clients: sixClients() });
     const swap = buildCell(view({ snapshot }), 2, 4);
@@ -241,15 +350,21 @@ describe("5 by 3 layout", () => {
       available: true,
       armed: false,
     });
-    expect(decodeSvg(renderCell(swap))).toContain(">NUMBERS</text>");
-    expect(decodeSvg(renderCell(swap))).toContain(">SWAP</text>");
+    const idleSwapSvg = decodeSvg(renderCell(swap));
+    expect(idleSwapSvg).toContain('data-icon="swap"');
+    expect(idleSwapSvg).toContain('data-icon-set="lucide-animated"');
+    expect(idleSwapSvg).toContain('d="M8 3 4 7l4 4"');
+    expect(idleSwapSvg).toContain('data-active="false"');
+    expect(idleSwapSvg).toContain(">SWAP</text>");
+    expect(idleSwapSvg).toContain(">PRESS THEN PICK</text>");
 
     const armedSwap = buildCell(view({ snapshot }), 2, 4, true);
     expect(armedSwap).toMatchObject({ type: "swap", armed: true });
-    expect(decodeSvg(renderCell(armedSwap))).toContain(">ARMED</text>");
-    expect(decodeSvg(renderCell(armedSwap))).toContain(
-      ">PICK CHARACTER</text>",
-    );
+    const armedFrameZero = decodeSvg(renderCell(armedSwap, 0));
+    const armedFrameThree = decodeSvg(renderCell(armedSwap, 3));
+    expect(armedFrameZero).toContain('data-active="true"');
+    expect(armedFrameZero).toContain(">PICK CHARACTER</text>");
+    expect(armedFrameThree).not.toBe(armedFrameZero);
 
     const current = buildCell(view({ snapshot }), 0, 0, true);
     const target = buildCell(view({ snapshot }), 0, 1, true);
@@ -411,7 +526,6 @@ describe("SVG rendering", () => {
 
   it("keeps utility headers fully visible from the left edge", () => {
     const coordinates = [
-      [1, 3, "FOLLOW"],
       [1, 4, "STONEMITE"],
       [2, 2, "SERVER"],
     ] as const;

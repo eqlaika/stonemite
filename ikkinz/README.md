@@ -1,14 +1,16 @@
 # Ikkinz
 
-Ikkinz is the internal codename for the **Stonemite · EQ boxing** 5×3 Stream Deck control surface. It shows the current six-client roster, activates an exact loaded EQ client, swaps the window numbers of the active and selected clients, forms and follows a group from the active client, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting.
+Ikkinz is the internal codename for the **Stonemite · EQ boxing** 5×3 Stream Deck control surface. It shows the current six-client roster, activates an exact loaded EQ client, swaps the window numbers of the active and selected clients, forms a group, directs ready background clients to follow or assist the active character, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting.
 
 The Group key invites every other named, input-ready client from the active box, waits one second, then sends `Ctrl+I` to those invited clients. Boxes without a detected character name or ready targeted-input channel are skipped.
 
 The Follow key identifies the active named leader and concurrently sends `/follow <leader>` to every other input-ready client.
 
+The Assist key replaces the noninteractive STONE tile. It identifies the active named main box and concurrently sends `/assist <main>` to every other input-ready client.
+
 The Swap key replaces the old MITE ambient key. Press **Swap**, then press a character. Stonemite exchanges that character's window number with the currently active character's number without activating a different window. Press Swap again or select the current character to cancel.
 
-V0 is intentionally the core deck. Assist, Burn, Camp, heals, spells, live EQ targets, buffs, and cooldowns are not implemented until their commands and failure policy are defined.
+V0 is intentionally the core deck. Burn, Camp, heals, spells, live EQ targets, buffs, and cooldowns are not implemented until their commands and failure policy are defined.
 
 ## Requirements
 
@@ -44,7 +46,7 @@ npm run build
 npm run validate
 ```
 
-The asset step generates data URLs from `../app/assets/app.png` and `../app/assets/class_icons/`; the generated TypeScript file is intentionally ignored. The Stream Deck bundle is written to `co.laikasoft.ikkinz.sdPlugin/bin/`.
+The asset step generates data URLs from `../app/assets/app.png` and `../app/assets/class_icons/`; the generated TypeScript file is intentionally ignored. Action tiles use vendored Lucide Animated geometry and never fetch icons at runtime; licenses ship in `co.laikasoft.ikkinz.sdPlugin/THIRD_PARTY_NOTICES.md`. The Stream Deck bundle is written to `co.laikasoft.ikkinz.sdPlugin/bin/`.
 
 To link a development build after validation:
 
@@ -87,7 +89,7 @@ The command builds, validates with the current Elgato CLI schema, and writes an 
 - **Window numbers swapped** means Stonemite exchanged the active and selected clients' stable numbers and returned authoritative current state; it does not change the active client.
 - **Broadcast on/off** is Stonemite's pushed broadcast state, not a blind local toggle.
 - **Input ready** means that client's compatible trusik input channel acknowledged readiness.
-- Group progress confirms exact-client input delivery only; it does not prove that EQ formed the group.
+- Group, Follow, and Assist progress confirm exact-client input delivery only; they do not prove that EQ formed the group, moved a character, or changed a target.
 - Ikkinz does not observe whether EQ accepted input or performed a resulting in-game action.
 
 Pairing codes, bearer credentials, and raw command traffic are never written to Ikkinz logs.

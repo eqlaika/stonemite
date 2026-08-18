@@ -84,9 +84,13 @@ describe("GridKeyController", () => {
     await vi.advanceTimersByTimeAsync(1_100);
 
     await action.onKeyDown({ action: swap } as never);
-    expect(decodeURIComponent(swap.setImage.mock.calls.at(-1)?.[0])).toContain(
-      ">ARMED</text>",
+    const firstArmedFrame = swap.setImage.mock.calls.at(-1)?.[0] as string;
+    expect(decodeURIComponent(firstArmedFrame)).toContain('data-active="true"');
+    expect(decodeURIComponent(firstArmedFrame)).toContain(
+      ">PICK CHARACTER</text>",
     );
+    await vi.advanceTimersByTimeAsync(125);
+    expect(swap.setImage.mock.calls.at(-1)?.[0]).not.toBe(firstArmedFrame);
     expect(
       decodeURIComponent(current.setImage.mock.calls.at(-1)?.[0]),
     ).toContain(">CURRENT</text>");
@@ -107,12 +111,15 @@ describe("GridKeyController", () => {
     await press;
     expect(store.view.feedback.get("0,1")).toBeUndefined();
     expect(decodeURIComponent(swap.setImage.mock.calls.at(-1)?.[0])).toContain(
-      ">NUMBERS</text>",
+      'data-active="false"',
     );
 
     await action.onKeyDown({ action: swap } as never);
     await action.onKeyDown({ action: current } as never);
     expect(client.swapWindowNumbers).toHaveBeenCalledTimes(1);
+    const settledFrameCount = swap.setImage.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(swap.setImage).toHaveBeenCalledTimes(settledFrameCount);
   });
 
   it("invites ready named boxes, waits one second, then sends Ctrl+I", async () => {
@@ -140,6 +147,7 @@ describe("GridKeyController", () => {
     expect(store.view.feedback.get("0,3")).toMatchObject({
       kind: "pending",
       message: "Waiting 1 sec",
+      motion: "group",
     });
 
     await action.onKeyDown({ action: group } as never);
@@ -244,6 +252,7 @@ describe("GridKeyController", () => {
     expect(store.view.feedback.get("1,3")).toMatchObject({
       kind: "pending",
       message: "Following",
+      motion: "follow",
     });
 
     await action.onKeyDown({ action: follow } as never);
@@ -278,6 +287,69 @@ describe("GridKeyController", () => {
     expect(follow.showAlert).toHaveBeenCalledTimes(1);
   });
 
+  it("sends Assist to every ready background box concurrently", async () => {
+    vi.useFakeTimers();
+    const store = groupStore();
+    const deliveries = [
+      deferred<ReturnType<typeof inputResult>>(),
+      deferred<ReturnType<typeof inputResult>>(),
+      deferred<ReturnType<typeof inputResult>>(),
+    ];
+    const client = fakeClient();
+    client.sendText
+      .mockReturnValueOnce(deliveries[0]!.promise)
+      .mockReturnValueOnce(deliveries[1]!.promise)
+      .mockReturnValueOnce(deliveries[2]!.promise);
+    const action = new GridKeyController(store, client as never);
+    const assist = fakeKey("assist", 2, 3);
+
+    await action.onWillAppear({ action: assist } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+
+    const press = action.onKeyDown({ action: assist } as never);
+    expect(client.sendText.mock.calls).toEqual([
+      ["serein-id", "/assist Laika", true],
+      ["unknown-id", "/assist Laika", true],
+      ["rook-id", "/assist Laika", true],
+    ]);
+    expect(store.view.feedback.get("2,3")).toMatchObject({
+      kind: "pending",
+      message: "Sending",
+      motion: "assist",
+    });
+
+    await action.onKeyDown({ action: assist } as never);
+    expect(client.sendText).toHaveBeenCalledTimes(3);
+    for (const delivery of deliveries) delivery.resolve(inputResult("text"));
+    await press;
+
+    expect(store.view.feedback.get("2,3")).toBeUndefined();
+    expect(assist.showAlert).not.toHaveBeenCalled();
+  });
+
+  it("reports partial Assist delivery after attempting every ready box", async () => {
+    vi.useFakeTimers();
+    const store = groupStore();
+    const client = fakeClient();
+    client.sendText
+      .mockResolvedValueOnce(inputResult("text"))
+      .mockRejectedValueOnce(new CommandError("send_failed", "missed"))
+      .mockResolvedValueOnce(inputResult("text"));
+    const action = new GridKeyController(store, client as never);
+    const assist = fakeKey("assist", 2, 3);
+
+    await action.onWillAppear({ action: assist } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+    await action.onKeyDown({ action: assist } as never);
+
+    expect(client.sendText).toHaveBeenCalledTimes(3);
+    expect(store.view.feedback.get("2,3")).toMatchObject({
+      kind: "error",
+      message: "Partial assist",
+    });
+    expect(assist.showAlert).toHaveBeenCalledTimes(1);
+  });
+
   it("reveals activation and broadcast state immediately without a done interstitial", async () => {
     vi.useFakeTimers();
     const store = connectedStore();
@@ -308,6 +380,7 @@ describe("GridKeyController", () => {
     });
     activation.resolve(activatedResult());
     await activationPress;
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(store.view.feedback.get("0,0")).toBeUndefined();
     const characterImage = character.setImage.mock.calls.at(-1)?.[0] as string;
@@ -324,6 +397,7 @@ describe("GridKeyController", () => {
     });
     broadcast.resolve(broadcastResult(true));
     await broadcastPress;
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(store.view.feedback.get("0,4")).toBeUndefined();
     const broadcastImage = broadcastKey.setImage.mock.calls.at(

@@ -1,4 +1,5 @@
 import { APP_IMAGE, CLASS_IMAGES } from "./assets.generated";
+import { renderLucideActionIcon, type ActionIcon } from "./action-icons";
 import { BADGE_COLORS, SLOT_COLORS, type GridCell } from "../state/layout";
 
 const W = 72;
@@ -14,7 +15,7 @@ const COLORS = {
   red: "#ff826f",
 };
 
-export function renderCell(cell: GridCell): string {
+export function renderCell(cell: GridCell, motionFrame = 0): string {
   const body = (() => {
     switch (cell.type) {
       case "unsupported":
@@ -22,7 +23,12 @@ export function renderCell(cell: GridCell): string {
       case "boot":
         return renderBoot(cell.row, cell.column, cell.stage);
       case "feedback":
-        return renderFeedback(cell.feedback.kind, cell.feedback.message);
+        return renderFeedback(
+          cell.feedback.kind,
+          cell.feedback.message,
+          cell.feedback.motion,
+          motionFrame,
+        );
       case "character":
         return renderCharacter(
           cell.client,
@@ -35,25 +41,20 @@ export function renderCell(cell: GridCell): string {
       case "utility":
         return renderUtility(cell.top, cell.main, cell.bottom, cell.accent);
       case "group":
-        return renderUtility(
-          "GROUP",
-          cell.available ? "FORM" : "—",
+        return renderActionTile(
+          "group",
+          "FORM GROUP",
           cell.status,
           cell.accent,
         );
       case "follow":
-        return renderUtility(
-          "FOLLOW",
-          cell.available ? "START" : "—",
-          cell.status,
-          cell.accent,
-        );
+        return renderActionTile("follow", "FOLLOW", cell.status, cell.accent);
+      case "assist":
+        return renderActionTile("assist", "ASSIST", cell.status, cell.accent);
       case "broadcast":
         return renderBroadcast(cell.available, cell.enabled);
       case "swap":
-        return renderSwap(cell.available, cell.armed, cell.status);
-      case "ambient":
-        return renderAmbient(cell.label, cell.position);
+        return renderSwap(cell.available, cell.armed, cell.status, motionFrame);
     }
   })();
 
@@ -135,14 +136,29 @@ function renderSwap(
   available: boolean,
   armed: boolean,
   status: string,
+  motionFrame: number,
 ): string {
   const accent = armed ? COLORS.cyan : available ? COLORS.green : "#6d737c";
-  return renderUtility(
-    available && !armed ? "NUMBERS" : "SWAP",
-    available ? (armed ? "ARMED" : "SWAP") : "—",
+  return renderActionTile(
+    "swap",
+    "SWAP",
     armed ? "PICK CHARACTER" : status,
     accent,
+    motionFrame,
+    armed,
   );
+}
+
+function renderActionTile(
+  icon: ActionIcon,
+  label: string,
+  status: string,
+  accent: string,
+  motionFrame = 0,
+  active = false,
+): string {
+  const statusSize = status.length > 14 ? 6 : 7;
+  return `${base(accent)}${renderLucideActionIcon(icon, accent, motionFrame, active)}<text x="36" y="57" class="text center" font-size="8px">${escapeXml(label)}</text><text x="36" y="68" class="muted center" font-size="${statusSize}px" letter-spacing=".25px">${escapeXml(status)}</text>`;
 }
 
 function renderBroadcast(available: boolean, enabled: boolean): string {
@@ -154,15 +170,31 @@ function renderBroadcast(available: boolean, enabled: boolean): string {
   return `${base(accent)}<g color="${accent}">${lightning}</g><text x="36" y="62" class="text center small">BROADCAST</text>${available ? "" : '<text x="36" y="69" class="quiet center tiny">UNAVAILABLE</text>'}`;
 }
 
-function renderFeedback(kind: "pending" | "error", message: string): string {
+function renderFeedback(
+  kind: "pending" | "error",
+  message: string,
+  motion: "group" | "follow" | "assist" | undefined,
+  motionFrame: number,
+): string {
+  if (kind === "pending" && motion) {
+    const labels = {
+      group: "FORMING",
+      follow: "FOLLOWING",
+      assist: "ASSISTING",
+    } as const;
+    return renderActionTile(
+      motion,
+      labels[motion],
+      message.toUpperCase(),
+      COLORS.amber,
+      motionFrame,
+      true,
+    );
+  }
+
   const accent = kind === "error" ? COLORS.red : COLORS.amber;
   const label = kind === "error" ? "FAILED" : "WORKING";
   return `${base(accent)}<circle cx="36" cy="29" r="10" fill="none" stroke="${accent}" stroke-width="3"/><path d="${kind === "error" ? "M31 24l10 10m0-10L31 34" : "M36 19v10l6 4"}" fill="none" stroke="${accent}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><text x="36" y="51" fill="${accent}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="8" font-weight="850" text-anchor="middle">${label}</text><text x="36" y="63" class="text center" font-size="${message.length > 10 ? 7 : 8}px">${escapeXml(message.toUpperCase())}</text>`;
-}
-
-function renderAmbient(label: string, position: "left" | "right"): string {
-  const imageX = position === "left" ? 45 : -7;
-  return `${base("#3d4650")}<image href="${APP_IMAGE}" x="${imageX}" y="19" width="34" height="34" opacity=".3"/><text x="36" y="44" class="text center" font-size="14" opacity=".78">${escapeXml(label)}</text><text x="36" y="59" class="quiet center tiny">CORE DECK</text>`;
 }
 
 function renderBoot(row: number, column: number, stage: number): string {

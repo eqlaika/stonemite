@@ -7,6 +7,7 @@ import streamDeck, {
 } from "@elgato/streamdeck";
 import type { JsonObject, JsonValue } from "@elgato/utils";
 import {
+  buildAssistPlan,
   buildCell,
   buildFollowPlan,
   buildGroupPlan,
@@ -27,6 +28,8 @@ import {
 
 const GROUP_ACCEPT_DELAY_MS = 1_000;
 const ACTION_FEEDBACK_TIMEOUT_MS = 60_000;
+const ACTIVE_TILE_FRAME_MS = 125;
+const ACTIVE_TILE_FRAME_COUNT = 8;
 
 export interface PluginSettings extends JsonObject {
   address?: string;
@@ -45,10 +48,14 @@ export class GridKeyController {
   readonly #client: TrusharClient;
   readonly #keys = new Map<string, VisibleKey>();
   #renderQueued = false;
+  #rendering = false;
+  #motionFrame = 0;
+  #motionTimer: ReturnType<typeof setInterval> | null = null;
   #bootStarted = false;
   #credentialEpoch = 0;
   #groupInFlight = false;
   #followInFlight = false;
+  #assistInFlight = false;
   #swapArmed = false;
   #swapInFlight = false;
 
@@ -89,6 +96,7 @@ export class GridKeyController {
 
   onWillDisappear(event: WillDisappearEvent): void {
     this.#keys.delete(event.action.id);
+    this.#syncMotion();
   }
 
   async onKeyDown(event: KeyDownEvent): Promise<void> {
@@ -155,7 +163,7 @@ export class GridKeyController {
       if (cell.type === "group" && cell.available && !this.#groupInFlight) {
         const feedbackKey = cellKey(key.row, key.column);
         this.#groupInFlight = true;
-        this.#setActionFeedback(feedbackKey, "Inviting");
+        this.#setActionFeedback(feedbackKey, "Inviting", "group");
         try {
           await this.#formGroup(feedbackKey);
           this.#store.clearFeedback(feedbackKey);
@@ -167,12 +175,24 @@ export class GridKeyController {
       if (cell.type === "follow" && cell.available && !this.#followInFlight) {
         const feedbackKey = cellKey(key.row, key.column);
         this.#followInFlight = true;
-        this.#setActionFeedback(feedbackKey, "Following");
+        this.#setActionFeedback(feedbackKey, "Following", "follow");
         try {
           await this.#startFollow();
           this.#store.clearFeedback(feedbackKey);
         } finally {
           this.#followInFlight = false;
+        }
+        return;
+      }
+      if (cell.type === "assist" && cell.available && !this.#assistInFlight) {
+        const feedbackKey = cellKey(key.row, key.column);
+        this.#assistInFlight = true;
+        this.#setActionFeedback(feedbackKey, "Sending", "assist");
+        try {
+          await this.#startAssist();
+          this.#store.clearFeedback(feedbackKey);
+        } finally {
+          this.#assistInFlight = false;
         }
         return;
       }
@@ -305,6 +325,32 @@ export class GridKeyController {
     }
   }
 
+  async #startAssist(): Promise<void> {
+    const plan = buildAssistPlan(this.#store.view);
+    if (!plan.available || !plan.main) {
+      throw new CommandError(
+        "assist_unavailable",
+        "No named active main box and ready assistants are available.",
+      );
+    }
+
+    const command = `/assist ${plan.main.character.trim()}`;
+    const results = await Promise.allSettled(
+      plan.assistants.map((assistant) =>
+        this.#client.sendText(assistant.id, command, true),
+      ),
+    );
+    const failures = results.filter((result) => result.status === "rejected");
+    if (failures.length > 0) {
+      throw new CommandError(
+        failures.length === results.length ? "assist_failed" : "assist_partial",
+        failures.length === results.length
+          ? "No ready box received the assist command."
+          : "Some ready boxes missed the assist command.",
+      );
+    }
+  }
+
   async #formGroup(feedbackKey: string): Promise<void> {
     const plan = buildGroupPlan(this.#store.view);
     if (!plan.available || !plan.active) {
@@ -336,9 +382,9 @@ export class GridKeyController {
       );
     }
 
-    this.#setActionFeedback(feedbackKey, "Waiting 1 sec");
+    this.#setActionFeedback(feedbackKey, "Waiting 1 sec", "group");
     await wait(GROUP_ACCEPT_DELAY_MS);
-    this.#setActionFeedback(feedbackKey, "Accepting");
+    this.#setActionFeedback(feedbackKey, "Accepting", "group");
 
     for (const invitee of invited) {
       try {
@@ -362,10 +408,14 @@ export class GridKeyController {
     }
   }
 
-  #setActionFeedback(key: string, message: string): void {
+  #setActionFeedback(
+    key: string,
+    message: string,
+    motion: "group" | "follow" | "assist",
+  ): void {
     this.#store.setFeedback(
       key,
-      { kind: "pending", message },
+      { kind: "pending", message, motion },
       ACTION_FEEDBACK_TIMEOUT_MS,
     );
   }
@@ -397,12 +447,56 @@ export class GridKeyController {
   }
 
   #queueRender(): void {
+    this.#syncMotion();
     if (this.#renderQueued) return;
     this.#renderQueued = true;
-    queueMicrotask(() => {
-      this.#renderQueued = false;
-      void this.#renderAll();
+    queueMicrotask(() => void this.#drainRenderQueue());
+  }
+
+  async #drainRenderQueue(): Promise<void> {
+    if (this.#rendering) return;
+    this.#rendering = true;
+    try {
+      while (this.#renderQueued) {
+        this.#renderQueued = false;
+        await this.#renderAll();
+      }
+    } finally {
+      this.#rendering = false;
+    }
+  }
+
+  #syncMotion(): void {
+    const active = [...this.#keys.values()].some((key) => {
+      const cell = buildCell(
+        this.#store.view,
+        key.row,
+        key.column,
+        this.#swapArmed,
+      );
+      return (
+        (cell.type === "swap" && cell.armed) ||
+        (cell.type === "feedback" &&
+          cell.feedback.kind === "pending" &&
+          Boolean(cell.feedback.motion))
+      );
     });
+
+    if (active && !this.#motionTimer) {
+      this.#motionFrame = 0;
+      this.#motionTimer = setInterval(() => {
+        this.#motionFrame = (this.#motionFrame + 1) % ACTIVE_TILE_FRAME_COUNT;
+        this.#queueRender();
+      }, ACTIVE_TILE_FRAME_MS);
+      this.#motionTimer.unref?.();
+      return;
+    }
+
+    if (!active && this.#motionTimer) {
+      clearInterval(this.#motionTimer);
+      this.#motionTimer = null;
+      this.#motionFrame = 0;
+    }
   }
 
   async #renderAll(): Promise<void> {
@@ -410,6 +504,7 @@ export class GridKeyController {
     for (const key of this.#keys.values()) {
       const image = renderCell(
         buildCell(this.#store.view, key.row, key.column, this.#swapArmed),
+        this.#motionFrame,
       );
       if (image === key.lastImage) continue;
       updates.push(updateVisibleKeyImage(key, image));
@@ -470,6 +565,12 @@ function friendlyError(error: unknown): string {
         return "Follow failed";
       case "follow_partial":
         return "Partial follow";
+      case "assist_unavailable":
+        return "No ready boxes";
+      case "assist_failed":
+        return "Assist failed";
+      case "assist_partial":
+        return "Partial assist";
       default:
         return error.message;
     }
