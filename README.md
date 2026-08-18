@@ -11,7 +11,7 @@ EverQuest multiboxing tool for Windows.
 Stonemite makes multiboxing EQ easy — PiP overlays with click-to-swap, swap hotkeys, key broadcasting, auto-login, automatic character detection, and a drag-and-drop layout editor. No subscription, no setup wizard.
 
 > [!WARNING]
-> **Stonemite is not an automation tool.** Stonemite does not automate gameplay. Every gameplay input must originate from an immediate physical user action; Stonemite never decides when an action should occur. Sequences, timers, loops, game-state reactions, and other forms of automated or unattended gameplay are intentionally unsupported. Pull requests that add these capabilities will not be accepted. Stonemite is designed to comply fully with EverQuest's Terms of Service and EULA.
+> **Stonemite is not an automation tool.** Every gameplay input must originate from an immediate physical user action; Stonemite never decides when an action should occur. Sequences, timers, loops, game-state reactions, and other forms of automated or unattended gameplay are intentionally unsupported. Pull requests that add these capabilities will not be accepted. Stonemite is designed to comply fully with EverQuest's Terms of Service and EULA.
 
 ## Install
 
