@@ -6,6 +6,7 @@
 - Added an Ikkinz Group key that invites ready boxes from the active client and sends `Ctrl+I` to accept after one second
 - Added an Ikkinz Follow key that concurrently sends `/follow <leader>` to ready background clients
 - Added an Ikkinz Assist key that concurrently sends `/assist <main>` to ready background clients
+- Simplified Ikkinz tiles with 15px minimum text, no top rails, a stable Bcast label, distinct action colors, filled running/armed states, and four reserved blank cells
 - Replaced the Ikkinz MITE key with a two-step Swap key for exchanging the active and selected characters' window numbers
 - Allowed targeted input sequences to run concurrently across independent EQ clients
 - Fixed targeted modifier chords reaching background clients as an unmodified key by sequencing modifier press and release around the primary key

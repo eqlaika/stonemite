@@ -86,9 +86,8 @@ describe("GridKeyController", () => {
     await action.onKeyDown({ action: swap } as never);
     const firstArmedFrame = swap.setImage.mock.calls.at(-1)?.[0] as string;
     expect(decodeURIComponent(firstArmedFrame)).toContain('data-active="true"');
-    expect(decodeURIComponent(firstArmedFrame)).toContain(
-      ">PICK CHARACTER</text>",
-    );
+    expect(decodeURIComponent(firstArmedFrame)).toContain(">SWAP</text>");
+    expect(decodeURIComponent(firstArmedFrame)).not.toContain("PICK CHARACTER");
     await vi.advanceTimersByTimeAsync(125);
     expect(swap.setImage.mock.calls.at(-1)?.[0]).not.toBe(firstArmedFrame);
     expect(
@@ -405,6 +404,36 @@ describe("GridKeyController", () => {
     )?.[0] as string;
     expect(decodeURIComponent(broadcastImage)).toContain("#cc3020");
     expect(decodeURIComponent(broadcastImage)).not.toContain("DONE");
+  });
+
+  it("keeps reserved dashboard cells inert", async () => {
+    vi.useFakeTimers();
+    const store = groupStore();
+    const client = fakeClient();
+    const action = new GridKeyController(store, client as never);
+    const reserved = [
+      fakeKey("paired", 1, 4),
+      fakeKey("client-count", 2, 0),
+      fakeKey("active", 2, 1),
+      fakeKey("server", 2, 2),
+    ];
+
+    for (const key of reserved) {
+      await action.onWillAppear({ action: key } as never);
+    }
+    await vi.advanceTimersByTimeAsync(1_100);
+
+    for (const key of reserved) {
+      await action.onKeyDown({ action: key } as never);
+    }
+
+    expect(client.activate).not.toHaveBeenCalled();
+    expect(client.swapWindowNumbers).not.toHaveBeenCalled();
+    expect(client.setBroadcast).not.toHaveBeenCalled();
+    expect(client.sendText).not.toHaveBeenCalled();
+    expect(client.sendKeys).not.toHaveBeenCalled();
+    expect(store.view.feedback.size).toBe(0);
+    for (const key of reserved) expect(key.showAlert).not.toHaveBeenCalled();
   });
 
   it("renders a dedicated static image outside the 5 by 3 grid", async () => {

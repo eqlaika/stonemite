@@ -10,6 +10,10 @@ The Assist key replaces the noninteractive STONE tile. It identifies the active 
 
 The Swap key replaces the old MITE ambient key. Press **Swap**, then press a character. Stonemite exchanges that character's window number with the currently active character's number without activating a different window. Press Swap again or select the current character to cancel.
 
+The Bcast key explicitly toggles Stonemite broadcasting. Its label stays **BCAST** in both states; a solid red surface means enabled. Group is blue, Follow green, Assist gold, and Swap cyan. Each uses a dark surface while idle and fills with its action color only while running or armed.
+
+The former paired, client-count, active, and server cells are intentionally blank while their next uses are decided.
+
 V0 is intentionally the core deck. Burn, Camp, heals, spells, live EQ targets, buffs, and cooldowns are not implemented until their commands and failure policy are defined.
 
 ## Requirements

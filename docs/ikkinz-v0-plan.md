@@ -13,7 +13,7 @@ V0 includes:
 - exact activation by current opaque client ID;
 - a two-step active-to-selected window-number swap;
 - explicit broadcast enable/disable with solid red on-state;
-- connection, group, follow, assist, active-client, and server utility/action tiles;
+- group, follow, assist, Bcast, and Swap action tiles plus four intentionally reserved blank cells;
 - clear pairing, disconnected, unavailable, in-flight, success, and error feedback;
 - an installable `.streamDeckPlugin` package.
 
@@ -27,7 +27,7 @@ Create `ikkinz/` with:
 - `src/actions/grid-key.ts` — track visible key instances by device and zero-based coordinates; dispatch presses from the current logical surface.
 - `src/trushar/client.ts` — one `ws` client for pairing and authenticated protocol v1; bounded backoff, request correlation, message validation, and latest snapshot.
 - `src/state/store.ts` — connection/pairing/dashboard state and subscriptions.
-- `src/state/layout.ts` — pure 5×3 cell model; at most six sorted clients, exact action mapping, a two-step swap mode, and utility cells.
+- `src/state/layout.ts` — pure 5×3 cell model; at most six sorted clients, exact action mapping, a two-step swap mode, and reserved blank cells.
 - `src/render/key-svg.ts` — deterministic 72×72 SVG data URLs with escaped dynamic text and embedded class art.
 - `src/render/assets.generated.ts` — generated app/class PNG data URLs sourced from `app/assets/`.
 - `src/types/trushar.ts` — strict wire types and runtime parsers that tolerate additive fields but reject invalid required fields.
@@ -42,10 +42,11 @@ Use plugin-wide global settings for `{ address, authToken }`. A six-digit code i
 - Use the exact `LABEL_COLORS` and `BADGE_COLORS` from `app/src/overlay.rs`.
 - Character press sends `activate` only when the current client is activatable and the connection is ready.
 - Swap press arms a selection mode; the next non-active character press exchanges its window number with the active client's number without changing the active client. Pressing Swap again or selecting the active character cancels.
-- Broadcast press sends explicit `enabled: !current.enabled`, disables while its request is in flight, and reconciles from returned/pushed state.
+- Bcast press sends explicit `enabled: !current.enabled`, disables while its request is in flight, and reconciles from returned/pushed state. Its label remains `BCAST`; solid red means enabled.
 - Assist press identifies the active named main box and concurrently sends `/assist <main>` to every other input-ready client.
+- Group uses blue, Follow green, Assist gold, and Swap cyan. Their dark idle surfaces fill with the action color only while Group/Follow/Assist runs or Swap is armed.
 - Empty character slots explain absence without looking actionable.
-- Utility cells report only protocol truth: connected/disconnected, loaded count, active identity, common server, ready-client count, and broadcast availability.
+- The former paired, client-count, active, and server utility cells remain blank until they earn a clearer purpose.
 - Temporary key feedback says delivered/failed/activated, never cast/succeeded in EQ.
 - Boot motion is coordinated but bounded: a small number of cached whole-key SVG stages, not an unbounded 15 fps stream.
 
@@ -69,7 +70,7 @@ Use plugin-wide global settings for `{ address, authToken }`. A six-digit code i
 - `npm run build`
 - `npm run validate` with current Elgato CLI
 - Protocol fixture tests: initial/pushed state, results between state messages, out-of-order results, errors, additive fields, malformed/oversized frames, and stale IDs.
-- Layout/render tests: all 15 coordinates, zero/six/more-than-six clients, unknown identity, active/disabled/input-unready states, Group/Follow/Assist actions, swap idle/armed/unavailable states, XML escaping, broadcast unavailable/off/on, and deterministic SVG.
+- Layout/render tests: all 15 coordinates, zero/six/more-than-six clients, unknown identity, active/disabled/input-unready states, distinct Group/Follow/Assist colors and filled running states, stable Bcast wording across off/on, Swap idle/filled-armed/unavailable, reserved blank cells, rail-free surfaces, XML escaping, and deterministic SVG.
 - Connection tests against a local `ws` fixture for pairing, Authorization header, reconnect, startup-order inversion, and token clearing/re-pairing.
 
 ### Hardware-free integration

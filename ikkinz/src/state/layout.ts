@@ -44,15 +44,7 @@ export type GridCell =
       interaction: "activate" | "swap";
     }
   | { type: "empty"; row: number; column: number; slot: number }
-  | {
-      type: "utility";
-      row: number;
-      column: number;
-      top: string;
-      main: string;
-      bottom: string;
-      accent: string;
-    }
+  | { type: "blank"; row: number; column: number }
   | {
       type: "group";
       row: number;
@@ -60,7 +52,6 @@ export type GridCell =
       available: boolean;
       ready: number;
       status: string;
-      accent: string;
     }
   | {
       type: "follow";
@@ -69,7 +60,6 @@ export type GridCell =
       available: boolean;
       ready: number;
       status: string;
-      accent: string;
     }
   | {
       type: "assist";
@@ -78,7 +68,6 @@ export type GridCell =
       available: boolean;
       ready: number;
       status: string;
-      accent: string;
     }
   | {
       type: "broadcast";
@@ -324,11 +313,6 @@ export function buildCell(
       available: plan.available,
       ready: plan.invitees.length,
       status: plan.status,
-      accent: plan.available
-        ? "#80df89"
-        : view.connection.state === "error"
-          ? "#ff826f"
-          : "#ffc75c",
     };
   }
 
@@ -353,76 +337,14 @@ export function buildCell(
       available: plan.available,
       ready: plan.followers.length,
       status: plan.status,
-      accent: plan.available
-        ? "#80df89"
-        : view.connection.state === "error"
-          ? "#ff826f"
-          : "#ffc75c",
     };
   }
 
-  if (row === 1 && column === 4) {
-    return {
-      type: "utility",
-      row,
-      column,
-      top: "STONEMITE",
-      main: view.connection.state === "connected" ? "PAIRED" : "SETUP",
-      bottom:
-        view.connection.state === "connected" ? "PRIVATE LAN" : "SELECT A KEY",
-      accent: view.connection.state === "connected" ? "#80df89" : "#9ba5b2",
-    };
-  }
-
-  const clients = view.snapshot?.clients ?? [];
-  if (row === 2 && column === 0) {
-    return {
-      type: "utility",
-      row,
-      column,
-      top: "GROUP",
-      main: String(clients.length),
-      bottom: clients.length === 1 ? "CLIENT" : "CLIENTS",
-      accent: clients.length > 0 ? "#80df89" : "#9ba5b2",
-    };
-  }
-
-  if (row === 2 && column === 1) {
-    const active = clients.find((client) => client.active);
-    return {
-      type: "utility",
-      row,
-      column,
-      top: "ACTIVE",
-      main: active?.character ?? (active ? `#${active.window_number}` : "—"),
-      bottom: active?.class_code ?? "CURRENT CLIENT",
-      accent: active
-        ? (SLOT_COLORS[(active.window_number - 1) % SLOT_COLORS.length] ??
-          SLOT_COLORS[0])
-        : "#9ba5b2",
-    };
-  }
-
-  if (row === 2 && column === 2) {
-    const servers = [
-      ...new Set(
-        clients.flatMap((client) => (client.server ? [client.server] : [])),
-      ),
-    ];
-    return {
-      type: "utility",
-      row,
-      column,
-      top: "SERVER",
-      main:
-        servers.length === 1
-          ? (servers[0] ?? "—")
-          : servers.length > 1
-            ? "MIXED"
-            : "—",
-      bottom: servers.length > 0 ? "DETECTED" : "UNKNOWN",
-      accent: "#9bbf73",
-    };
+  if (
+    (row === 1 && column === 4) ||
+    (row === 2 && column >= 0 && column <= 2)
+  ) {
+    return { type: "blank", row, column };
   }
 
   if (row === 2 && column === 3) {
@@ -434,11 +356,6 @@ export function buildCell(
       available: plan.available,
       ready: plan.assistants.length,
       status: plan.status,
-      accent: plan.available
-        ? "#80df89"
-        : view.connection.state === "error"
-          ? "#ff826f"
-          : "#ffc75c",
     };
   }
 

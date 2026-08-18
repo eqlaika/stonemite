@@ -13,13 +13,21 @@ const COLORS = {
   amber: "#ffc75c",
   green: "#80df89",
   red: "#ff826f",
+  disabled: "#6d737c",
 };
+
+export const ACTION_COLORS = {
+  group: SLOT_COLORS[0],
+  follow: COLORS.green,
+  assist: SLOT_COLORS[3],
+  swap: COLORS.cyan,
+} satisfies Record<ActionIcon, string>;
 
 export function renderCell(cell: GridCell, motionFrame = 0): string {
   const body = (() => {
     switch (cell.type) {
       case "unsupported":
-        return `${base(COLORS.amber)}<text x="36" y="27" class="text center" font-size="17">5 × 3</text><text x="36" y="43" fill="${COLORS.amber}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="8" font-weight="850" text-anchor="middle">LAYOUT REQUIRED</text><text x="36" y="58" class="muted center tiny">MOVE THIS KEY</text>`;
+        return `${base()}<text x="36" y="29" class="text center" font-size="17">5 × 3</text><text x="36" y="54" fill="${COLORS.amber}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" font-weight="850" text-anchor="middle" textLength="62" lengthAdjust="spacingAndGlyphs">LAYOUT REQUIRED</text>`;
       case "boot":
         return renderBoot(cell.row, cell.column, cell.stage);
       case "feedback":
@@ -37,24 +45,31 @@ export function renderCell(cell: GridCell, motionFrame = 0): string {
           cell.interaction,
         );
       case "empty":
-        return `${base("#3c424b")}<text x="36" y="35" class="muted center medium">Slot ${cell.slot}</text><text x="36" y="49" class="quiet center tiny">NOT LOADED</text>`;
-      case "utility":
-        return renderUtility(cell.top, cell.main, cell.bottom, cell.accent);
+        return `${base()}<text x="36" y="31" class="muted center medium">SLOT ${cell.slot}</text><text x="36" y="56" class="quiet center tiny" textLength="62" lengthAdjust="spacingAndGlyphs">NOT LOADED</text>`;
+      case "blank":
+        return base();
       case "group":
         return renderActionTile(
           "group",
-          "FORM GROUP",
-          cell.status,
-          cell.accent,
+          "GROUP",
+          cell.available ? ACTION_COLORS.group : COLORS.disabled,
         );
       case "follow":
-        return renderActionTile("follow", "FOLLOW", cell.status, cell.accent);
+        return renderActionTile(
+          "follow",
+          "FOLLOW",
+          cell.available ? ACTION_COLORS.follow : COLORS.disabled,
+        );
       case "assist":
-        return renderActionTile("assist", "ASSIST", cell.status, cell.accent);
+        return renderActionTile(
+          "assist",
+          "ASSIST",
+          cell.available ? ACTION_COLORS.assist : COLORS.disabled,
+        );
       case "broadcast":
         return renderBroadcast(cell.available, cell.enabled);
       case "swap":
-        return renderSwap(cell.available, cell.armed, cell.status, motionFrame);
+        return renderSwap(cell.available, cell.armed, motionFrame);
     }
   })();
 
@@ -76,11 +91,11 @@ export function escapeXml(value: string): string {
 }
 
 function styles(): string {
-  return `.text{fill:${COLORS.text};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:800}.active-text{fill:${COLORS.ink};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:850}.utility-label{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:8px;font-weight:800;text-anchor:start}.muted{fill:${COLORS.muted};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:750}.quiet{fill:#77818d;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:750}.center{text-anchor:middle}.tiny{font-size:7px;letter-spacing:.35px}.small{font-size:8px}.medium{font-size:10px}.large{font-size:20px}`;
+  return `.text{fill:${COLORS.text};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:800}.active-text{fill:${COLORS.ink};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:850}.muted{fill:${COLORS.muted};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:750}.quiet{fill:#77818d;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:750}.center{text-anchor:middle}.tiny,.small,.medium{font-size:15px}.large{font-size:20px}`;
 }
 
-function base(accent: string): string {
-  return `<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${COLORS.bg2}"/><stop offset="1" stop-color="${COLORS.bg}"/></linearGradient></defs><rect width="72" height="72" rx="7" fill="url(#bg)"/><rect width="72" height="3" fill="${accent}"/>`;
+function base(): string {
+  return `<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${COLORS.bg2}"/><stop offset="1" stop-color="${COLORS.bg}"/></linearGradient></defs><rect width="72" height="72" rx="7" fill="url(#bg)"/>`;
 }
 
 function renderCharacter(
@@ -93,7 +108,7 @@ function renderCharacter(
   const badge =
     BADGE_COLORS[(slot - 1) % BADGE_COLORS.length] ?? BADGE_COLORS[0];
   const name = client.character ?? `Client ${slot}`;
-  const nameSize = name.length > 10 ? 10 : name.length > 7 ? 12 : 15;
+  const nameFit = fittedTextAttributes(name, 7, 62);
   const classCode = client.class_code?.toUpperCase();
   const icon = classCode ? CLASS_IMAGES[classCode] : undefined;
   const surface = client.active
@@ -101,9 +116,9 @@ function renderCharacter(
     : `<defs><linearGradient id="slot" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${color}"/><stop offset="1" stop-color="#20242b" stop-opacity=".28"/></linearGradient></defs><rect width="72" height="72" rx="7" fill="url(#slot)"/>`;
   const interactionLabel =
     interaction === "swap"
-      ? `<text x="36" y="44" class="${client.active ? "active-text" : "text"} center" font-size="7" letter-spacing=".7px">${client.active ? "CURRENT" : "SELECT"}</text>`
+      ? `<text x="36" y="44" class="${client.active ? "active-text" : "text"} center" font-size="15"${fittedTextAttributes(client.active ? "CURRENT" : "SELECT", 6, 60)}>${client.active ? "CURRENT" : "SELECT"}</text>`
       : client.active
-        ? `<text x="36" y="44" class="active-text center" font-size="7" letter-spacing=".7px">ACTIVE</text>`
+        ? `<text x="36" y="44" class="active-text center" font-size="15">ACTIVE</text>`
         : "";
   const unavailable = !enabled
     ? `<rect width="72" height="72" rx="7" fill="#080a0d" opacity=".24"/>`
@@ -116,58 +131,44 @@ function renderCharacter(
     : `<circle cx="63" cy="63" r="3" fill="${COLORS.amber}"${readyStroke}/><title>Input not ready</title>`;
   const identity = icon
     ? `<image href="${icon}" x="39" y="4" width="29" height="29" preserveAspectRatio="xMidYMid meet"/>`
-    : `<rect x="40" y="5" width="27" height="27" rx="3" fill="#080a0d" opacity=".58"/><text x="53.5" y="22.5" class="text center small">${escapeXml(classCode ?? "?")}</text>`;
+    : `<rect x="40" y="5" width="27" height="27" rx="3" fill="#080a0d" opacity=".58"/><text x="53.5" y="23" class="text center small"${fittedTextAttributes(classCode ?? "?", 2, 23)}>${escapeXml(classCode ?? "?")}</text>`;
   const nameClass = client.active ? "active-text center" : "text center";
 
-  return `${surface}<circle cx="17" cy="18" r="13" fill="${badge}"/><text x="17" y="25" class="text center large">${slot}</text>${identity}${interactionLabel}<text x="36" y="61" class="${nameClass}" font-size="${nameSize}px">${escapeXml(name)}</text>${ready}${unavailable}`;
-}
-
-function renderUtility(
-  top: string,
-  main: string,
-  bottom: string,
-  accent: string,
-): string {
-  const mainSize = main.length > 10 ? 10 : main.length > 7 ? 13 : 18;
-  return `${base(accent)}<text x="6" y="15" class="utility-label" fill="${accent}">${escapeXml(top)}</text><text x="36" y="43" class="text center" font-size="${mainSize}px">${escapeXml(main)}</text><text x="36" y="59" class="muted center tiny">${escapeXml(bottom)}</text>`;
+  return `${surface}<circle cx="17" cy="18" r="13" fill="${badge}"/><text x="17" y="25" class="text center large">${slot}</text>${identity}${interactionLabel}<text x="36" y="62" class="${nameClass}" font-size="15"${nameFit}>${escapeXml(name)}</text>${ready}${unavailable}`;
 }
 
 function renderSwap(
   available: boolean,
   armed: boolean,
-  status: string,
   motionFrame: number,
 ): string {
-  const accent = armed ? COLORS.cyan : available ? COLORS.green : "#6d737c";
-  return renderActionTile(
-    "swap",
-    "SWAP",
-    armed ? "PICK CHARACTER" : status,
-    accent,
-    motionFrame,
-    armed,
-  );
+  const accent = available ? ACTION_COLORS.swap : COLORS.disabled;
+  return renderActionTile("swap", "SWAP", accent, motionFrame, armed);
 }
 
 function renderActionTile(
   icon: ActionIcon,
   label: string,
-  status: string,
   accent: string,
   motionFrame = 0,
   active = false,
 ): string {
-  const statusSize = status.length > 14 ? 6 : 7;
-  return `${base(accent)}${renderLucideActionIcon(icon, accent, motionFrame, active)}<text x="36" y="57" class="text center" font-size="8px">${escapeXml(label)}</text><text x="36" y="68" class="muted center" font-size="${statusSize}px" letter-spacing=".25px">${escapeXml(status)}</text>`;
+  const surface = active
+    ? `<rect width="72" height="72" rx="7" fill="${accent}"/>`
+    : base();
+  const foreground = active ? COLORS.ink : accent;
+  const labelClass = active ? "active-text center" : "text center";
+  return `${surface}${renderLucideActionIcon(icon, foreground, motionFrame, active)}<text x="36" y="65" class="${labelClass}" font-size="15"${fittedTextAttributes(label, 6, 62)}>${escapeXml(label)}</text>`;
 }
 
 function renderBroadcast(available: boolean, enabled: boolean): string {
   const lightning = `<path d="M40 10L25 31h9l-4 16 18-23H38z" fill="currentColor"/>`;
   if (enabled) {
-    return `<rect width="72" height="72" rx="7" fill="#cc3020"/><g color="#fff">${lightning}</g><text x="36" y="61" class="text center small">BROADCAST</text><text x="36" y="69" fill="#ffd6cf" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="7" font-weight="850" text-anchor="middle">ON</text>`;
+    return `<rect width="72" height="72" rx="7" fill="#cc3020"/><g color="#fff">${lightning}</g><text x="36" y="65" class="text center small">BCAST</text>`;
   }
-  const accent = available ? "#cc5040" : "#6d737c";
-  return `${base(accent)}<g color="${accent}">${lightning}</g><text x="36" y="62" class="text center small">BROADCAST</text>${available ? "" : '<text x="36" y="69" class="quiet center tiny">UNAVAILABLE</text>'}`;
+  const accent = available ? "#cc5040" : COLORS.disabled;
+  const label = available ? "BCAST" : "UNAVAILABLE";
+  return `${base()}<g color="${accent}">${lightning}</g><text x="36" y="65" class="text center small"${fittedTextAttributes(label, 6, 62)}>${label}</text>`;
 }
 
 function renderFeedback(
@@ -178,15 +179,14 @@ function renderFeedback(
 ): string {
   if (kind === "pending" && motion) {
     const labels = {
-      group: "FORMING",
-      follow: "FOLLOWING",
-      assist: "ASSISTING",
+      group: "GROUP",
+      follow: "FOLLOW",
+      assist: "ASSIST",
     } as const;
     return renderActionTile(
       motion,
       labels[motion],
-      message.toUpperCase(),
-      COLORS.amber,
+      ACTION_COLORS[motion],
       motionFrame,
       true,
     );
@@ -194,7 +194,18 @@ function renderFeedback(
 
   const accent = kind === "error" ? COLORS.red : COLORS.amber;
   const label = kind === "error" ? "FAILED" : "WORKING";
-  return `${base(accent)}<circle cx="36" cy="29" r="10" fill="none" stroke="${accent}" stroke-width="3"/><path d="${kind === "error" ? "M31 24l10 10m0-10L31 34" : "M36 19v10l6 4"}" fill="none" stroke="${accent}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><text x="36" y="51" fill="${accent}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="8" font-weight="850" text-anchor="middle">${label}</text><text x="36" y="63" class="text center" font-size="${message.length > 10 ? 7 : 8}px">${escapeXml(message.toUpperCase())}</text>`;
+  const normalizedMessage = message.toUpperCase();
+  return `${base()}<circle cx="36" cy="27" r="9" fill="none" stroke="${accent}" stroke-width="3"/><path d="${kind === "error" ? "M32 23l8 8m0-8-8 8" : "M36 18v9l6 4"}" fill="none" stroke="${accent}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><text x="36" y="52" fill="${accent}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" font-weight="850" text-anchor="middle">${label}</text><text x="36" y="69" class="text center" font-size="15"${fittedTextAttributes(normalizedMessage, 7, 62)}>${escapeXml(normalizedMessage)}</text>`;
+}
+
+function fittedTextAttributes(
+  value: string,
+  maxCharacters: number,
+  width: number,
+): string {
+  return value.length > maxCharacters
+    ? ` textLength="${width}" lengthAdjust="spacingAndGlyphs"`
+    : "";
 }
 
 function renderBoot(row: number, column: number, stage: number): string {
@@ -211,16 +222,16 @@ function renderBoot(row: number, column: number, stage: number): string {
   };
   const key = `${row},${column}`;
   if (stage === 0) {
-    return `${base(COLORS.cyan)}<rect x="19" y="35" width="34" height="2" fill="#38414b"/>`;
+    return `${base()}<rect x="19" y="35" width="34" height="2" fill="#38414b"/>`;
   }
   if (row === 0 && column === 2) {
-    return `${base(COLORS.cyan)}<image href="${APP_IMAGE}" x="8" y="8" width="56" height="56"/>`;
+    return `${base()}<image href="${APP_IMAGE}" x="8" y="8" width="56" height="56"/>`;
   }
   const letter = letters[key];
   if (letter)
-    return `${base(COLORS.cyan)}<text x="36" y="50" class="text center" font-size="34">${letter}</text>`;
+    return `${base()}<text x="36" y="50" class="text center" font-size="34">${letter}</text>`;
   if (row === 2 && column === 4) {
-    return `${base(COLORS.cyan)}<text x="36" y="38" fill="${COLORS.cyan}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="10" font-weight="850" text-anchor="middle">${stage >= 2 ? "READY" : "LINK"}</text><rect x="21" y="47" width="30" height="4" rx="2" fill="${stage >= 2 ? COLORS.green : COLORS.cyan}"/>`;
+    return `${base()}<text x="36" y="40" fill="${COLORS.cyan}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" font-weight="850" text-anchor="middle">${stage >= 2 ? "READY" : "LINK"}</text><rect x="21" y="50" width="30" height="4" rx="2" fill="${stage >= 2 ? COLORS.green : COLORS.cyan}"/>`;
   }
-  return `${base(COLORS.cyan)}<rect x="19" y="35" width="34" height="2" fill="#38414b"/>`;
+  return `${base()}<rect x="19" y="35" width="34" height="2" fill="#38414b"/>`;
 }

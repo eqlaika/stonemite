@@ -8,7 +8,7 @@ import {
   unsupportedCell,
 } from "../src/state/layout";
 import type { DashboardView } from "../src/state/store";
-import { escapeXml, renderCell } from "../src/render/key-svg";
+import { ACTION_COLORS, escapeXml, renderCell } from "../src/render/key-svg";
 import { stateFixture } from "./fixtures";
 
 function view(overrides: Partial<DashboardView> = {}): DashboardView {
@@ -83,7 +83,7 @@ describe("5 by 3 layout", () => {
     expect(empty.filter((cell) => cell.type === "empty")).toHaveLength(6);
     expect(
       empty.find((cell) => cell.row === 2 && cell.column === 0),
-    ).toMatchObject({ main: "0" });
+    ).toMatchObject({ type: "blank" });
 
     const clients = [
       ...sixClients(),
@@ -101,7 +101,7 @@ describe("5 by 3 layout", () => {
     expect(extra.filter((cell) => cell.type === "character")).toHaveLength(6);
     expect(
       extra.find((cell) => cell.row === 2 && cell.column === 0),
-    ).toMatchObject({ main: "7" });
+    ).toMatchObject({ type: "blank" });
 
     const unknown = buildCell(
       view({
@@ -136,9 +136,12 @@ describe("5 by 3 layout", () => {
     const svg = decodeSvg(renderCell(group));
     expect(svg).toContain('data-icon="group"');
     expect(svg).toContain('data-icon-set="lucide-animated"');
+    expect(svg).toContain(`stroke="${ACTION_COLORS.group}"`);
     expect(svg).toContain('d="M18 21a8 8 0 0 0-16 0"');
     expect(renderCell(group, 0)).toBe(renderCell(group, 6));
-    expect(svg).toContain(">FORM GROUP</text>");
+    expect(svg).toContain('font-size="15"');
+    expect(svg).toContain(">GROUP</text>");
+    expect(svg).not.toContain("BOXES READY");
     expect(svg).not.toContain(">FORM</text>");
     expect(svg).not.toContain(">LIVE</text>");
 
@@ -184,7 +187,9 @@ describe("5 by 3 layout", () => {
     });
     const unavailableSvg = decodeSvg(renderCell(unavailable));
     expect(unavailableSvg).toContain('data-icon="group"');
-    expect(unavailableSvg).toContain(">NO READY BOXES</text>");
+    expect(unavailableSvg).toContain('stroke="#6d737c"');
+    expect(unavailableSvg).toContain(">GROUP</text>");
+    expect(unavailableSvg).not.toContain("NO READY BOXES");
   });
 
   it("replaces input readiness with Follow for ready background boxes", () => {
@@ -199,10 +204,12 @@ describe("5 by 3 layout", () => {
     const svg = decodeSvg(renderCell(follow));
     expect(svg).toContain('data-icon="follow"');
     expect(svg).toContain('data-icon-set="lucide-animated"');
+    expect(svg).toContain(`stroke="${ACTION_COLORS.follow}"`);
     expect(svg).toContain(
       'd="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"',
     );
     expect(svg).toContain(">FOLLOW</text>");
+    expect(svg).not.toContain("BOXES READY");
     expect(svg).not.toContain(">START</text>");
     expect(svg).not.toContain(">INPUT</text>");
 
@@ -252,8 +259,10 @@ describe("5 by 3 layout", () => {
     const svg = decodeSvg(renderCell(assist));
     expect(svg).toContain('data-icon="assist"');
     expect(svg).toContain('data-icon-set="lucide-animated"');
+    expect(svg).toContain(`stroke="${ACTION_COLORS.assist}"`);
     expect(svg).toContain('data-motion-part="outer-target"');
     expect(svg).toContain(">ASSIST</text>");
+    expect(svg).not.toContain("BOXES READY");
     expect(svg).not.toContain(">STONE</text>");
 
     const mainUnknown = buildCell(
@@ -312,8 +321,36 @@ describe("5 by 3 layout", () => {
     const nextFrame = decodeSvg(renderCell(pendingGroup, 3));
     expect(firstFrame).toContain('data-icon="group"');
     expect(firstFrame).toContain('data-active="true"');
-    expect(firstFrame).toContain(">FORMING</text>");
+    expect(firstFrame).toContain(`fill="${ACTION_COLORS.group}"`);
+    expect(firstFrame).toContain('stroke="#101615"');
+    expect(firstFrame).toContain('class="active-text center"');
+    expect(firstFrame).toContain(">GROUP</text>");
+    expect(firstFrame).not.toContain("INVITING");
     expect(nextFrame).not.toBe(firstFrame);
+
+    const pendingFollow = buildCell(
+      view({
+        feedback: new Map([
+          [
+            "1,3",
+            {
+              kind: "pending",
+              message: "Sending",
+              motion: "follow",
+              until: Date.now() + 1_000,
+            },
+          ],
+        ]),
+      }),
+      1,
+      3,
+    );
+    const followFrame = decodeSvg(renderCell(pendingFollow, 3));
+    expect(followFrame).toContain('data-icon="follow"');
+    expect(followFrame).toContain('data-active="true"');
+    expect(followFrame).toContain(`fill="${ACTION_COLORS.follow}"`);
+    expect(followFrame).toContain('stroke="#101615"');
+    expect(followFrame).toContain(">FOLLOW</text>");
 
     const pendingAssist = buildCell(
       view({
@@ -335,7 +372,10 @@ describe("5 by 3 layout", () => {
     const assistFrame = decodeSvg(renderCell(pendingAssist, 3));
     expect(assistFrame).toContain('data-icon="assist"');
     expect(assistFrame).toContain('data-active="true"');
-    expect(assistFrame).toContain(">ASSISTING</text>");
+    expect(assistFrame).toContain(`fill="${ACTION_COLORS.assist}"`);
+    expect(assistFrame).toContain('stroke="#101615"');
+    expect(assistFrame).toContain(">ASSIST</text>");
+    expect(assistFrame).not.toContain("SENDING");
   });
 
   it("turns the MITE key into an explicit two-step window-number swap", () => {
@@ -353,17 +393,22 @@ describe("5 by 3 layout", () => {
     const idleSwapSvg = decodeSvg(renderCell(swap));
     expect(idleSwapSvg).toContain('data-icon="swap"');
     expect(idleSwapSvg).toContain('data-icon-set="lucide-animated"');
+    expect(idleSwapSvg).toContain(`stroke="${ACTION_COLORS.swap}"`);
     expect(idleSwapSvg).toContain('d="M8 3 4 7l4 4"');
     expect(idleSwapSvg).toContain('data-active="false"');
     expect(idleSwapSvg).toContain(">SWAP</text>");
-    expect(idleSwapSvg).toContain(">PRESS THEN PICK</text>");
+    expect(idleSwapSvg).not.toContain("PRESS THEN PICK");
 
     const armedSwap = buildCell(view({ snapshot }), 2, 4, true);
     expect(armedSwap).toMatchObject({ type: "swap", armed: true });
     const armedFrameZero = decodeSvg(renderCell(armedSwap, 0));
     const armedFrameThree = decodeSvg(renderCell(armedSwap, 3));
     expect(armedFrameZero).toContain('data-active="true"');
-    expect(armedFrameZero).toContain(">PICK CHARACTER</text>");
+    expect(armedFrameZero).toContain(`fill="${ACTION_COLORS.swap}"`);
+    expect(armedFrameZero).toContain('stroke="#101615"');
+    expect(armedFrameZero).toContain('class="active-text center"');
+    expect(armedFrameZero).toContain(">SWAP</text>");
+    expect(armedFrameZero).not.toContain("PICK CHARACTER");
     expect(armedFrameThree).not.toBe(armedFrameZero);
 
     const current = buildCell(view({ snapshot }), 0, 0, true);
@@ -464,7 +509,12 @@ describe("5 by 3 layout", () => {
       available: true,
       enabled: false,
     });
-    expect(decodeSvg(renderCell(on))).toContain("#cc3020");
+    expect(decodeSvg(renderCell(off))).toContain(">BCAST</text>");
+    const onSvg = decodeSvg(renderCell(on));
+    expect(onSvg).toContain("#cc3020");
+    expect(onSvg).toContain(">BCAST</text>");
+    expect(onSvg).not.toContain("BCAST ON");
+    expect(onSvg).not.toContain("BROADCAST");
   });
 
   it("uses all exact Stonemite colors and honest active/readiness states", () => {
@@ -524,17 +574,63 @@ describe("SVG rendering", () => {
     expect(svg).not.toContain(`<Mora & "Rook">`);
   });
 
-  it("keeps utility headers fully visible from the left edge", () => {
+  it("keeps the paired, client-count, active, and server cells blank", () => {
     const coordinates = [
-      [1, 4, "STONEMITE"],
-      [2, 2, "SERVER"],
+      [1, 4],
+      [2, 0],
+      [2, 1],
+      [2, 2],
     ] as const;
 
-    for (const [row, column, label] of coordinates) {
-      const svg = decodeSvg(renderCell(buildCell(view(), row, column)));
-      expect(svg).toContain(`<text x="6" y="15" class="utility-label"`);
-      expect(svg).toContain(`>${label}</text>`);
-      expect(svg).not.toContain('class="center" text-anchor="start"');
+    for (const [row, column] of coordinates) {
+      const cell = buildCell(view(), row, column);
+      expect(cell).toMatchObject({ type: "blank", row, column });
+      const svg = decodeSvg(renderCell(cell));
+      expect(svg).not.toContain("<text");
+      expect(svg).not.toContain("<path");
+      expect(svg).not.toContain("<image");
+    }
+  });
+
+  it("renders no colored top rails", () => {
+    for (const cell of buildGrid(view())) {
+      expect(decodeSvg(renderCell(cell))).not.toContain(
+        '<rect width="72" height="3"',
+      );
+    }
+  });
+
+  it("never renders deck text below the 15 pixel character-name floor", () => {
+    const feedback = buildCell(
+      view({
+        feedback: new Map([
+          [
+            "0,3",
+            {
+              kind: "error",
+              message: "Partial assist",
+              until: Date.now() + 1_000,
+            },
+          ],
+        ]),
+      }),
+      0,
+      3,
+    );
+    const cells = [
+      ...buildGrid(view()),
+      unsupportedCell(3, 0),
+      buildCell(view({ bootStage: 1 }), 0, 0),
+      feedback,
+    ];
+
+    for (const cell of cells) {
+      const svg = decodeSvg(renderCell(cell));
+      const fontSizes = [...svg.matchAll(/font-size(?::|=)"?(\d+)/g)].map(
+        (match) => Number(match[1]),
+      );
+      expect(fontSizes.length).toBeGreaterThan(0);
+      expect(Math.min(...fontSizes)).toBeGreaterThanOrEqual(15);
     }
   });
 
