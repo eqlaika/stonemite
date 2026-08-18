@@ -50,6 +50,7 @@ Use plugin-wide global settings for `{ address, authToken }`. A six-digit code i
 ## Packaging and profile
 
 - Plugin UUID: `co.laikasoft.ikkinz`; action UUID: `co.laikasoft.ikkinz.grid-key`.
+- Bundle editable, auto-installed 5×3 preset profiles for Stream Deck (device type 0) and Stream Deck Mobile (device type 3), each containing all 15 grid-key actions.
 - Node runtime 24, SDK version 3, Stream Deck minimum 7.4 (latest schema currently documented), OS entries for macOS and Windows because Stream Deck Desktop may run on either.
 - One action is repeated across all 15 slots; logical view/state changes redraw those instances and never switch Stream Deck profiles.
 - Keep the action visible in the action list so a user can repair a profile manually.

@@ -172,7 +172,7 @@ export function buildCell(
       type: "utility",
       row,
       column,
-      top: "IKKINZ",
+      top: "STONEMITE",
       main: view.connection.state === "connected" ? "PAIRED" : "SETUP",
       bottom:
         view.connection.state === "connected" ? "PRIVATE LAN" : "SELECT A KEY",

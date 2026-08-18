@@ -1,11 +1,11 @@
 {
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
-  "Name": "Ikkinz",
+  "Name": "Stonemite · EQ boxing",
   "Version": "0.1.0.0",
   "Author": "Laikasoft",
   "UUID": "co.laikasoft.ikkinz",
   "Description": "Live Stonemite character switching and broadcast control.",
-  "Category": "Ikkinz",
+  "Category": "Stonemite · EQ boxing",
   "CategoryIcon": "imgs/plugin/category-icon",
   "Icon": "imgs/plugin/marketplace",
   "CodePath": "bin/plugin.js",
@@ -27,12 +27,28 @@
       "MinimumVersion": "10"
     }
   ],
+  "Profiles": [
+    {
+      "Name": "profiles/Ikkinz",
+      "DeviceType": 0,
+      "AutoInstall": true,
+      "DontAutoSwitchWhenInstalled": false,
+      "Readonly": false
+    },
+    {
+      "Name": "profiles/Ikkinz Mobile",
+      "DeviceType": 3,
+      "AutoInstall": true,
+      "DontAutoSwitchWhenInstalled": false,
+      "Readonly": false
+    }
+  ],
   "Actions": [
     {
       "Name": "Grid key",
       "UUID": "co.laikasoft.ikkinz.grid-key",
       "Icon": "imgs/actions/grid-key/icon",
-      "Tooltip": "A position-aware key in the Ikkinz 5 by 3 dashboard.",
+      "Tooltip": "A position-aware key in the Stonemite · EQ boxing dashboard.",
       "PropertyInspectorPath": "ui/pairing.html",
       "Controllers": ["Keypad"],
       "SupportedInMultiActions": false,

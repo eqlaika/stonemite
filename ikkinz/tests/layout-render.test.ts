@@ -224,7 +224,7 @@ describe("SVG rendering", () => {
   it("keeps utility headers fully visible from the left edge", () => {
     const coordinates = [
       [1, 3, "INPUT"],
-      [1, 4, "IKKINZ"],
+      [1, 4, "STONEMITE"],
       [2, 2, "SERVER"],
     ] as const;
 

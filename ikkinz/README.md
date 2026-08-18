@@ -1,6 +1,6 @@
 # Ikkinz
 
-Ikkinz is Stonemite's 5×3 Stream Deck control surface. It shows the current six-client roster, activates an exact loaded EQ client, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting.
+Ikkinz is the internal codename for the **Stonemite · EQ boxing** 5×3 Stream Deck control surface. It shows the current six-client roster, activates an exact loaded EQ client, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting.
 
 V0 is intentionally the core deck. Assist, Follow, Burn, Camp, heals, spells, live EQ targets, buffs, and cooldowns are not implemented until their commands and failure policy are defined.
 
@@ -50,17 +50,11 @@ npm run watch
 
 Linking restarts or changes the user's Stream Deck installation, so it is a deliberate manual step rather than part of tests. The tracked manifest keeps Node inspection disabled so packaged credentials are not exposed to a debugger. For a local debugging session only, temporarily add `"Debug": "enabled"` under `Nodejs`, restart the linked plugin, and remove it before validation or packaging.
 
-## Create the 5×3 dashboard
+## Install the 5×3 dashboard
 
-V0 does not invent an undocumented `.streamDeckProfile` archive. Until a clean 5×3 Mobile profile has been exported and verified:
+Ikkinz includes preset profiles for the 15-key Stream Deck and Stream Deck Mobile. Accept the profile installation when Stream Deck prompts after installing Ikkinz; the complete dashboard appears without placing each action manually. The installed profile remains editable.
 
-1. In Stream Deck Desktop, select the paired Stream Deck Mobile device.
-2. Choose the 5 columns × 3 rows layout.
-3. Create or select an Ikkinz profile.
-4. Drag **Ikkinz > Grid key** into every one of the 15 positions.
-5. Leave each action image at its default. A user-defined image takes precedence over Ikkinz's live rendering; Ikkinz disables user titles for this action.
-
-Every placed action is the same. Ikkinz uses the key's zero-based row and column to render and handle that cell.
+Every placed action is the same. Ikkinz uses the key's zero-based row and column to render and handle that cell. Leave each action image at its default: a user-defined image takes precedence over Ikkinz's live rendering, and Ikkinz disables user titles for this action.
 
 ## Pair with Jaggedpine
 
