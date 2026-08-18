@@ -22,6 +22,7 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const INPUT_TIMEOUT: Duration = Duration::from_secs(45);
 const INPUT_TICK_MS: u32 = 10;
 const INPUT_ACTIVATION_DELAY: Duration = Duration::from_millis(200);
+const INPUT_MODIFIER_DELAY: Duration = Duration::from_millis(30);
 const INPUT_RELEASE_DELAY: Duration = Duration::from_millis(100);
 
 enum UiCommand {
@@ -52,9 +53,12 @@ struct ResolvedStroke {
     pause: Duration,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InputPhase {
     Press,
+    PressChord,
     Release,
+    ReleaseModifiers,
     Finish,
 }
 
@@ -737,6 +741,68 @@ fn semantic_scan_code(key: &str) -> Option<u8> {
     })
 }
 
+fn is_modifier_scan(scan: u8) -> bool {
+    matches!(scan, 0x1d | 0x2a | 0x36 | 0x38 | 0x9d | 0xb8)
+}
+
+fn has_modifier_chord(stroke: &ResolvedStroke) -> bool {
+    stroke.scans.iter().copied().any(is_modifier_scan)
+        && stroke
+            .scans
+            .iter()
+            .copied()
+            .any(|scan| !is_modifier_scan(scan))
+}
+
+fn phase_scans(stroke: &ResolvedStroke, phase: InputPhase) -> Vec<u8> {
+    let modifier_chord = has_modifier_chord(stroke);
+    match phase {
+        InputPhase::Press if modifier_chord => stroke
+            .scans
+            .iter()
+            .copied()
+            .filter(|scan| is_modifier_scan(*scan))
+            .collect(),
+        InputPhase::Press => stroke.scans.clone(),
+        InputPhase::PressChord => stroke
+            .scans
+            .iter()
+            .copied()
+            .filter(|scan| !is_modifier_scan(*scan))
+            .collect(),
+        InputPhase::Release if modifier_chord => stroke
+            .scans
+            .iter()
+            .rev()
+            .copied()
+            .filter(|scan| !is_modifier_scan(*scan))
+            .collect(),
+        InputPhase::Release => stroke.scans.iter().rev().copied().collect(),
+        InputPhase::ReleaseModifiers => stroke
+            .scans
+            .iter()
+            .rev()
+            .copied()
+            .filter(|scan| is_modifier_scan(*scan))
+            .collect(),
+        InputPhase::Finish => Vec::new(),
+    }
+}
+
+fn complete_stroke(input: &mut ActiveInput, now: Instant) {
+    let pause = input.strokes[input.index].pause;
+    if input.index + 1 == input.strokes.len() {
+        // Keep SHM active briefly with an all-up state so EQ can observe the
+        // final release before the mapping is deactivated.
+        input.phase = InputPhase::Finish;
+        input.next_step = now + INPUT_RELEASE_DELAY;
+    } else {
+        input.index += 1;
+        input.phase = InputPhase::Press;
+        input.next_step = now + pause;
+    }
+}
+
 /// Advance one target-specific sequence phase from the Win32 timer callback.
 pub fn advance_input() {
     let Some(state) = ui().as_mut() else { return };
@@ -770,63 +836,55 @@ pub fn advance_input() {
         state.active_input = Some(input);
         return;
     }
-    let stroke = &input.strokes[input.index];
-    let result = match input.phase {
-        InputPhase::Press => {
-            for &scan in &stroke.scans {
-                if let Err(message) = crate::broadcast::set_targeted_key(input.pid, scan, true) {
-                    finish_input(
-                        state,
-                        input,
-                        Some(Err(ControlError::new(
-                            ErrorCode::InputOperationFailed,
-                            message,
-                        ))),
-                    );
-                    return;
-                }
-            }
-            input.phase = InputPhase::Release;
-            input.next_step = now + stroke.hold;
-            None
-        }
-        InputPhase::Release => {
-            for &scan in stroke.scans.iter().rev() {
-                if let Err(message) = crate::broadcast::set_targeted_key(input.pid, scan, false) {
-                    finish_input(
-                        state,
-                        input,
-                        Some(Err(ControlError::new(
-                            ErrorCode::InputOperationFailed,
-                            message,
-                        ))),
-                    );
-                    return;
-                }
-            }
-            if input.index + 1 == input.strokes.len() {
-                // Keep SHM active briefly with an all-up state so EQ can
-                // observe the final release before the mapping is deactivated.
-                input.phase = InputPhase::Finish;
-                input.next_step = now + INPUT_RELEASE_DELAY;
-                None
-            } else {
-                input.index += 1;
-                input.phase = InputPhase::Press;
-                input.next_step = now + stroke.pause;
-                None
-            }
-        }
-        InputPhase::Finish => Some(Ok(CommandOutcome::InputDelivered {
+    let phase = input.phase;
+    if phase == InputPhase::Finish {
+        let result = Ok(CommandOutcome::InputDelivered {
             kind: input.kind,
             strokes: input.strokes.len(),
-        })),
-    };
-    if let Some(result) = result {
+        });
         finish_input(state, input, Some(result));
-    } else {
-        state.active_input = Some(input);
+        return;
     }
+
+    let modifier_chord = has_modifier_chord(&input.strokes[input.index]);
+    let hold = input.strokes[input.index].hold;
+    let pressed = matches!(phase, InputPhase::Press | InputPhase::PressChord);
+    for scan in phase_scans(&input.strokes[input.index], phase) {
+        if let Err(message) = crate::broadcast::set_targeted_key(input.pid, scan, pressed) {
+            finish_input(
+                state,
+                input,
+                Some(Err(ControlError::new(
+                    ErrorCode::InputOperationFailed,
+                    message,
+                ))),
+            );
+            return;
+        }
+    }
+
+    match phase {
+        InputPhase::Press if modifier_chord => {
+            // Give EQ at least one input frame to observe the modifier before
+            // exposing the primary key. Simultaneous shared-memory changes can
+            // otherwise be consumed in scan-code order (for Ctrl+I, I first).
+            input.phase = InputPhase::PressChord;
+            input.next_step = now + INPUT_MODIFIER_DELAY;
+        }
+        InputPhase::Press | InputPhase::PressChord => {
+            input.phase = InputPhase::Release;
+            input.next_step = now + hold;
+        }
+        InputPhase::Release if modifier_chord => {
+            // Release the primary key while the modifier is still held, then
+            // give EQ another frame before releasing the modifier.
+            input.phase = InputPhase::ReleaseModifiers;
+            input.next_step = now + INPUT_MODIFIER_DELAY;
+        }
+        InputPhase::Release | InputPhase::ReleaseModifiers => complete_stroke(&mut input, now),
+        InputPhase::Finish => unreachable!(),
+    }
+    state.active_input = Some(input);
 }
 
 fn finish_input(
@@ -869,6 +927,23 @@ mod tests {
         let strokes = resolve_text_strokes("/who", true).unwrap();
         assert_eq!(strokes.len(), 5);
         assert_eq!(strokes.last().unwrap().scans, vec![0x1c]);
+    }
+
+    #[test]
+    fn modifier_chords_press_and_release_the_modifier_around_the_primary_key() {
+        let stroke = ResolvedStroke {
+            scans: vec![0x1d, 0x17], // left control + I
+            hold: Duration::from_millis(50),
+            pause: Duration::from_millis(40),
+        };
+
+        assert_eq!(phase_scans(&stroke, InputPhase::Press), vec![0x1d]);
+        assert_eq!(phase_scans(&stroke, InputPhase::PressChord), vec![0x17]);
+        assert_eq!(phase_scans(&stroke, InputPhase::Release), vec![0x17]);
+        assert_eq!(
+            phase_scans(&stroke, InputPhase::ReleaseModifiers),
+            vec![0x1d]
+        );
     }
 
     #[test]

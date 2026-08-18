@@ -123,6 +123,63 @@ describe("5 by 3 layout", () => {
     expect(decodeSvg(renderCell(unknown))).toContain("Client 1");
   });
 
+  it("replaces Link/Live with an actionable Group key for ready named boxes", () => {
+    const snapshot = stateFixture({ clients: sixClients() });
+    const group = buildCell(view({ snapshot }), 0, 3);
+    expect(group).toMatchObject({
+      type: "group",
+      available: true,
+      ready: 4,
+      status: "4 BOXES READY",
+    });
+    const svg = decodeSvg(renderCell(group));
+    expect(svg).toContain(">GROUP</text>");
+    expect(svg).toContain(">FORM</text>");
+    expect(svg).not.toContain(">LIVE</text>");
+
+    const unavailable = buildCell(
+      view({
+        snapshot: stateFixture({
+          clients: [
+            {
+              id: "active",
+              character: "Laika",
+              window_number: 1,
+              active: true,
+              activatable: true,
+              input_ready: true,
+            },
+            {
+              id: "unknown",
+              window_number: 2,
+              active: false,
+              activatable: true,
+              input_ready: true,
+            },
+            {
+              id: "unready",
+              character: "Mora",
+              window_number: 3,
+              active: false,
+              activatable: true,
+              input_ready: false,
+            },
+          ],
+          active_client_id: "active",
+        }),
+      }),
+      0,
+      3,
+    );
+    expect(unavailable).toMatchObject({
+      type: "group",
+      available: false,
+      ready: 0,
+      status: "NO READY BOXES",
+    });
+    expect(decodeSvg(renderCell(unavailable))).toContain(">—</text>");
+  });
+
   it("reflects broadcast unavailable, off, and on", () => {
     const unavailable = buildCell(
       view({

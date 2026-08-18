@@ -3,6 +3,8 @@
 ## v0.5.0
 
 - Added experimental remote integration to support Stream Deck actions.
+- Added an Ikkinz Group key that invites ready boxes from the active client and sends `Ctrl+I` to accept after one second
+- Fixed targeted modifier chords reaching background clients as an unmodified key by sequencing modifier press and release around the primary key
 - Removed anonymous usage telemetry
 - Refresh character and server identity when the same EQ process changes characters or servers
 - Fixed auto-login failing after a self-update by embedding the matching trusik input DLL in stonemite.exe

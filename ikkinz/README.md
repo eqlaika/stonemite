@@ -1,6 +1,8 @@
 # Ikkinz
 
-Ikkinz is the internal codename for the **Stonemite · EQ boxing** 5×3 Stream Deck control surface. It shows the current six-client roster, activates an exact loaded EQ client, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting.
+Ikkinz is the internal codename for the **Stonemite · EQ boxing** 5×3 Stream Deck control surface. It shows the current six-client roster, activates an exact loaded EQ client, forms a group from the active client, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting.
+
+The Group key invites every other named, input-ready client from the active box, waits one second, then sends `Ctrl+I` to those invited clients. Boxes without a detected character name or ready targeted-input channel are skipped.
 
 V0 is intentionally the core deck. Assist, Follow, Burn, Camp, heals, spells, live EQ targets, buffs, and cooldowns are not implemented until their commands and failure policy are defined.
 
@@ -80,6 +82,7 @@ The command builds, validates with the current Elgato CLI schema, and writes an 
 - **Activated** means Stonemite accepted an exact-client activation request and returned authoritative current state.
 - **Broadcast on/off** is Stonemite's pushed broadcast state, not a blind local toggle.
 - **Input ready** means that client's compatible trusik input channel acknowledged readiness.
+- Group progress confirms exact-client input delivery only; it does not prove that EQ formed the group.
 - Ikkinz does not observe whether EQ accepted input or performed a resulting in-game action.
 
 Pairing codes, bearer credentials, and raw command traffic are never written to Ikkinz logs.

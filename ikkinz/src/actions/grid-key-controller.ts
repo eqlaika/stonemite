@@ -8,6 +8,7 @@ import streamDeck, {
 import type { JsonObject, JsonValue } from "@elgato/utils";
 import {
   buildCell,
+  buildGroupPlan,
   cellKey,
   GRID_COLUMNS,
   GRID_ROWS,
@@ -21,6 +22,9 @@ import {
   TrusharClient,
   type Credentials,
 } from "../trushar/client";
+
+const GROUP_ACCEPT_DELAY_MS = 1_000;
+const GROUP_FEEDBACK_TIMEOUT_MS = 60_000;
 
 export interface PluginSettings extends JsonObject {
   address?: string;
@@ -41,6 +45,7 @@ export class GridKeyController {
   #renderQueued = false;
   #bootStarted = false;
   #credentialEpoch = 0;
+  #groupInFlight = false;
 
   constructor(store: DashboardStore, client: TrusharClient) {
     this.#store = store;
@@ -99,6 +104,18 @@ export class GridKeyController {
             "Stonemite returned the wrong activation result.",
           );
         this.#store.clearFeedback(feedbackKey);
+        return;
+      }
+      if (cell.type === "group" && cell.available && !this.#groupInFlight) {
+        const feedbackKey = cellKey(key.row, key.column);
+        this.#groupInFlight = true;
+        this.#setGroupFeedback(feedbackKey, "Inviting");
+        try {
+          await this.#formGroup(feedbackKey);
+          this.#store.clearFeedback(feedbackKey);
+        } finally {
+          this.#groupInFlight = false;
+        }
         return;
       }
       if (cell.type === "broadcast" && cell.available) {
@@ -204,6 +221,71 @@ export class GridKeyController {
     }
   }
 
+  async #formGroup(feedbackKey: string): Promise<void> {
+    const plan = buildGroupPlan(this.#store.view);
+    if (!plan.available || !plan.active) {
+      throw new CommandError(
+        "group_unavailable",
+        "No active box and ready invitees are available.",
+      );
+    }
+
+    const invited: Array<(typeof plan.invitees)[number]> = [];
+    const failures: Error[] = [];
+    for (const invitee of plan.invitees) {
+      try {
+        await this.#client.sendText(
+          plan.active.id,
+          `/invite ${invitee.character.trim()}`,
+          true,
+        );
+        invited.push(invitee);
+      } catch (error) {
+        failures.push(asError(error));
+      }
+    }
+
+    if (invited.length === 0) {
+      throw (
+        failures[0] ??
+        new CommandError("group_unavailable", "No invites were delivered.")
+      );
+    }
+
+    this.#setGroupFeedback(feedbackKey, "Waiting 1 sec");
+    await wait(GROUP_ACCEPT_DELAY_MS);
+    this.#setGroupFeedback(feedbackKey, "Accepting");
+
+    for (const invitee of invited) {
+      try {
+        await this.#client.sendKeys(invitee.id, [
+          {
+            keys: ["left_control", "i"],
+            hold_ms: 50,
+            pause_ms: 40,
+          },
+        ]);
+      } catch (error) {
+        failures.push(asError(error));
+      }
+    }
+
+    if (failures.length > 0) {
+      throw new CommandError(
+        "group_partial",
+        "Some ready boxes missed the group sequence.",
+      );
+    }
+  }
+
+  #setGroupFeedback(key: string, message: string): void {
+    this.#store.setFeedback(
+      key,
+      { kind: "pending", message },
+      GROUP_FEEDBACK_TIMEOUT_MS,
+    );
+  }
+
   async #sendStatus(): Promise<void> {
     const status = this.#store.view.connection;
     await streamDeck.ui.sendToPropertyInspector({
@@ -290,11 +372,28 @@ function friendlyError(error: unknown): string {
         return "Broadcast unavailable";
       case "command_timeout":
         return "Timed out";
+      case "input_unavailable":
+        return "Input not ready";
+      case "group_unavailable":
+        return "No ready boxes";
+      case "group_partial":
+        return "Partial send";
       default:
         return error.message;
     }
   }
   return error instanceof Error ? error.message : "Command failed";
+}
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, delayMs);
+    timer.unref?.();
+  });
+}
+
+function asError(value: unknown): Error {
+  return value instanceof Error ? value : new Error("Command failed");
 }
 
 function isRecord(value: JsonValue): value is Record<string, JsonValue> {

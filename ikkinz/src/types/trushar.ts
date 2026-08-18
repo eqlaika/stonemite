@@ -54,6 +54,12 @@ export type ServerMessage =
   | { type: "error"; version: 1; request_id?: string; error: WireError }
   | { type: "paired"; version: 1; auth_token: string };
 
+export interface KeyStroke {
+  keys: string[];
+  hold_ms?: number;
+  pause_ms?: number;
+}
+
 export type ClientMessage =
   | { type: "get_state"; version: 1; request_id: string }
   | {
@@ -62,7 +68,22 @@ export type ClientMessage =
       request_id: string;
       target: { type: "client_id"; client_id: string };
     }
-  | { type: "set_broadcast"; version: 1; request_id: string; enabled: boolean };
+  | { type: "set_broadcast"; version: 1; request_id: string; enabled: boolean }
+  | {
+      type: "send_text";
+      version: 1;
+      request_id: string;
+      client_id: string;
+      text: string;
+      submit: boolean;
+    }
+  | {
+      type: "send_keys";
+      version: 1;
+      request_id: string;
+      client_id: string;
+      strokes: KeyStroke[];
+    };
 
 export class ProtocolError extends Error {
   constructor(message: string) {

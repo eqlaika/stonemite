@@ -53,6 +53,15 @@ export type GridCell =
       accent: string;
     }
   | {
+      type: "group";
+      row: number;
+      column: number;
+      available: boolean;
+      ready: number;
+      status: string;
+      accent: string;
+    }
+  | {
       type: "broadcast";
       row: number;
       column: number;
@@ -66,6 +75,56 @@ export type GridCell =
       label: string;
       position: "left" | "right";
     };
+
+export type GroupInvitee = TrusharClient & { character: string };
+
+export interface GroupPlan {
+  active: TrusharClient | null;
+  invitees: GroupInvitee[];
+  available: boolean;
+  status: string;
+}
+
+export function buildGroupPlan(view: DashboardView): GroupPlan {
+  const snapshot = view.snapshot;
+  const active = snapshot
+    ? (snapshot.clients.find(
+        (client) => client.id === snapshot.active_client_id,
+      ) ??
+      snapshot.clients.find((client) => client.active) ??
+      null)
+    : null;
+  const invitees =
+    snapshot && active
+      ? snapshot.clients.filter(
+          (client): client is GroupInvitee =>
+            client.id !== active.id &&
+            client.input_ready &&
+            typeof client.character === "string" &&
+            client.character.trim().length > 0,
+        )
+      : [];
+  const inputAvailable = Boolean(
+    snapshot?.capabilities.send_text && snapshot.capabilities.send_keys,
+  );
+  const available =
+    view.connection.state === "connected" &&
+    inputAvailable &&
+    Boolean(active?.input_ready) &&
+    invitees.length > 0;
+
+  let status: string;
+  if (view.connection.state !== "connected") status = "OFFLINE";
+  else if (!snapshot) status = "NO STATE";
+  else if (!inputAvailable) status = "INPUT UNAVAILABLE";
+  else if (!active) status = "NO ACTIVE BOX";
+  else if (!active.input_ready) status = "ACTIVE NOT READY";
+  else if (invitees.length === 0) status = "NO READY BOXES";
+  else
+    status = `${invitees.length} ${invitees.length === 1 ? "BOX" : "BOXES"} READY`;
+
+  return { active, invitees, available, status };
+}
 
 export function cellKey(row: number, column: number): string {
   return `${row},${column}`;
@@ -121,16 +180,16 @@ export function buildCell(
   }
 
   if (row === 0 && column === 3) {
-    const connected = view.connection.state === "connected";
+    const plan = buildGroupPlan(view);
     return {
-      type: "utility",
+      type: "group",
       row,
       column,
-      top: "LINK",
-      main: connected ? "LIVE" : connectionWord(view.connection.state),
-      bottom: connected ? `REV ${view.snapshot?.revision ?? 0}` : "STONEMITE",
-      accent: connected
-        ? "#59d8d0"
+      available: plan.available,
+      ready: plan.invitees.length,
+      status: plan.status,
+      accent: plan.available
+        ? "#80df89"
         : view.connection.state === "error"
           ? "#ff826f"
           : "#ffc75c",
@@ -249,19 +308,4 @@ function isCoordinate(row: number, column: number): boolean {
     column >= 0 &&
     column < GRID_COLUMNS
   );
-}
-
-function connectionWord(state: DashboardView["connection"]["state"]): string {
-  switch (state) {
-    case "pairing":
-      return "PAIR";
-    case "connecting":
-      return "LINK";
-    case "reconnecting":
-      return "RETRY";
-    case "error":
-      return "ERROR";
-    default:
-      return "OFFLINE";
-  }
 }

@@ -29,6 +29,13 @@ export function renderCell(cell: GridCell): string {
         return `${base("#3c424b")}<text x="36" y="35" class="muted center medium">Slot ${cell.slot}</text><text x="36" y="49" class="quiet center tiny">NOT LOADED</text>`;
       case "utility":
         return renderUtility(cell.top, cell.main, cell.bottom, cell.accent);
+      case "group":
+        return renderUtility(
+          "GROUP",
+          cell.available ? "FORM" : "—",
+          cell.status,
+          cell.accent,
+        );
       case "broadcast":
         return renderBroadcast(cell.available, cell.enabled);
       case "ambient":

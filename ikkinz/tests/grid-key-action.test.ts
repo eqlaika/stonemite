@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { WebSocketServer } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CommandError } from "../src/trushar/client";
 import { DashboardStore } from "../src/state/store";
 import { stateFixture } from "./fixtures";
 
@@ -63,6 +64,107 @@ describe("GridKeyController", () => {
 
     await action.onKeyDown({ action: broadcast } as never);
     expect(client.setBroadcast).toHaveBeenCalledWith(true);
+  });
+
+  it("invites ready named boxes, waits one second, then sends Ctrl+I", async () => {
+    vi.useFakeTimers();
+    const store = groupStore();
+    const firstAcceptance = deferred<ReturnType<typeof inputResult>>();
+    const client = fakeClient();
+    client.sendText.mockResolvedValue(inputResult("text"));
+    client.sendKeys
+      .mockReturnValueOnce(firstAcceptance.promise)
+      .mockResolvedValue(inputResult("keys"));
+    const action = new GridKeyController(store, client as never);
+    const group = fakeKey("group", 0, 3);
+
+    await action.onWillAppear({ action: group } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+
+    const press = action.onKeyDown({ action: group } as never);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.sendText.mock.calls).toEqual([
+      ["leader-id", "/invite Serein", true],
+      ["leader-id", "/invite Rook", true],
+    ]);
+    expect(client.sendKeys).not.toHaveBeenCalled();
+    expect(store.view.feedback.get("0,3")).toMatchObject({
+      kind: "pending",
+      message: "Waiting 1 sec",
+    });
+
+    await action.onKeyDown({ action: group } as never);
+    expect(client.sendText).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(client.sendKeys).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(client.sendKeys).toHaveBeenCalledTimes(1);
+    expect(store.view.feedback.get("0,3")).toMatchObject({
+      kind: "pending",
+      message: "Accepting",
+    });
+    firstAcceptance.resolve(inputResult("keys"));
+    await vi.advanceTimersByTimeAsync(0);
+    await press;
+
+    expect(client.sendKeys.mock.calls).toEqual([
+      [
+        "serein-id",
+        [
+          {
+            keys: ["left_control", "i"],
+            hold_ms: 50,
+            pause_ms: 40,
+          },
+        ],
+      ],
+      [
+        "rook-id",
+        [
+          {
+            keys: ["left_control", "i"],
+            hold_ms: 50,
+            pause_ms: 40,
+          },
+        ],
+      ],
+    ]);
+    expect(store.view.feedback.get("0,3")).toBeUndefined();
+    expect(group.showAlert).not.toHaveBeenCalled();
+  });
+
+  it("continues with deliverable invites and reports a partial Group failure", async () => {
+    vi.useFakeTimers();
+    const store = groupStore();
+    const client = fakeClient();
+    client.sendText
+      .mockRejectedValueOnce(new CommandError("send_failed", "missed"))
+      .mockResolvedValue(inputResult("text"));
+    client.sendKeys.mockResolvedValue(inputResult("keys"));
+    const action = new GridKeyController(store, client as never);
+    const group = fakeKey("group", 0, 3);
+
+    await action.onWillAppear({ action: group } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+    const press = action.onKeyDown({ action: group } as never);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await press;
+
+    expect(client.sendText).toHaveBeenCalledTimes(2);
+    expect(client.sendKeys).toHaveBeenCalledTimes(1);
+    expect(client.sendKeys).toHaveBeenCalledWith("rook-id", [
+      {
+        keys: ["left_control", "i"],
+        hold_ms: 50,
+        pause_ms: 40,
+      },
+    ]);
+    expect(store.view.feedback.get("0,3")).toMatchObject({
+      kind: "error",
+      message: "Partial send",
+    });
+    expect(group.showAlert).toHaveBeenCalledTimes(1);
   });
 
   it("reveals activation and broadcast state immediately without a done interstitial", async () => {
@@ -277,10 +379,69 @@ function connectedStore(): DashboardStore {
   return store;
 }
 
+function groupStore(): DashboardStore {
+  const store = new DashboardStore();
+  store.setConnection({
+    state: "connected",
+    title: "Connected",
+    detail: "server-a.local:19720",
+  });
+  store.setSnapshot(
+    stateFixture({
+      active_client_id: "leader-id",
+      clients: [
+        {
+          id: "leader-id",
+          character: "Laika",
+          window_number: 1,
+          active: true,
+          activatable: true,
+          input_ready: true,
+        },
+        {
+          id: "serein-id",
+          character: "Serein",
+          window_number: 2,
+          active: false,
+          activatable: true,
+          input_ready: true,
+        },
+        {
+          id: "unknown-id",
+          window_number: 3,
+          active: false,
+          activatable: true,
+          input_ready: true,
+        },
+        {
+          id: "mora-id",
+          character: "Mora",
+          window_number: 4,
+          active: false,
+          activatable: true,
+          input_ready: false,
+        },
+        {
+          id: "rook-id",
+          character: "Rook",
+          window_number: 5,
+          active: false,
+          activatable: true,
+          input_ready: true,
+        },
+      ],
+    }),
+  );
+  store.setBootStage(3);
+  return store;
+}
+
 function fakeClient() {
   return {
     activate: vi.fn(),
     setBroadcast: vi.fn(),
+    sendText: vi.fn(),
+    sendKeys: vi.fn(),
     pair: vi.fn(),
     configure: vi.fn(),
     disconnect: vi.fn(),
@@ -317,6 +478,20 @@ function activatedResult() {
       type: "activated" as const,
       status: "activated" as const,
       foreground_confirmed: true,
+    },
+    state: stateFixture(),
+  };
+}
+
+function inputResult(input: "text" | "keys") {
+  return {
+    type: "result" as const,
+    version: 1 as const,
+    request_id: `${input}-1`,
+    result: {
+      type: "input_delivered" as const,
+      input,
+      strokes: 1,
     },
     state: stateFixture(),
   };
