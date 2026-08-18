@@ -12,7 +12,7 @@
 - Fixed auto-login failing after a self-update by embedding the matching trusik input DLL in stonemite.exe
 - Hardened release builds against missing or invalid embedded trusik DLLs and removed the redundant loose DLL from release packages
 - Fixed rapid client switching corrupting active/PiP label state by guarding overlay swaps against reentrant Windows events and reconciling foreground state during polling
-- Fixed remote swaps updating labels without reliably foregrounding the requested EQ window; state now commits only after Windows confirms the target
+- Fixed swaps updating labels without reliably foregrounding and focusing the requested EQ window; state now commits only after Windows confirms the target owns foreground and keyboard focus
 - Prevented child processes from inheriting LAN sockets, added graceful `--quit` shutdown, and updated `just quit` so port 19720 is released cleanly
 
 ## v0.4.1
