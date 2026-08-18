@@ -140,7 +140,7 @@ describe("5 by 3 layout", () => {
     expect(svg).toContain('d="M18 21a8 8 0 0 0-16 0"');
     expect(renderCell(group, 0)).toBe(renderCell(group, 6));
     expect(svg).toContain('font-size="15"');
-    expect(svg).toContain(">GROUP</text>");
+    expect(svg).toContain(">Group</text>");
     expect(svg).not.toContain("BOXES READY");
     expect(svg).not.toContain(">FORM</text>");
     expect(svg).not.toContain(">LIVE</text>");
@@ -188,7 +188,7 @@ describe("5 by 3 layout", () => {
     const unavailableSvg = decodeSvg(renderCell(unavailable));
     expect(unavailableSvg).toContain('data-icon="group"');
     expect(unavailableSvg).toContain('stroke="#6d737c"');
-    expect(unavailableSvg).toContain(">GROUP</text>");
+    expect(unavailableSvg).toContain(">Group</text>");
     expect(unavailableSvg).not.toContain("NO READY BOXES");
   });
 
@@ -208,7 +208,7 @@ describe("5 by 3 layout", () => {
     expect(svg).toContain(
       'd="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"',
     );
-    expect(svg).toContain(">FOLLOW</text>");
+    expect(svg).toContain(">Follow</text>");
     expect(svg).not.toContain("BOXES READY");
     expect(svg).not.toContain(">START</text>");
     expect(svg).not.toContain(">INPUT</text>");
@@ -261,7 +261,7 @@ describe("5 by 3 layout", () => {
     expect(svg).toContain('data-icon-set="lucide-animated"');
     expect(svg).toContain(`stroke="${ACTION_COLORS.assist}"`);
     expect(svg).toContain('data-motion-part="outer-target"');
-    expect(svg).toContain(">ASSIST</text>");
+    expect(svg).toContain(">Assist</text>");
     expect(svg).not.toContain("BOXES READY");
     expect(svg).not.toContain(">STONE</text>");
 
@@ -324,7 +324,7 @@ describe("5 by 3 layout", () => {
     expect(firstFrame).toContain(`fill="${ACTION_COLORS.group}"`);
     expect(firstFrame).toContain('stroke="#101615"');
     expect(firstFrame).toContain('class="active-text center"');
-    expect(firstFrame).toContain(">GROUP</text>");
+    expect(firstFrame).toContain(">Group</text>");
     expect(firstFrame).not.toContain("INVITING");
     expect(nextFrame).not.toBe(firstFrame);
 
@@ -350,7 +350,7 @@ describe("5 by 3 layout", () => {
     expect(followFrame).toContain('data-active="true"');
     expect(followFrame).toContain(`fill="${ACTION_COLORS.follow}"`);
     expect(followFrame).toContain('stroke="#101615"');
-    expect(followFrame).toContain(">FOLLOW</text>");
+    expect(followFrame).toContain(">Follow</text>");
 
     const pendingAssist = buildCell(
       view({
@@ -374,7 +374,7 @@ describe("5 by 3 layout", () => {
     expect(assistFrame).toContain('data-active="true"');
     expect(assistFrame).toContain(`fill="${ACTION_COLORS.assist}"`);
     expect(assistFrame).toContain('stroke="#101615"');
-    expect(assistFrame).toContain(">ASSIST</text>");
+    expect(assistFrame).toContain(">Assist</text>");
     expect(assistFrame).not.toContain("SENDING");
   });
 
@@ -396,7 +396,7 @@ describe("5 by 3 layout", () => {
     expect(idleSwapSvg).toContain(`stroke="${ACTION_COLORS.swap}"`);
     expect(idleSwapSvg).toContain('d="M8 3 4 7l4 4"');
     expect(idleSwapSvg).toContain('data-active="false"');
-    expect(idleSwapSvg).toContain(">SWAP</text>");
+    expect(idleSwapSvg).toContain(">Swap</text>");
     expect(idleSwapSvg).not.toContain("PRESS THEN PICK");
 
     const armedSwap = buildCell(view({ snapshot }), 2, 4, true);
@@ -407,7 +407,7 @@ describe("5 by 3 layout", () => {
     expect(armedFrameZero).toContain(`fill="${ACTION_COLORS.swap}"`);
     expect(armedFrameZero).toContain('stroke="#101615"');
     expect(armedFrameZero).toContain('class="active-text center"');
-    expect(armedFrameZero).toContain(">SWAP</text>");
+    expect(armedFrameZero).toContain(">Swap</text>");
     expect(armedFrameZero).not.toContain("PICK CHARACTER");
     expect(armedFrameThree).not.toBe(armedFrameZero);
 
@@ -509,11 +509,11 @@ describe("5 by 3 layout", () => {
       available: true,
       enabled: false,
     });
-    expect(decodeSvg(renderCell(off))).toContain(">BCAST</text>");
+    expect(decodeSvg(renderCell(off))).toContain(">Bcast</text>");
     const onSvg = decodeSvg(renderCell(on));
     expect(onSvg).toContain("#cc3020");
-    expect(onSvg).toContain(">BCAST</text>");
-    expect(onSvg).not.toContain("BCAST ON");
+    expect(onSvg).toContain(">Bcast</text>");
+    expect(onSvg).not.toContain("Bcast on");
     expect(onSvg).not.toContain("BROADCAST");
   });
 

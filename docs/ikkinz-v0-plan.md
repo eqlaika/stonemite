@@ -42,7 +42,7 @@ Use plugin-wide global settings for `{ address, authToken }`. A six-digit code i
 - Use the exact `LABEL_COLORS` and `BADGE_COLORS` from `app/src/overlay.rs`.
 - Character press sends `activate` only when the current client is activatable and the connection is ready.
 - Swap press arms a selection mode; the next non-active character press exchanges its window number with the active client's number without changing the active client. Pressing Swap again or selecting the active character cancels.
-- Bcast press sends explicit `enabled: !current.enabled`, disables while its request is in flight, and reconciles from returned/pushed state. Its label remains `BCAST`; solid red means enabled.
+- Bcast press sends explicit `enabled: !current.enabled`, disables while its request is in flight, and reconciles from returned/pushed state. Its label remains `Bcast`; solid red means enabled.
 - Assist press identifies the active named main box and concurrently sends `/assist <main>` to every other input-ready client.
 - Group uses blue, Follow green, Assist gold, and Swap cyan. Their dark idle surfaces fill with the action color only while Group/Follow/Assist runs or Swap is armed.
 - Empty character slots explain absence without looking actionable.

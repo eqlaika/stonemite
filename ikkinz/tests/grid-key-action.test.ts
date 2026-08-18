@@ -86,7 +86,7 @@ describe("GridKeyController", () => {
     await action.onKeyDown({ action: swap } as never);
     const firstArmedFrame = swap.setImage.mock.calls.at(-1)?.[0] as string;
     expect(decodeURIComponent(firstArmedFrame)).toContain('data-active="true"');
-    expect(decodeURIComponent(firstArmedFrame)).toContain(">SWAP</text>");
+    expect(decodeURIComponent(firstArmedFrame)).toContain(">Swap</text>");
     expect(decodeURIComponent(firstArmedFrame)).not.toContain("PICK CHARACTER");
     await vi.advanceTimersByTimeAsync(125);
     expect(swap.setImage.mock.calls.at(-1)?.[0]).not.toBe(firstArmedFrame);

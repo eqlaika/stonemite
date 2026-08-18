@@ -168,7 +168,7 @@ Charcoal surfaces keep the interface quiet while cyan, green, amber, and coral r
 
 ### Named Rules
 
-**The Broadcast-Red Rule.** Solid broadcast red is reserved for confirmed broadcast-on state; broadcast-off and unavailable states stay on dark tiles. The stable “BCAST” label does not change, so the full-surface inversion carries the toggle state without adding copy.
+**The Broadcast-Red Rule.** Solid broadcast red is reserved for confirmed broadcast-on state; broadcast-off and unavailable states stay on dark tiles. The stable “Bcast” label does not change, so the full-surface inversion carries the toggle state without adding copy.
 
 **The Redundancy Rule.** Color never carries identity, readiness, progress, success, or failure by itself; pair it with a number, name, class, border, icon, or explicit status text.
 
@@ -183,14 +183,14 @@ Charcoal surfaces keep the interface quiet while cyan, green, amber, and coral r
 - **Key number** (800, 20px, 1): Heavy centered slot numerals inside the circular badges.
 - **Key value** (800, 15–18px, 1): Short central values stay large; longer text fits horizontally without dropping below the 15px floor.
 - **Key label** (750–850, 15px minimum, 1): Uppercase deck copy never renders smaller than the standard character-name size. Long strings fit horizontally within the 72px canvas instead of reducing font size.
-- **Action label** (800, 15px, 1): A single large uppercase verb—“GROUP,” “FOLLOW,” “ASSIST,” or “SWAP”—anchored below the action icon with no lower qualifier.
+- **Action label** (800, 15px, 1): A single large title-case verb—“Group,” “Follow,” “Assist,” “Swap,” or “Bcast”—anchored below the action icon with no lower qualifier.
 - **Character name** (800, 15px, 1): Centered near the bottom edge; long names fit horizontally without shrinking below the deck-wide floor.
 - **Property-inspector title** (700, 13px, 1.4): The leading status statement.
 - **Property-inspector body** (400–700, 10–12px, 1.4): Labels, help, actions, instructions, privacy copy, and explicit errors. User-facing copy remains sentence case.
 
 ### Named Rules
 
-**The Two-Registers Rule.** Deck microcopy may use compact uppercase labels for scan speed; property-inspector labels, buttons, help, status, and errors use sentence case.
+**The Two-Registers Rule.** Deck action labels and property-inspector copy use sentence case; compact status microcopy may remain uppercase for scan speed.
 
 ## Layout
 
@@ -233,9 +233,9 @@ Corners are compact and consistent: Stream Deck artwork and property-inspector i
 ### Key Tiles
 - **Base grammar:** Every tile is a 72px square with the key radius. Non-character tiles use the restrained key gradient with no colored top rail and deck copy no smaller than 15px; long labels fit horizontally instead of shrinking. Reserved tiles render only the dark surface.
 - **Identity:** Character tiles combine the fixed slot surface, darker number badge, class icon or explicit code fallback, character name, readiness dot, and optional unavailable veil. The active tile becomes active-white with dark labels, a slot-color outline, and an explicit “ACTIVE” marker.
-- **Bcast:** Off uses the dark base, broadcast-off icon, and one “BCAST” label; unavailable switches to broadcast-unavailable and says “UNAVAILABLE.” On replaces the entire surface with solid broadcast red while keeping the white lightning mark and the same “BCAST” label.
-- **Group / Follow / Assist:** Actions use vendored Lucide Animated geometry—Users Round, Route, and Target—above one large “GROUP,” “FOLLOW,” or “ASSIST” label. Group is blue, Follow is green, and Assist is gold. Idle tiles keep a dark surface with the action color on the icon; while an action is running, the entire tile fills with its action color and the icon and fixed action word invert to dark ink. Ready-box counts and lower qualifiers remain omitted for hardware-scale legibility.
-- **Window-number swap:** Lucide’s Arrow Left Right sits above one large “SWAP” label in both idle and armed modes. Swap is cyan: idle keeps a dark surface with the cyan icon, while armed mode fills the tile cyan, inverts its icon and word to dark ink, staggers the two source arrow motions, and temporarily relabels character tiles as “CURRENT” or “SELECT.”
+- **Bcast:** Off uses the dark base, broadcast-off icon, and one “Bcast” label; unavailable switches to broadcast-unavailable and says “UNAVAILABLE.” On replaces the entire surface with solid broadcast red while keeping the white lightning mark and the same “Bcast” label.
+- **Group / Follow / Assist:** Actions use vendored Lucide Animated geometry—Users Round, Route, and Target—above one large “Group,” “Follow,” or “Assist” label. Group is blue, Follow is green, and Assist is gold. Idle tiles keep a dark surface with the action color on the icon; while an action is running, the entire tile fills with its action color and the icon and fixed action word invert to dark ink. Ready-box counts and lower qualifiers remain omitted for hardware-scale legibility.
+- **Window-number swap:** Lucide’s Arrow Left Right sits above one large “Swap” label in both idle and armed modes. Swap is cyan: idle keeps a dark surface with the cyan icon, while armed mode fills the tile cyan, inverts its icon and word to dark ink, staggers the two source arrow motions, and temporarily relabels character tiles as “CURRENT” or “SELECT.”
 - **Feedback / Error:** Pending Group, Follow, and Assist actions preserve the same large action word while their tile fills with its action-specific color and the icon animates in dark ink. Other pending and error states replace only the operated key with recovery amber or error coral iconography plus 15px “WORKING” or “FAILED” copy and a fitted 15px message. Empty and unsupported positions stay explicit with 15px “NOT LOADED” or “LAYOUT REQUIRED.”
 
 ### Motion and Accessibility States

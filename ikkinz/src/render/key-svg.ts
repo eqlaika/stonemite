@@ -51,19 +51,19 @@ export function renderCell(cell: GridCell, motionFrame = 0): string {
       case "group":
         return renderActionTile(
           "group",
-          "GROUP",
+          "Group",
           cell.available ? ACTION_COLORS.group : COLORS.disabled,
         );
       case "follow":
         return renderActionTile(
           "follow",
-          "FOLLOW",
+          "Follow",
           cell.available ? ACTION_COLORS.follow : COLORS.disabled,
         );
       case "assist":
         return renderActionTile(
           "assist",
-          "ASSIST",
+          "Assist",
           cell.available ? ACTION_COLORS.assist : COLORS.disabled,
         );
       case "broadcast":
@@ -143,7 +143,7 @@ function renderSwap(
   motionFrame: number,
 ): string {
   const accent = available ? ACTION_COLORS.swap : COLORS.disabled;
-  return renderActionTile("swap", "SWAP", accent, motionFrame, armed);
+  return renderActionTile("swap", "Swap", accent, motionFrame, armed);
 }
 
 function renderActionTile(
@@ -164,10 +164,10 @@ function renderActionTile(
 function renderBroadcast(available: boolean, enabled: boolean): string {
   const lightning = `<path d="M40 10L25 31h9l-4 16 18-23H38z" fill="currentColor"/>`;
   if (enabled) {
-    return `<rect width="72" height="72" rx="7" fill="#cc3020"/><g color="#fff">${lightning}</g><text x="36" y="65" class="text center small">BCAST</text>`;
+    return `<rect width="72" height="72" rx="7" fill="#cc3020"/><g color="#fff">${lightning}</g><text x="36" y="65" class="text center small">Bcast</text>`;
   }
   const accent = available ? "#cc5040" : COLORS.disabled;
-  const label = available ? "BCAST" : "UNAVAILABLE";
+  const label = available ? "Bcast" : "UNAVAILABLE";
   return `${base()}<g color="${accent}">${lightning}</g><text x="36" y="65" class="text center small"${fittedTextAttributes(label, 6, 62)}>${label}</text>`;
 }
 
@@ -179,9 +179,9 @@ function renderFeedback(
 ): string {
   if (kind === "pending" && motion) {
     const labels = {
-      group: "GROUP",
-      follow: "FOLLOW",
-      assist: "ASSIST",
+      group: "Group",
+      follow: "Follow",
+      assist: "Assist",
     } as const;
     return renderActionTile(
       motion,
