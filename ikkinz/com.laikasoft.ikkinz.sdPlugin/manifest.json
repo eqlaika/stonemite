@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "Name": "Ikkinz",
+  "Version": "0.1.0.0",
+  "Author": "Laikasoft",
+  "UUID": "com.laikasoft.ikkinz",
+  "Description": "Live Stonemite character switching and broadcast control.",
+  "Category": "Ikkinz",
+  "CategoryIcon": "imgs/plugin/category-icon",
+  "Icon": "imgs/plugin/marketplace",
+  "CodePath": "bin/plugin.js",
+  "PropertyInspectorPath": "ui/pairing.html",
+  "SDKVersion": 3,
+  "Software": {
+    "MinimumVersion": "7.4"
+  },
+  "Nodejs": {
+    "Version": "24"
+  },
+  "OS": [
+    {
+      "Platform": "mac",
+      "MinimumVersion": "12"
+    },
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Actions": [
+    {
+      "Name": "Grid key",
+      "UUID": "com.laikasoft.ikkinz.grid-key",
+      "Icon": "imgs/actions/grid-key/icon",
+      "Tooltip": "A position-aware key in the Ikkinz 5 by 3 dashboard.",
+      "PropertyInspectorPath": "ui/pairing.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [
+        {
+          "Image": "imgs/actions/grid-key/key",
+          "ShowTitle": false
+        }
+      ]
+    }
+  ]
+}

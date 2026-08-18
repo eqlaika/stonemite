@@ -1,0 +1,210 @@
+:root {
+  color-scheme: dark;
+  --bg: #24262a;
+  --surface: #30343a;
+  --line: #4a5059;
+  --text: #f5f7fa;
+  --muted: #b8c0ca;
+  --cyan: #59d8d0;
+  --green: #80df89;
+  --amber: #ffc75c;
+  --red: #ff826f;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 260px;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  -webkit-font-smoothing: antialiased;
+}
+
+main {
+  padding: 12px;
+}
+
+.connection {
+  display: grid;
+  grid-template-columns: 10px 1fr;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 18px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.connection[data-state="connected"] .status-dot {
+  background: var(--green);
+}
+
+.connection[data-state="pairing"] .status-dot,
+.connection[data-state="connecting"] .status-dot,
+.connection[data-state="reconnecting"] .status-dot {
+  background: var(--amber);
+  animation: breathe 1.2s ease-in-out infinite alternate;
+}
+
+.connection[data-state="error"] .status-dot {
+  background: var(--red);
+}
+
+.connection strong,
+.connection small {
+  display: block;
+}
+
+.connection strong {
+  margin-bottom: 2px;
+  font-size: 13px;
+}
+
+.connection small,
+.help,
+.privacy,
+.layout-help {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+label {
+  display: block;
+  margin: 14px 0 6px;
+  font-weight: 650;
+}
+
+input {
+  width: 100%;
+  height: 34px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: 0;
+  background: #1c1e22;
+  color: var(--text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  caret-color: var(--cyan);
+}
+
+input:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+input[aria-invalid="true"] {
+  border-color: var(--red);
+}
+
+.help {
+  margin: 5px 0 0;
+  font-size: 11px;
+}
+
+.error {
+  margin: 10px 0 0;
+  color: #ffc6bd;
+  line-height: 1.4;
+}
+
+button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #3a3f46;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.primary {
+  width: 100%;
+  margin-top: 14px;
+  border-color: var(--cyan);
+  background: var(--cyan);
+  color: #101615;
+}
+
+.primary:hover:not(:disabled) {
+  background: #78e4de;
+}
+
+.paired-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.quiet {
+  color: #ffd0c9;
+}
+
+.layout-help {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface);
+  line-height: 1.4;
+}
+
+.layout-help strong {
+  color: var(--text);
+}
+
+.layout-help ol {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.layout-help li + li {
+  margin-top: 5px;
+}
+
+.privacy {
+  margin: 16px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+}
+
+::selection {
+  background: var(--cyan);
+  color: #101615;
+}
+
+@keyframes breathe {
+  to {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 1ms !important;
+  }
+}
