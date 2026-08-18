@@ -65,6 +65,61 @@ describe("GridKeyController", () => {
     expect(client.setBroadcast).toHaveBeenCalledWith(true);
   });
 
+  it("reveals activation and broadcast state immediately without a done interstitial", async () => {
+    vi.useFakeTimers();
+    const store = connectedStore();
+    const activation = deferred<ReturnType<typeof activatedResult>>();
+    const broadcast = deferred<ReturnType<typeof broadcastResult>>();
+    const client = fakeClient();
+    client.activate.mockReturnValue(activation.promise);
+    client.setBroadcast.mockReturnValue(broadcast.promise);
+    const action = new GridKeyController(store, client as never);
+    const character = fakeKey("character", 0, 0);
+    const broadcastKey = fakeKey("broadcast", 0, 4);
+
+    await action.onWillAppear({ action: character } as never);
+    await action.onWillAppear({ action: broadcastKey } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+
+    const activationPress = action.onKeyDown({ action: character } as never);
+    expect(store.view.feedback.get("0,0")).toMatchObject({ kind: "pending" });
+    const activationSnapshot = store.view.snapshot!;
+    store.setSnapshot({
+      ...activationSnapshot,
+      revision: activationSnapshot.revision + 1,
+      active_client_id: "opaque-client-id",
+      clients: activationSnapshot.clients.map((candidate) => ({
+        ...candidate,
+        active: candidate.id === "opaque-client-id",
+      })),
+    });
+    activation.resolve(activatedResult());
+    await activationPress;
+
+    expect(store.view.feedback.get("0,0")).toBeUndefined();
+    const characterImage = character.setImage.mock.calls.at(-1)?.[0] as string;
+    expect(decodeURIComponent(characterImage)).toContain(">ACTIVE</text>");
+    expect(decodeURIComponent(characterImage)).not.toContain("DONE");
+
+    const broadcastPress = action.onKeyDown({ action: broadcastKey } as never);
+    expect(store.view.feedback.get("0,4")).toMatchObject({ kind: "pending" });
+    const broadcastSnapshot = store.view.snapshot!;
+    store.setSnapshot({
+      ...broadcastSnapshot,
+      revision: broadcastSnapshot.revision + 1,
+      broadcast: { available: true, enabled: true },
+    });
+    broadcast.resolve(broadcastResult(true));
+    await broadcastPress;
+
+    expect(store.view.feedback.get("0,4")).toBeUndefined();
+    const broadcastImage = broadcastKey.setImage.mock.calls.at(
+      -1,
+    )?.[0] as string;
+    expect(decodeURIComponent(broadcastImage)).toContain("#cc3020");
+    expect(decodeURIComponent(broadcastImage)).not.toContain("DONE");
+  });
+
   it("renders a dedicated static image outside the 5 by 3 grid", async () => {
     const store = connectedStore();
     const client = fakeClient();

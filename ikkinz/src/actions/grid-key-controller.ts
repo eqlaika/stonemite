@@ -98,14 +98,7 @@ export class GridKeyController {
             "protocol_error",
             "Stonemite returned the wrong activation result.",
           );
-        const status =
-          result.result.status === "already_active"
-            ? "Already active"
-            : "Activated";
-        this.#store.setFeedback(feedbackKey, {
-          kind: "success",
-          message: status,
-        });
+        this.#store.clearFeedback(feedbackKey);
         return;
       }
       if (cell.type === "broadcast" && cell.available) {
@@ -116,10 +109,7 @@ export class GridKeyController {
           10_000,
         );
         await this.#client.setBroadcast(!cell.enabled);
-        this.#store.setFeedback(feedbackKey, {
-          kind: "success",
-          message: cell.enabled ? "Broadcast off" : "Broadcast on",
-        });
+        this.#store.clearFeedback(feedbackKey);
       }
     } catch (error) {
       this.#store.setFeedback(cellKey(key.row, key.column), {

@@ -115,19 +115,10 @@ function renderBroadcast(available: boolean, enabled: boolean): string {
   return `${base(accent)}<g color="${accent}">${lightning}</g><text x="36" y="62" class="text center small">BROADCAST</text>${available ? "" : '<text x="36" y="69" class="quiet center tiny">UNAVAILABLE</text>'}`;
 }
 
-function renderFeedback(
-  kind: "pending" | "success" | "error",
-  message: string,
-): string {
-  const accent =
-    kind === "success"
-      ? COLORS.green
-      : kind === "error"
-        ? COLORS.red
-        : COLORS.amber;
-  const label =
-    kind === "success" ? "DONE" : kind === "error" ? "FAILED" : "WORKING";
-  return `${base(accent)}<circle cx="36" cy="29" r="10" fill="none" stroke="${accent}" stroke-width="3"/><path d="${kind === "success" ? "M31 29l4 4 7-9" : kind === "error" ? "M31 24l10 10m0-10L31 34" : "M36 19v10l6 4"}" fill="none" stroke="${accent}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><text x="36" y="51" fill="${accent}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="8" font-weight="850" text-anchor="middle">${label}</text><text x="36" y="63" class="text center" font-size="${message.length > 10 ? 7 : 8}px">${escapeXml(message.toUpperCase())}</text>`;
+function renderFeedback(kind: "pending" | "error", message: string): string {
+  const accent = kind === "error" ? COLORS.red : COLORS.amber;
+  const label = kind === "error" ? "FAILED" : "WORKING";
+  return `${base(accent)}<circle cx="36" cy="29" r="10" fill="none" stroke="${accent}" stroke-width="3"/><path d="${kind === "error" ? "M31 24l10 10m0-10L31 34" : "M36 19v10l6 4"}" fill="none" stroke="${accent}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><text x="36" y="51" fill="${accent}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="8" font-weight="850" text-anchor="middle">${label}</text><text x="36" y="63" class="text center" font-size="${message.length > 10 ? 7 : 8}px">${escapeXml(message.toUpperCase())}</text>`;
 }
 
 function renderAmbient(label: string, position: "left" | "right"): string {

@@ -10,7 +10,7 @@ export interface ConnectionStatus {
 }
 
 export interface Feedback {
-  kind: "pending" | "success" | "error";
+  kind: "pending" | "error";
   message: string;
   until: number;
 }
@@ -84,6 +84,15 @@ export class DashboardStore {
     }, durationMs);
     timer.unref?.();
     this.#feedbackTimers.set(key, timer);
+  }
+
+  clearFeedback(key: string): void {
+    const timer = this.#feedbackTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.#feedbackTimers.delete(key);
+    }
+    if (this.#feedback.delete(key)) this.#emit();
   }
 
   clear(): void {
