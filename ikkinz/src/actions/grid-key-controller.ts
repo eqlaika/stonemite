@@ -8,6 +8,7 @@ import streamDeck, {
 import type { JsonObject, JsonValue } from "@elgato/utils";
 import {
   buildCell,
+  buildFollowPlan,
   buildGroupPlan,
   cellKey,
   GRID_COLUMNS,
@@ -24,7 +25,7 @@ import {
 } from "../trushar/client";
 
 const GROUP_ACCEPT_DELAY_MS = 1_000;
-const GROUP_FEEDBACK_TIMEOUT_MS = 60_000;
+const ACTION_FEEDBACK_TIMEOUT_MS = 60_000;
 
 export interface PluginSettings extends JsonObject {
   address?: string;
@@ -46,6 +47,7 @@ export class GridKeyController {
   #bootStarted = false;
   #credentialEpoch = 0;
   #groupInFlight = false;
+  #followInFlight = false;
 
   constructor(store: DashboardStore, client: TrusharClient) {
     this.#store = store;
@@ -109,12 +111,24 @@ export class GridKeyController {
       if (cell.type === "group" && cell.available && !this.#groupInFlight) {
         const feedbackKey = cellKey(key.row, key.column);
         this.#groupInFlight = true;
-        this.#setGroupFeedback(feedbackKey, "Inviting");
+        this.#setActionFeedback(feedbackKey, "Inviting");
         try {
           await this.#formGroup(feedbackKey);
           this.#store.clearFeedback(feedbackKey);
         } finally {
           this.#groupInFlight = false;
+        }
+        return;
+      }
+      if (cell.type === "follow" && cell.available && !this.#followInFlight) {
+        const feedbackKey = cellKey(key.row, key.column);
+        this.#followInFlight = true;
+        this.#setActionFeedback(feedbackKey, "Following");
+        try {
+          await this.#startFollow();
+          this.#store.clearFeedback(feedbackKey);
+        } finally {
+          this.#followInFlight = false;
         }
         return;
       }
@@ -221,6 +235,32 @@ export class GridKeyController {
     }
   }
 
+  async #startFollow(): Promise<void> {
+    const plan = buildFollowPlan(this.#store.view);
+    if (!plan.available || !plan.leader) {
+      throw new CommandError(
+        "follow_unavailable",
+        "No named active leader and ready followers are available.",
+      );
+    }
+
+    const command = `/follow ${plan.leader.character.trim()}`;
+    const results = await Promise.allSettled(
+      plan.followers.map((follower) =>
+        this.#client.sendText(follower.id, command, true),
+      ),
+    );
+    const failures = results.filter((result) => result.status === "rejected");
+    if (failures.length > 0) {
+      throw new CommandError(
+        failures.length === results.length ? "follow_failed" : "follow_partial",
+        failures.length === results.length
+          ? "No ready box received the follow command."
+          : "Some ready boxes missed the follow command.",
+      );
+    }
+  }
+
   async #formGroup(feedbackKey: string): Promise<void> {
     const plan = buildGroupPlan(this.#store.view);
     if (!plan.available || !plan.active) {
@@ -252,9 +292,9 @@ export class GridKeyController {
       );
     }
 
-    this.#setGroupFeedback(feedbackKey, "Waiting 1 sec");
+    this.#setActionFeedback(feedbackKey, "Waiting 1 sec");
     await wait(GROUP_ACCEPT_DELAY_MS);
-    this.#setGroupFeedback(feedbackKey, "Accepting");
+    this.#setActionFeedback(feedbackKey, "Accepting");
 
     for (const invitee of invited) {
       try {
@@ -278,11 +318,11 @@ export class GridKeyController {
     }
   }
 
-  #setGroupFeedback(key: string, message: string): void {
+  #setActionFeedback(key: string, message: string): void {
     this.#store.setFeedback(
       key,
       { kind: "pending", message },
-      GROUP_FEEDBACK_TIMEOUT_MS,
+      ACTION_FEEDBACK_TIMEOUT_MS,
     );
   }
 
@@ -378,6 +418,12 @@ function friendlyError(error: unknown): string {
         return "No ready boxes";
       case "group_partial":
         return "Partial send";
+      case "follow_unavailable":
+        return "No ready boxes";
+      case "follow_failed":
+        return "Follow failed";
+      case "follow_partial":
+        return "Partial follow";
       default:
         return error.message;
     }

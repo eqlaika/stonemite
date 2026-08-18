@@ -4,6 +4,8 @@
 
 - Added experimental remote integration to support Stream Deck actions.
 - Added an Ikkinz Group key that invites ready boxes from the active client and sends `Ctrl+I` to accept after one second
+- Added an Ikkinz Follow key that concurrently sends `/follow <leader>` to ready background clients
+- Allowed targeted input sequences to run concurrently across independent EQ clients
 - Fixed targeted modifier chords reaching background clients as an unmodified key by sequencing modifier press and release around the primary key
 - Removed anonymous usage telemetry
 - Refresh character and server identity when the same EQ process changes characters or servers

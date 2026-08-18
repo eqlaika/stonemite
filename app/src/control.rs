@@ -2,6 +2,7 @@
 
 use futures_util::future::BoxFuture;
 use std::cell::UnsafeCell;
+use std::collections::HashMap;
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
@@ -78,7 +79,7 @@ struct UiState {
     latest_sources: Vec<SourceClient>,
     hub: Arc<StateHub>,
     tray_hwnd: HWND,
-    active_input: Option<ActiveInput>,
+    active_inputs: HashMap<u32, ActiveInput>,
     pairing: Option<trushar::server::PairingHandle>,
     pairing_auth_token: Option<String>,
 }
@@ -212,7 +213,7 @@ pub fn start(hwnd: HWND, config: &crate::config::TrusharConfig) -> Option<Server
         latest_sources: Vec::new(),
         hub: hub.clone(),
         tray_hwnd: hwnd,
-        active_input: None,
+        active_inputs: HashMap::new(),
         pairing: None,
         pairing_auth_token: None,
     });
@@ -288,8 +289,11 @@ fn report_start_failure(detail: &str) {
 
 pub fn stop() {
     if let Some(mut state) = ui().take() {
-        if let Some(input) = state.active_input.take() {
+        let had_active_inputs = !state.active_inputs.is_empty();
+        for input in state.active_inputs.drain().map(|(_, input)| input) {
             crate::broadcast::finish_targeted_input(input.pid);
+        }
+        if had_active_inputs {
             unsafe {
                 let _ = KillTimer(state.tray_hwnd, TIMER_CONTROL_INPUT);
             }
@@ -477,40 +481,45 @@ fn start_resolved_input(
             ControlError::new(ErrorCode::InternalError, "control dispatcher is stopped"),
         ));
     };
-    if state.active_input.is_some() {
+    if state.active_inputs.contains_key(&pid) {
         return Err((
             reply,
             ControlError::new(
                 ErrorCode::InputOperationFailed,
-                "another targeted input sequence is already in progress",
+                "the selected target already has an input sequence in progress",
             ),
         ));
     }
     if let Err(error) = crate::broadcast::begin_targeted_input(pid) {
         return Err((reply, map_targeted_input_error(error)));
     }
-    let timer = unsafe { SetTimer(state.tray_hwnd, TIMER_CONTROL_INPUT, INPUT_TICK_MS, None) };
-    if timer == 0 {
-        crate::broadcast::finish_targeted_input(pid);
-        return Err((
-            reply,
-            ControlError::new(
-                ErrorCode::InputOperationFailed,
-                "failed to start the targeted input timer",
-            ),
-        ));
+    if state.active_inputs.is_empty() {
+        let timer = unsafe { SetTimer(state.tray_hwnd, TIMER_CONTROL_INPUT, INPUT_TICK_MS, None) };
+        if timer == 0 {
+            crate::broadcast::finish_targeted_input(pid);
+            return Err((
+                reply,
+                ControlError::new(
+                    ErrorCode::InputOperationFailed,
+                    "failed to start the targeted input timer",
+                ),
+            ));
+        }
     }
-    state.active_input = Some(ActiveInput {
+    state.active_inputs.insert(
         pid,
-        kind,
-        strokes,
-        index: 0,
-        phase: InputPhase::Press,
-        // trusik observes the active flag and gives a background EQ window an
-        // activation notification before DirectInput consumes the first key.
-        next_step: Instant::now() + INPUT_ACTIVATION_DELAY,
-        reply,
-    });
+        ActiveInput {
+            pid,
+            kind,
+            strokes,
+            index: 0,
+            phase: InputPhase::Press,
+            // trusik observes the active flag and gives a background EQ window an
+            // activation notification before DirectInput consumes the first key.
+            next_step: Instant::now() + INPUT_ACTIVATION_DELAY,
+            reply,
+        },
+    );
     Ok(())
 }
 
@@ -803,17 +812,30 @@ fn complete_stroke(input: &mut ActiveInput, now: Instant) {
     }
 }
 
-/// Advance one target-specific sequence phase from the Win32 timer callback.
+/// Advance every active target-specific sequence from the Win32 timer callback.
 pub fn advance_input() {
     let Some(state) = ui().as_mut() else { return };
-    let Some(mut input) = state.active_input.take() else {
+    if state.active_inputs.is_empty() {
         unsafe {
             let _ = KillTimer(state.tray_hwnd, TIMER_CONTROL_INPUT);
         }
         return;
-    };
+    }
+
+    let inputs = std::mem::take(&mut state.active_inputs);
+    for input in inputs.into_values() {
+        advance_one_input(state, input);
+    }
+    if state.active_inputs.is_empty() {
+        unsafe {
+            let _ = KillTimer(state.tray_hwnd, TIMER_CONTROL_INPUT);
+        }
+    }
+}
+
+fn advance_one_input(state: &mut UiState, mut input: ActiveInput) {
     if input.reply.is_closed() {
-        finish_input(state, input, None);
+        finish_input(input, None);
         return;
     }
     if !state
@@ -822,7 +844,6 @@ pub fn advance_input() {
         .any(|source| source.private_key as u32 == input.pid)
     {
         finish_input(
-            state,
             input,
             Some(Err(ControlError::new(
                 ErrorCode::TargetDisappeared,
@@ -833,7 +854,7 @@ pub fn advance_input() {
     }
     let now = Instant::now();
     if now < input.next_step {
-        state.active_input = Some(input);
+        state.active_inputs.insert(input.pid, input);
         return;
     }
     let phase = input.phase;
@@ -842,7 +863,7 @@ pub fn advance_input() {
             kind: input.kind,
             strokes: input.strokes.len(),
         });
-        finish_input(state, input, Some(result));
+        finish_input(input, Some(result));
         return;
     }
 
@@ -852,7 +873,6 @@ pub fn advance_input() {
     for scan in phase_scans(&input.strokes[input.index], phase) {
         if let Err(message) = crate::broadcast::set_targeted_key(input.pid, scan, pressed) {
             finish_input(
-                state,
                 input,
                 Some(Err(ControlError::new(
                     ErrorCode::InputOperationFailed,
@@ -884,18 +904,11 @@ pub fn advance_input() {
         InputPhase::Release | InputPhase::ReleaseModifiers => complete_stroke(&mut input, now),
         InputPhase::Finish => unreachable!(),
     }
-    state.active_input = Some(input);
+    state.active_inputs.insert(input.pid, input);
 }
 
-fn finish_input(
-    state: &mut UiState,
-    input: ActiveInput,
-    result: Option<Result<CommandOutcome, ControlError>>,
-) {
+fn finish_input(input: ActiveInput, result: Option<Result<CommandOutcome, ControlError>>) {
     crate::broadcast::finish_targeted_input(input.pid);
-    unsafe {
-        let _ = KillTimer(state.tray_hwnd, TIMER_CONTROL_INPUT);
-    }
     if let Some(result) = result {
         let _ = input.reply.send(result);
     }

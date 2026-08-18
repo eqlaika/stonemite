@@ -1,10 +1,12 @@
 # Ikkinz
 
-Ikkinz is the internal codename for the **Stonemite · EQ boxing** 5×3 Stream Deck control surface. It shows the current six-client roster, activates an exact loaded EQ client, forms a group from the active client, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting.
+Ikkinz is the internal codename for the **Stonemite · EQ boxing** 5×3 Stream Deck control surface. It shows the current six-client roster, activates an exact loaded EQ client, forms and follows a group from the active client, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting.
 
 The Group key invites every other named, input-ready client from the active box, waits one second, then sends `Ctrl+I` to those invited clients. Boxes without a detected character name or ready targeted-input channel are skipped.
 
-V0 is intentionally the core deck. Assist, Follow, Burn, Camp, heals, spells, live EQ targets, buffs, and cooldowns are not implemented until their commands and failure policy are defined.
+The Follow key identifies the active named leader and concurrently sends `/follow <leader>` to every other input-ready client.
+
+V0 is intentionally the core deck. Assist, Burn, Camp, heals, spells, live EQ targets, buffs, and cooldowns are not implemented until their commands and failure policy are defined.
 
 ## Requirements
 

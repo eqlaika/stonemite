@@ -194,7 +194,7 @@ Charcoal surfaces keep the interface quiet while cyan, green, amber, and coral r
 
 ## Layout
 
-Ikkinz key art is authored at exactly 72 × 72 pixels. The shipped v0 grid is five columns by three rows: the first six positions carry exact-client identity, while the remaining positions carry connection, broadcast, input, pairing, group, active-client, server, and ambient product state. This is the implemented v0 deck map, not a promise that every Stonemite surface uses a 5 × 3 composition.
+Ikkinz key art is authored at exactly 72 × 72 pixels. The shipped v0 grid is five columns by three rows: the first six positions carry exact-client identity, while the remaining positions carry group and follow actions, connection, broadcast, pairing, active-client, server, and ambient product state. This is the implemented v0 deck map, not a promise that every Stonemite surface uses a 5 × 3 composition.
 
 Every dark utility key begins with a 3px top state rail. Character keys use a 13px-radius badge centered at (17, 18), a 29 × 29 class image at the top right when known, a bottom-centered name, and a 3px readiness dot at the lower right. The active character replaces its slot gradient with an active-white surface, keeps a 3px slot-color outline, switches its labels to dark ink, and states “ACTIVE” explicitly. Missing clients and unavailable controls remain in place and explain their state instead of collapsing the grid.
 
@@ -234,6 +234,7 @@ Corners are compact and consistent: Stream Deck artwork and property-inspector i
 - **Base grammar:** Every tile is a 72px square with the key radius. Utility and state tiles use the restrained key gradient, a 3px accent rail, a small top label, a central value, and a bottom qualifier.
 - **Identity:** Character tiles combine the fixed slot surface, darker number badge, class icon or explicit code fallback, character name, readiness dot, and optional unavailable veil. The active tile becomes active-white with dark labels, a slot-color outline, and an explicit “ACTIVE” marker.
 - **Broadcast:** Off uses the dark base with broadcast-off accent; unavailable switches to broadcast-unavailable and says “UNAVAILABLE.” On replaces the entire surface with solid broadcast red, a white lightning mark, “BROADCAST,” and the softer “ON” label.
+- **Group / Follow:** Ready actions use the green state rail, an explicit “FORM” or “START” verb, and a ready-box count. Missing identity, connection, or input readiness remains in place with a specific unavailable reason.
 - **Feedback / Error:** Pending, success, and error temporarily replace only the operated key with recovery amber, ready green, or error coral iconography plus “WORKING,” “DONE,” or “FAILED” and a short message. Empty and unsupported positions stay explicit with “NOT LOADED” or “LAYOUT REQUIRED.”
 
 ### Motion and Accessibility States

@@ -504,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn targeted_input_drives_only_the_selected_shared_memory_mapping() {
+    fn targeted_input_is_isolated_across_concurrent_mappings() {
         let target_pid = 0x7fff_ff01;
         let other_pid = 0x7fff_ff02;
         *state() = Some(BroadcastState {
@@ -525,38 +525,49 @@ mod tests {
             Err(TargetedInputError::Unavailable(_))
         ));
         unsafe {
-            std::ptr::write_volatile(
-                &mut (*state().as_mut().unwrap().targets[&target_pid].ptr).proxy_ready,
-                PROXY_READY,
-            );
+            for pid in [target_pid, other_pid] {
+                std::ptr::write_volatile(
+                    &mut (*state().as_mut().unwrap().targets[&pid].ptr).proxy_ready,
+                    PROXY_READY,
+                );
+            }
         }
         assert!(is_target_ready(target_pid));
-        assert!(!is_target_ready(other_pid));
+        assert!(is_target_ready(other_pid));
 
         begin_targeted_input(target_pid).unwrap();
         assert!(matches!(
             begin_targeted_input(target_pid),
             Err(TargetedInputError::OperationFailed(_))
         ));
+        begin_targeted_input(other_pid).unwrap();
         set_targeted_key(target_pid, 0x1e, true).unwrap();
+        set_targeted_key(other_pid, 0x1f, true).unwrap();
         let broadcast_state = state().as_ref().unwrap();
         let target = &broadcast_state.targets[&target_pid];
         let other = &broadcast_state.targets[&other_pid];
         unsafe {
             assert_eq!(std::ptr::read_volatile(&(*target.ptr).active), 1);
             assert_eq!(std::ptr::read_volatile(&(*target.ptr).keys[0x1e]), 0x80);
-            assert_eq!(std::ptr::read_volatile(&(*other.ptr).active), 0);
+            assert_eq!(std::ptr::read_volatile(&(*target.ptr).keys[0x1f]), 0x00);
+            assert_eq!(std::ptr::read_volatile(&(*other.ptr).active), 1);
             assert_eq!(std::ptr::read_volatile(&(*other.ptr).keys[0x1e]), 0x00);
+            assert_eq!(std::ptr::read_volatile(&(*other.ptr).keys[0x1f]), 0x80);
         }
 
         set_targeted_key(target_pid, 0x1e, false).unwrap();
         finish_targeted_input(target_pid);
         let broadcast_state = state().as_ref().unwrap();
         let target = &broadcast_state.targets[&target_pid];
+        let other = &broadcast_state.targets[&other_pid];
         unsafe {
             assert_eq!(std::ptr::read_volatile(&(*target.ptr).active), 0);
             assert_eq!(std::ptr::read_volatile(&(*target.ptr).keys[0x1e]), 0x00);
+            assert_eq!(std::ptr::read_volatile(&(*other.ptr).active), 1);
+            assert_eq!(std::ptr::read_volatile(&(*other.ptr).keys[0x1f]), 0x80);
         }
+        set_targeted_key(other_pid, 0x1f, false).unwrap();
+        finish_targeted_input(other_pid);
         *state() = None;
     }
 }

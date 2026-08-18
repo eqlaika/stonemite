@@ -180,6 +180,54 @@ describe("5 by 3 layout", () => {
     expect(decodeSvg(renderCell(unavailable))).toContain(">—</text>");
   });
 
+  it("replaces input readiness with Follow for ready background boxes", () => {
+    const snapshot = stateFixture({ clients: sixClients() });
+    const follow = buildCell(view({ snapshot }), 1, 3);
+    expect(follow).toMatchObject({
+      type: "follow",
+      available: true,
+      ready: 4,
+      status: "4 BOXES READY",
+    });
+    const svg = decodeSvg(renderCell(follow));
+    expect(svg).toContain(">FOLLOW</text>");
+    expect(svg).toContain(">START</text>");
+    expect(svg).not.toContain(">INPUT</text>");
+
+    const leaderUnknown = buildCell(
+      view({
+        snapshot: stateFixture({
+          clients: [
+            {
+              id: "leader",
+              window_number: 1,
+              active: true,
+              activatable: true,
+              input_ready: false,
+            },
+            {
+              id: "follower",
+              character: "Serein",
+              window_number: 2,
+              active: false,
+              activatable: true,
+              input_ready: true,
+            },
+          ],
+          active_client_id: "leader",
+        }),
+      }),
+      1,
+      3,
+    );
+    expect(leaderUnknown).toMatchObject({
+      type: "follow",
+      available: false,
+      ready: 0,
+      status: "LEADER UNKNOWN",
+    });
+  });
+
   it("reflects broadcast unavailable, off, and on", () => {
     const unavailable = buildCell(
       view({
@@ -242,9 +290,10 @@ describe("5 by 3 layout", () => {
     const disabled = decodeSvg(renderCell(characterCells[5]!));
     expect(disabled).toContain('fill="#080a0d" opacity=".24"');
     expect(buildCell(view({ snapshot }), 1, 3)).toMatchObject({
-      type: "utility",
-      main: "5 / 6",
-      bottom: "EXACT CLIENTS",
+      type: "follow",
+      available: true,
+      ready: 4,
+      status: "4 BOXES READY",
     });
   });
 
@@ -280,7 +329,7 @@ describe("SVG rendering", () => {
 
   it("keeps utility headers fully visible from the left edge", () => {
     const coordinates = [
-      [1, 3, "INPUT"],
+      [1, 3, "FOLLOW"],
       [1, 4, "STONEMITE"],
       [2, 2, "SERVER"],
     ] as const;

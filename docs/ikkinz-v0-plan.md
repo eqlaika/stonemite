@@ -12,12 +12,12 @@ V0 includes:
 - up to six live character tiles with Stonemite slot colors, number badges, class artwork, identity/readiness, and active state;
 - exact activation by current opaque client ID;
 - explicit broadcast enable/disable with solid red on-state;
-- connection, group, active-client, server, and input-readiness utility tiles;
+- connection, group, follow, active-client, and server utility/action tiles;
 - intentional noninteractive brand/ambient cells where the mockup's later semantic actions would live;
 - clear pairing, disconnected, unavailable, in-flight, success, and error feedback;
 - an installable `.streamDeckPlugin` package.
 
-V0 excludes Assist, Follow, Burn, Camp, heals, spells, in-game target/buff/cooldown state, and a generic action editor.
+V0 excludes Assist, Burn, Camp, heals, spells, in-game target/buff/cooldown state, and a generic action editor.
 
 ## Architecture
 

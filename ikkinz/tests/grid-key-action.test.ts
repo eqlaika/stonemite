@@ -167,6 +167,68 @@ describe("GridKeyController", () => {
     expect(group.showAlert).toHaveBeenCalledTimes(1);
   });
 
+  it("sends Follow to every ready background box concurrently", async () => {
+    vi.useFakeTimers();
+    const store = groupStore();
+    const deliveries = [
+      deferred<ReturnType<typeof inputResult>>(),
+      deferred<ReturnType<typeof inputResult>>(),
+      deferred<ReturnType<typeof inputResult>>(),
+    ];
+    const client = fakeClient();
+    client.sendText
+      .mockReturnValueOnce(deliveries[0]!.promise)
+      .mockReturnValueOnce(deliveries[1]!.promise)
+      .mockReturnValueOnce(deliveries[2]!.promise);
+    const action = new GridKeyController(store, client as never);
+    const follow = fakeKey("follow", 1, 3);
+
+    await action.onWillAppear({ action: follow } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+
+    const press = action.onKeyDown({ action: follow } as never);
+    expect(client.sendText.mock.calls).toEqual([
+      ["serein-id", "/follow Laika", true],
+      ["unknown-id", "/follow Laika", true],
+      ["rook-id", "/follow Laika", true],
+    ]);
+    expect(store.view.feedback.get("1,3")).toMatchObject({
+      kind: "pending",
+      message: "Following",
+    });
+
+    await action.onKeyDown({ action: follow } as never);
+    expect(client.sendText).toHaveBeenCalledTimes(3);
+    for (const delivery of deliveries) delivery.resolve(inputResult("text"));
+    await press;
+
+    expect(store.view.feedback.get("1,3")).toBeUndefined();
+    expect(follow.showAlert).not.toHaveBeenCalled();
+  });
+
+  it("reports partial Follow delivery after attempting every ready box", async () => {
+    vi.useFakeTimers();
+    const store = groupStore();
+    const client = fakeClient();
+    client.sendText
+      .mockResolvedValueOnce(inputResult("text"))
+      .mockRejectedValueOnce(new CommandError("send_failed", "missed"))
+      .mockResolvedValueOnce(inputResult("text"));
+    const action = new GridKeyController(store, client as never);
+    const follow = fakeKey("follow", 1, 3);
+
+    await action.onWillAppear({ action: follow } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+    await action.onKeyDown({ action: follow } as never);
+
+    expect(client.sendText).toHaveBeenCalledTimes(3);
+    expect(store.view.feedback.get("1,3")).toMatchObject({
+      kind: "error",
+      message: "Partial follow",
+    });
+    expect(follow.showAlert).toHaveBeenCalledTimes(1);
+  });
+
   it("reveals activation and broadcast state immediately without a done interstitial", async () => {
     vi.useFakeTimers();
     const store = connectedStore();

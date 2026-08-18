@@ -36,6 +36,13 @@ export function renderCell(cell: GridCell): string {
           cell.status,
           cell.accent,
         );
+      case "follow":
+        return renderUtility(
+          "FOLLOW",
+          cell.available ? "START" : "—",
+          cell.status,
+          cell.accent,
+        );
       case "broadcast":
         return renderBroadcast(cell.available, cell.enabled);
       case "ambient":

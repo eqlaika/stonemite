@@ -1,5 +1,5 @@
 import type { DashboardView, Feedback } from "./store";
-import type { TrusharClient } from "../types/trushar";
+import type { TrusharClient, TrusharState } from "../types/trushar";
 
 export const GRID_COLUMNS = 5;
 export const GRID_ROWS = 3;
@@ -62,6 +62,15 @@ export type GridCell =
       accent: string;
     }
   | {
+      type: "follow";
+      row: number;
+      column: number;
+      available: boolean;
+      ready: number;
+      status: string;
+      accent: string;
+    }
+  | {
       type: "broadcast";
       row: number;
       column: number;
@@ -87,13 +96,7 @@ export interface GroupPlan {
 
 export function buildGroupPlan(view: DashboardView): GroupPlan {
   const snapshot = view.snapshot;
-  const active = snapshot
-    ? (snapshot.clients.find(
-        (client) => client.id === snapshot.active_client_id,
-      ) ??
-      snapshot.clients.find((client) => client.active) ??
-      null)
-    : null;
+  const active = activeClient(snapshot);
   const invitees =
     snapshot && active
       ? snapshot.clients.filter(
@@ -124,6 +127,61 @@ export function buildGroupPlan(view: DashboardView): GroupPlan {
     status = `${invitees.length} ${invitees.length === 1 ? "BOX" : "BOXES"} READY`;
 
   return { active, invitees, available, status };
+}
+
+export type FollowLeader = TrusharClient & { character: string };
+
+export interface FollowPlan {
+  leader: FollowLeader | null;
+  followers: TrusharClient[];
+  available: boolean;
+  status: string;
+}
+
+export function buildFollowPlan(view: DashboardView): FollowPlan {
+  const snapshot = view.snapshot;
+  const active = activeClient(snapshot);
+  const leader =
+    active &&
+    typeof active.character === "string" &&
+    active.character.trim().length > 0
+      ? (active as FollowLeader)
+      : null;
+  const followers =
+    snapshot && leader
+      ? snapshot.clients.filter(
+          (client) => client.id !== leader.id && client.input_ready,
+        )
+      : [];
+  const inputAvailable = Boolean(snapshot?.capabilities.send_text);
+  const available =
+    view.connection.state === "connected" &&
+    inputAvailable &&
+    Boolean(leader) &&
+    followers.length > 0;
+
+  let status: string;
+  if (view.connection.state !== "connected") status = "OFFLINE";
+  else if (!snapshot) status = "NO STATE";
+  else if (!inputAvailable) status = "INPUT UNAVAILABLE";
+  else if (!active) status = "NO ACTIVE BOX";
+  else if (!leader) status = "LEADER UNKNOWN";
+  else if (followers.length === 0) status = "NO READY BOXES";
+  else
+    status = `${followers.length} ${followers.length === 1 ? "BOX" : "BOXES"} READY`;
+
+  return { leader, followers, available, status };
+}
+
+function activeClient(snapshot: TrusharState | null): TrusharClient | null {
+  if (!snapshot) return null;
+  return (
+    snapshot.clients.find(
+      (client) => client.id === snapshot.active_client_id,
+    ) ??
+    snapshot.clients.find((client) => client.active) ??
+    null
+  );
 }
 
 export function cellKey(row: number, column: number): string {
@@ -209,20 +267,19 @@ export function buildCell(
   }
 
   if (row === 1 && column === 3) {
-    const clients = view.snapshot?.clients ?? [];
-    const ready = clients.filter((client) => client.input_ready).length;
+    const plan = buildFollowPlan(view);
     return {
-      type: "utility",
+      type: "follow",
       row,
       column,
-      top: "INPUT",
-      main: `${ready} / ${clients.length}`,
-      bottom:
-        clients.length > 0 && ready === clients.length
-          ? "READY"
-          : "EXACT CLIENTS",
-      accent:
-        clients.length > 0 && ready === clients.length ? "#80df89" : "#ffc75c",
+      available: plan.available,
+      ready: plan.followers.length,
+      status: plan.status,
+      accent: plan.available
+        ? "#80df89"
+        : view.connection.state === "error"
+          ? "#ff826f"
+          : "#ffc75c",
     };
   }
 
