@@ -1,0 +1,729 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-18T02:40:28Z",
+  "title": "Design System: Stonemite / Ikkinz",
+  "extensions": {
+    "colorMeta": {
+      "key-deep": {
+        "role": "neutral",
+        "displayName": "Key Deep Charcoal",
+        "canonical": "#171a1f",
+        "tonalRamp": [
+          "oklch(15% 0.011 260.7)",
+          "oklch(25% 0.011 260.7)",
+          "oklch(35% 0.011 260.7)",
+          "oklch(45% 0.011 260.7)",
+          "oklch(55% 0.011 260.7)",
+          "oklch(65% 0.011 260.7)",
+          "oklch(80% 0.011 260.7)",
+          "oklch(95% 0.011 260.7)"
+        ]
+      },
+      "key-high": {
+        "role": "neutral",
+        "displayName": "Key High Charcoal",
+        "canonical": "#20242b",
+        "tonalRamp": [
+          "oklch(15% 0.014 261.7)",
+          "oklch(25% 0.014 261.7)",
+          "oklch(35% 0.014 261.7)",
+          "oklch(45% 0.014 261.7)",
+          "oklch(55% 0.014 261.7)",
+          "oklch(65% 0.014 261.7)",
+          "oklch(80% 0.014 261.7)",
+          "oklch(95% 0.014 261.7)"
+        ]
+      },
+      "key-black": {
+        "role": "neutral",
+        "displayName": "Key Black",
+        "canonical": "#080a0d",
+        "tonalRamp": [
+          "oklch(15% 0.007 256.9)",
+          "oklch(25% 0.007 256.9)",
+          "oklch(35% 0.007 256.9)",
+          "oklch(45% 0.007 256.9)",
+          "oklch(55% 0.007 256.9)",
+          "oklch(65% 0.007 256.9)",
+          "oklch(80% 0.007 256.9)",
+          "oklch(95% 0.007 256.9)"
+        ]
+      },
+      "empty-gray": {
+        "role": "neutral",
+        "displayName": "Empty Slot Gray",
+        "canonical": "#3c424b",
+        "tonalRamp": [
+          "oklch(15% 0.017 258.4)",
+          "oklch(25% 0.017 258.4)",
+          "oklch(35% 0.017 258.4)",
+          "oklch(45% 0.017 258.4)",
+          "oklch(55% 0.017 258.4)",
+          "oklch(65% 0.017 258.4)",
+          "oklch(80% 0.017 258.4)",
+          "oklch(95% 0.017 258.4)"
+        ]
+      },
+      "ambient-gray": {
+        "role": "neutral",
+        "displayName": "Ambient Product Gray",
+        "canonical": "#3d4650",
+        "tonalRamp": [
+          "oklch(15% 0.021 251.1)",
+          "oklch(25% 0.021 251.1)",
+          "oklch(35% 0.021 251.1)",
+          "oklch(45% 0.021 251.1)",
+          "oklch(55% 0.021 251.1)",
+          "oklch(65% 0.021 251.1)",
+          "oklch(80% 0.021 251.1)",
+          "oklch(95% 0.021 251.1)"
+        ]
+      },
+      "boot-line": {
+        "role": "neutral",
+        "displayName": "Boot Separator Gray",
+        "canonical": "#38414b",
+        "tonalRamp": [
+          "oklch(15% 0.021 251.1)",
+          "oklch(25% 0.021 251.1)",
+          "oklch(35% 0.021 251.1)",
+          "oklch(45% 0.021 251.1)",
+          "oklch(55% 0.021 251.1)",
+          "oklch(65% 0.021 251.1)",
+          "oklch(80% 0.021 251.1)",
+          "oklch(95% 0.021 251.1)"
+        ]
+      },
+      "pi-canvas": {
+        "role": "neutral",
+        "displayName": "Inspector Canvas",
+        "canonical": "#24262a",
+        "tonalRamp": [
+          "oklch(15% 0.008 264.4)",
+          "oklch(25% 0.008 264.4)",
+          "oklch(35% 0.008 264.4)",
+          "oklch(45% 0.008 264.4)",
+          "oklch(55% 0.008 264.4)",
+          "oklch(65% 0.008 264.4)",
+          "oklch(80% 0.008 264.4)",
+          "oklch(95% 0.008 264.4)"
+        ]
+      },
+      "pi-surface": {
+        "role": "neutral",
+        "displayName": "Inspector Surface",
+        "canonical": "#30343a",
+        "tonalRamp": [
+          "oklch(15% 0.012 258.4)",
+          "oklch(25% 0.012 258.4)",
+          "oklch(35% 0.012 258.4)",
+          "oklch(45% 0.012 258.4)",
+          "oklch(55% 0.012 258.4)",
+          "oklch(65% 0.012 258.4)",
+          "oklch(80% 0.012 258.4)",
+          "oklch(95% 0.012 258.4)"
+        ]
+      },
+      "pi-line": {
+        "role": "neutral",
+        "displayName": "Inspector Line",
+        "canonical": "#4a5059",
+        "tonalRamp": [
+          "oklch(15% 0.017 258.4)",
+          "oklch(25% 0.017 258.4)",
+          "oklch(35% 0.017 258.4)",
+          "oklch(45% 0.017 258.4)",
+          "oklch(55% 0.017 258.4)",
+          "oklch(65% 0.017 258.4)",
+          "oklch(80% 0.017 258.4)",
+          "oklch(95% 0.017 258.4)"
+        ]
+      },
+      "pi-inset": {
+        "role": "neutral",
+        "displayName": "Inspector Inset",
+        "canonical": "#1c1e22",
+        "tonalRamp": [
+          "oklch(15% 0.008 264.4)",
+          "oklch(25% 0.008 264.4)",
+          "oklch(35% 0.008 264.4)",
+          "oklch(45% 0.008 264.4)",
+          "oklch(55% 0.008 264.4)",
+          "oklch(65% 0.008 264.4)",
+          "oklch(80% 0.008 264.4)",
+          "oklch(95% 0.008 264.4)"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Instrument White",
+        "canonical": "#f5f7fa",
+        "tonalRamp": [
+          "oklch(15% 0.005 258.3)",
+          "oklch(25% 0.005 258.3)",
+          "oklch(35% 0.005 258.3)",
+          "oklch(45% 0.005 258.3)",
+          "oklch(55% 0.005 258.3)",
+          "oklch(65% 0.005 258.3)",
+          "oklch(80% 0.005 258.3)",
+          "oklch(95% 0.005 258.3)"
+        ]
+      },
+      "key-muted": {
+        "role": "neutral",
+        "displayName": "Key Muted Text",
+        "canonical": "#a7b0bb",
+        "tonalRamp": [
+          "oklch(15% 0.019 253.4)",
+          "oklch(25% 0.019 253.4)",
+          "oklch(35% 0.019 253.4)",
+          "oklch(45% 0.019 253.4)",
+          "oklch(55% 0.019 253.4)",
+          "oklch(65% 0.019 253.4)",
+          "oklch(80% 0.019 253.4)",
+          "oklch(95% 0.019 253.4)"
+        ]
+      },
+      "pi-muted": {
+        "role": "neutral",
+        "displayName": "Inspector Muted Text",
+        "canonical": "#b8c0ca",
+        "tonalRamp": [
+          "oklch(15% 0.017 253.9)",
+          "oklch(25% 0.017 253.9)",
+          "oklch(35% 0.017 253.9)",
+          "oklch(45% 0.017 253.9)",
+          "oklch(55% 0.017 253.9)",
+          "oklch(65% 0.017 253.9)",
+          "oklch(80% 0.017 253.9)",
+          "oklch(95% 0.017 253.9)"
+        ]
+      },
+      "key-quiet": {
+        "role": "neutral",
+        "displayName": "Key Quiet Text",
+        "canonical": "#77818d",
+        "tonalRamp": [
+          "oklch(15% 0.022 253.0)",
+          "oklch(25% 0.022 253.0)",
+          "oklch(35% 0.022 253.0)",
+          "oklch(45% 0.022 253.0)",
+          "oklch(55% 0.022 253.0)",
+          "oklch(65% 0.022 253.0)",
+          "oklch(80% 0.022 253.0)",
+          "oklch(95% 0.022 253.0)"
+        ]
+      },
+      "active-white": {
+        "role": "neutral",
+        "displayName": "Active Border White",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "oklch(15% 0.000 0.0)",
+          "oklch(25% 0.000 0.0)",
+          "oklch(35% 0.000 0.0)",
+          "oklch(45% 0.000 0.0)",
+          "oklch(55% 0.000 0.0)",
+          "oklch(65% 0.000 0.0)",
+          "oklch(80% 0.000 0.0)",
+          "oklch(95% 0.000 0.0)"
+        ]
+      },
+      "on-accent": {
+        "role": "neutral",
+        "displayName": "On-Accent Ink",
+        "canonical": "#101615",
+        "tonalRamp": [
+          "oklch(15% 0.009 184.1)",
+          "oklch(25% 0.009 184.1)",
+          "oklch(35% 0.009 184.1)",
+          "oklch(45% 0.009 184.1)",
+          "oklch(55% 0.009 184.1)",
+          "oklch(65% 0.009 184.1)",
+          "oklch(80% 0.009 184.1)",
+          "oklch(95% 0.009 184.1)"
+        ]
+      },
+      "setup-muted": {
+        "role": "neutral",
+        "displayName": "Setup Muted Gray",
+        "canonical": "#9ba5b2",
+        "tonalRamp": [
+          "oklch(15% 0.022 255.0)",
+          "oklch(25% 0.022 255.0)",
+          "oklch(35% 0.022 255.0)",
+          "oklch(45% 0.022 255.0)",
+          "oklch(55% 0.022 255.0)",
+          "oklch(65% 0.022 255.0)",
+          "oklch(80% 0.022 255.0)",
+          "oklch(95% 0.022 255.0)"
+        ]
+      },
+      "server-olive": {
+        "role": "secondary",
+        "displayName": "Server Olive",
+        "canonical": "#9bbf73",
+        "tonalRamp": [
+          "oklch(15% 0.109 129.4)",
+          "oklch(25% 0.109 129.4)",
+          "oklch(35% 0.109 129.4)",
+          "oklch(45% 0.109 129.4)",
+          "oklch(55% 0.109 129.4)",
+          "oklch(65% 0.109 129.4)",
+          "oklch(80% 0.109 129.4)",
+          "oklch(95% 0.109 129.4)"
+        ]
+      },
+      "link-cyan": {
+        "role": "primary",
+        "displayName": "Link Cyan",
+        "canonical": "#59d8d0",
+        "tonalRamp": [
+          "oklch(15% 0.112 189.4)",
+          "oklch(25% 0.112 189.4)",
+          "oklch(35% 0.112 189.4)",
+          "oklch(45% 0.112 189.4)",
+          "oklch(55% 0.112 189.4)",
+          "oklch(65% 0.112 189.4)",
+          "oklch(80% 0.112 189.4)",
+          "oklch(95% 0.112 189.4)"
+        ]
+      },
+      "ready-green": {
+        "role": "secondary",
+        "displayName": "Ready Green",
+        "canonical": "#80df89",
+        "tonalRamp": [
+          "oklch(15% 0.150 146.2)",
+          "oklch(25% 0.150 146.2)",
+          "oklch(35% 0.150 146.2)",
+          "oklch(45% 0.150 146.2)",
+          "oklch(55% 0.150 146.2)",
+          "oklch(65% 0.150 146.2)",
+          "oklch(80% 0.150 146.2)",
+          "oklch(95% 0.150 146.2)"
+        ]
+      },
+      "recovery-amber": {
+        "role": "secondary",
+        "displayName": "Recovery Amber",
+        "canonical": "#ffc75c",
+        "tonalRamp": [
+          "oklch(15% 0.138 81.2)",
+          "oklch(25% 0.138 81.2)",
+          "oklch(35% 0.138 81.2)",
+          "oklch(45% 0.138 81.2)",
+          "oklch(55% 0.138 81.2)",
+          "oklch(65% 0.138 81.2)",
+          "oklch(80% 0.138 81.2)",
+          "oklch(95% 0.138 81.2)"
+        ]
+      },
+      "error-coral": {
+        "role": "secondary",
+        "displayName": "Error Coral",
+        "canonical": "#ff826f",
+        "tonalRamp": [
+          "oklch(15% 0.156 30.1)",
+          "oklch(25% 0.156 30.1)",
+          "oklch(35% 0.156 30.1)",
+          "oklch(45% 0.156 30.1)",
+          "oklch(55% 0.156 30.1)",
+          "oklch(65% 0.156 30.1)",
+          "oklch(80% 0.156 30.1)",
+          "oklch(95% 0.156 30.1)"
+        ]
+      },
+      "error-copy": {
+        "role": "secondary",
+        "displayName": "Error Copy Coral",
+        "canonical": "#ffc6bd",
+        "tonalRamp": [
+          "oklch(15% 0.067 28.8)",
+          "oklch(25% 0.067 28.8)",
+          "oklch(35% 0.067 28.8)",
+          "oklch(45% 0.067 28.8)",
+          "oklch(55% 0.067 28.8)",
+          "oklch(65% 0.067 28.8)",
+          "oklch(80% 0.067 28.8)",
+          "oklch(95% 0.067 28.8)"
+        ]
+      },
+      "broadcast-red": {
+        "role": "secondary",
+        "displayName": "Broadcast-On Red",
+        "canonical": "#cc3020",
+        "tonalRamp": [
+          "oklch(15% 0.195 30.1)",
+          "oklch(25% 0.195 30.1)",
+          "oklch(35% 0.195 30.1)",
+          "oklch(45% 0.195 30.1)",
+          "oklch(55% 0.195 30.1)",
+          "oklch(65% 0.195 30.1)",
+          "oklch(80% 0.195 30.1)",
+          "oklch(95% 0.195 30.1)"
+        ]
+      },
+      "broadcast-off": {
+        "role": "secondary",
+        "displayName": "Broadcast-Off Red",
+        "canonical": "#cc5040",
+        "tonalRamp": [
+          "oklch(15% 0.161 30.0)",
+          "oklch(25% 0.161 30.0)",
+          "oklch(35% 0.161 30.0)",
+          "oklch(45% 0.161 30.0)",
+          "oklch(55% 0.161 30.0)",
+          "oklch(65% 0.161 30.0)",
+          "oklch(80% 0.161 30.0)",
+          "oklch(95% 0.161 30.0)"
+        ]
+      },
+      "broadcast-unavailable": {
+        "role": "neutral",
+        "displayName": "Broadcast Unavailable",
+        "canonical": "#6d737c",
+        "tonalRamp": [
+          "oklch(15% 0.016 258.4)",
+          "oklch(25% 0.016 258.4)",
+          "oklch(35% 0.016 258.4)",
+          "oklch(45% 0.016 258.4)",
+          "oklch(55% 0.016 258.4)",
+          "oklch(65% 0.016 258.4)",
+          "oklch(80% 0.016 258.4)",
+          "oklch(95% 0.016 258.4)"
+        ]
+      },
+      "broadcast-soft": {
+        "role": "secondary",
+        "displayName": "Broadcast-On Soft Text",
+        "canonical": "#ffd6cf",
+        "tonalRamp": [
+          "oklch(15% 0.047 29.4)",
+          "oklch(25% 0.047 29.4)",
+          "oklch(35% 0.047 29.4)",
+          "oklch(45% 0.047 29.4)",
+          "oklch(55% 0.047 29.4)",
+          "oklch(65% 0.047 29.4)",
+          "oklch(80% 0.047 29.4)",
+          "oklch(95% 0.047 29.4)"
+        ]
+      },
+      "slot-blue": {
+        "role": "tertiary",
+        "displayName": "Slot 1 Blue",
+        "canonical": "#4a86d4",
+        "tonalRamp": [
+          "oklch(15% 0.134 255.8)",
+          "oklch(25% 0.134 255.8)",
+          "oklch(35% 0.134 255.8)",
+          "oklch(45% 0.134 255.8)",
+          "oklch(55% 0.134 255.8)",
+          "oklch(65% 0.134 255.8)",
+          "oklch(80% 0.134 255.8)",
+          "oklch(95% 0.134 255.8)"
+        ]
+      },
+      "slot-green": {
+        "role": "tertiary",
+        "displayName": "Slot 2 Green",
+        "canonical": "#6ab060",
+        "tonalRamp": [
+          "oklch(15% 0.133 141.3)",
+          "oklch(25% 0.133 141.3)",
+          "oklch(35% 0.133 141.3)",
+          "oklch(45% 0.133 141.3)",
+          "oklch(55% 0.133 141.3)",
+          "oklch(65% 0.133 141.3)",
+          "oklch(80% 0.133 141.3)",
+          "oklch(95% 0.133 141.3)"
+        ]
+      },
+      "slot-rose": {
+        "role": "tertiary",
+        "displayName": "Slot 3 Rose",
+        "canonical": "#d85858",
+        "tonalRamp": [
+          "oklch(15% 0.162 23.0)",
+          "oklch(25% 0.162 23.0)",
+          "oklch(35% 0.162 23.0)",
+          "oklch(45% 0.162 23.0)",
+          "oklch(55% 0.162 23.0)",
+          "oklch(65% 0.162 23.0)",
+          "oklch(80% 0.162 23.0)",
+          "oklch(95% 0.162 23.0)"
+        ]
+      },
+      "slot-amber": {
+        "role": "tertiary",
+        "displayName": "Slot 4 Amber",
+        "canonical": "#e0b848",
+        "tonalRamp": [
+          "oklch(15% 0.135 89.0)",
+          "oklch(25% 0.135 89.0)",
+          "oklch(35% 0.135 89.0)",
+          "oklch(45% 0.135 89.0)",
+          "oklch(55% 0.135 89.0)",
+          "oklch(65% 0.135 89.0)",
+          "oklch(80% 0.135 89.0)",
+          "oklch(95% 0.135 89.0)"
+        ]
+      },
+      "slot-orchid": {
+        "role": "tertiary",
+        "displayName": "Slot 5 Orchid",
+        "canonical": "#a07cc8",
+        "tonalRamp": [
+          "oklch(15% 0.116 305.2)",
+          "oklch(25% 0.116 305.2)",
+          "oklch(35% 0.116 305.2)",
+          "oklch(45% 0.116 305.2)",
+          "oklch(55% 0.116 305.2)",
+          "oklch(65% 0.116 305.2)",
+          "oklch(80% 0.116 305.2)",
+          "oklch(95% 0.116 305.2)"
+        ]
+      },
+      "slot-teal": {
+        "role": "tertiary",
+        "displayName": "Slot 6 Teal",
+        "canonical": "#58c8a8",
+        "tonalRamp": [
+          "oklch(15% 0.113 171.7)",
+          "oklch(25% 0.113 171.7)",
+          "oklch(35% 0.113 171.7)",
+          "oklch(45% 0.113 171.7)",
+          "oklch(55% 0.113 171.7)",
+          "oklch(65% 0.113 171.7)",
+          "oklch(80% 0.113 171.7)",
+          "oklch(95% 0.113 171.7)"
+        ]
+      },
+      "badge-blue": {
+        "role": "tertiary",
+        "displayName": "Badge 1 Deep Blue",
+        "canonical": "#3068b0",
+        "tonalRamp": [
+          "oklch(15% 0.129 255.9)",
+          "oklch(25% 0.129 255.9)",
+          "oklch(35% 0.129 255.9)",
+          "oklch(45% 0.129 255.9)",
+          "oklch(55% 0.129 255.9)",
+          "oklch(65% 0.129 255.9)",
+          "oklch(80% 0.129 255.9)",
+          "oklch(95% 0.129 255.9)"
+        ]
+      },
+      "badge-green": {
+        "role": "tertiary",
+        "displayName": "Badge 2 Deep Green",
+        "canonical": "#489040",
+        "tonalRamp": [
+          "oklch(15% 0.136 141.7)",
+          "oklch(25% 0.136 141.7)",
+          "oklch(35% 0.136 141.7)",
+          "oklch(45% 0.136 141.7)",
+          "oklch(55% 0.136 141.7)",
+          "oklch(65% 0.136 141.7)",
+          "oklch(80% 0.136 141.7)",
+          "oklch(95% 0.136 141.7)"
+        ]
+      },
+      "badge-rose": {
+        "role": "tertiary",
+        "displayName": "Badge 3 Deep Rose",
+        "canonical": "#b83838",
+        "tonalRamp": [
+          "oklch(15% 0.165 24.7)",
+          "oklch(25% 0.165 24.7)",
+          "oklch(35% 0.165 24.7)",
+          "oklch(45% 0.165 24.7)",
+          "oklch(55% 0.165 24.7)",
+          "oklch(65% 0.165 24.7)",
+          "oklch(80% 0.165 24.7)",
+          "oklch(95% 0.165 24.7)"
+        ]
+      },
+      "badge-amber": {
+        "role": "tertiary",
+        "displayName": "Badge 4 Deep Amber",
+        "canonical": "#c09828",
+        "tonalRamp": [
+          "oklch(15% 0.131 87.7)",
+          "oklch(25% 0.131 87.7)",
+          "oklch(35% 0.131 87.7)",
+          "oklch(45% 0.131 87.7)",
+          "oklch(55% 0.131 87.7)",
+          "oklch(65% 0.131 87.7)",
+          "oklch(80% 0.131 87.7)",
+          "oklch(95% 0.131 87.7)"
+        ]
+      },
+      "badge-orchid": {
+        "role": "tertiary",
+        "displayName": "Badge 5 Deep Orchid",
+        "canonical": "#805ca8",
+        "tonalRamp": [
+          "oklch(15% 0.120 304.6)",
+          "oklch(25% 0.120 304.6)",
+          "oklch(35% 0.120 304.6)",
+          "oklch(45% 0.120 304.6)",
+          "oklch(55% 0.120 304.6)",
+          "oklch(65% 0.120 304.6)",
+          "oklch(80% 0.120 304.6)",
+          "oklch(95% 0.120 304.6)"
+        ]
+      },
+      "badge-teal": {
+        "role": "tertiary",
+        "displayName": "Badge 6 Deep Teal",
+        "canonical": "#38a888",
+        "tonalRamp": [
+          "oklch(15% 0.112 170.2)",
+          "oklch(25% 0.112 170.2)",
+          "oklch(35% 0.112 170.2)",
+          "oklch(45% 0.112 170.2)",
+          "oklch(55% 0.112 170.2)",
+          "oklch(65% 0.112 170.2)",
+          "oklch(80% 0.112 170.2)",
+          "oklch(95% 0.112 170.2)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "key-number": {
+        "displayName": "Key Number",
+        "purpose": "Heavy centered slot numerals inside circular badges."
+      },
+      "key-value": {
+        "displayName": "Key Value",
+        "purpose": "Short central utility values within the 72px key budget."
+      },
+      "key-label": {
+        "displayName": "Key Label",
+        "purpose": "Compact uppercase deck status and utility labels."
+      },
+      "key-micro": {
+        "displayName": "Key Microcopy",
+        "purpose": "Tertiary deck qualifiers and unavailable-state labels."
+      },
+      "pi-title": {
+        "displayName": "Inspector Title",
+        "purpose": "The leading connection-status statement."
+      },
+      "body": {
+        "displayName": "Inspector Body",
+        "purpose": "Property-inspector labels, controls, and instructions."
+      },
+      "pi-help": {
+        "displayName": "Inspector Help",
+        "purpose": "Field help and status detail copy."
+      },
+      "pi-privacy": {
+        "displayName": "Inspector Privacy",
+        "purpose": "The compact trusted-private-network note."
+      }
+    },
+    "motion": [
+      {
+        "name": "boot-frames",
+        "value": "0ms, 160ms, 620ms, 1050ms",
+        "purpose": "Bounded static-frame handoff from boot identity to authoritative live state."
+      },
+      {
+        "name": "feedback-hold",
+        "value": "1500ms",
+        "purpose": "Temporary pending, success, or error key feedback before live state redraws."
+      },
+      {
+        "name": "connection-breathe",
+        "value": "1.2s ease-in-out infinite alternate",
+        "purpose": "Pairing, connecting, and reconnecting status-dot progress only."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "1ms",
+        "purpose": "Collapses property-inspector animation when reduced motion is requested."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The full-width property-inspector action used to pair with Stonemite.",
+      "html": "<button class=\"ds-btn-primary\" type=\"button\">Pair with Stonemite</button>",
+      "css": ".ds-btn-primary { display: block; width: 100%; min-height: 34px; border: 1px solid #59d8d0; border-radius: 8px; background: #59d8d0; color: #101615; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 12px; font-weight: 700; cursor: pointer; } .ds-btn-primary:hover:not(:disabled) { background: #78e4de; } .ds-btn-primary:focus-visible { outline: 2px solid #59d8d0; outline-offset: 2px; } .ds-btn-primary:disabled { cursor: wait; opacity: 0.55; }"
+    },
+    {
+      "name": "Labeled Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "A compact property-inspector field with explicit help and invalid state.",
+      "html": "<label class=\"ds-input-label\" for=\"ds-address\">Stonemite address</label><input class=\"ds-input\" id=\"ds-address\" type=\"text\" value=\"jaggedpine.local:19720\" aria-describedby=\"ds-address-help\"><p class=\"ds-input-help\" id=\"ds-address-help\">Use the address shown by Stonemite, including the port.</p>",
+      "css": ".ds-input-label { display: block; margin: 14px 0 6px; color: #f5f7fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 12px; font-weight: 650; } .ds-input { display: block; width: 100%; height: 34px; padding: 6px 9px; border: 1px solid #4a5059; border-radius: 7px; outline: 0; background: #1c1e22; color: #f5f7fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 12px; font-variant-numeric: tabular-nums; caret-color: #59d8d0; } .ds-input:focus-visible { outline: 2px solid #59d8d0; outline-offset: 2px; } .ds-input[aria-invalid='true'] { border-color: #ff826f; } .ds-input:disabled { opacity: 0.55; } .ds-input-help { margin: 5px 0 0; color: #b8c0ca; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 11px; line-height: 1.4; }"
+    },
+    {
+      "name": "Connection Status Panel",
+      "kind": "card",
+      "refersTo": "status-panel",
+      "description": "The property-inspector status header that pairs a colored dot with live title and detail text.",
+      "html": "<header class=\"ds-status\" data-state=\"connected\" role=\"status\" aria-live=\"polite\"><span class=\"ds-status-dot\" aria-hidden=\"true\"></span><span><strong class=\"ds-status-title\">Connected</strong><small class=\"ds-status-detail\">jaggedpine.local:19720</small></span></header>",
+      "css": ".ds-status { display: grid; grid-template-columns: 10px 1fr; gap: 10px; align-items: center; width: 100%; padding: 12px; border-radius: 12px; background: #30343a; color: #f5f7fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; } .ds-status-dot { width: 9px; height: 9px; border-radius: 50%; background: #b8c0ca; } .ds-status[data-state='connected'] .ds-status-dot { background: #80df89; } .ds-status[data-state='pairing'] .ds-status-dot, .ds-status[data-state='connecting'] .ds-status-dot, .ds-status[data-state='reconnecting'] .ds-status-dot { background: #ffc75c; animation: ds-breathe 1.2s ease-in-out infinite alternate; } .ds-status[data-state='error'] .ds-status-dot { background: #ff826f; } .ds-status-title, .ds-status-detail { display: block; } .ds-status-title { margin-bottom: 2px; font-size: 13px; font-weight: 700; } .ds-status-detail { color: #b8c0ca; font-size: 11px; line-height: 1.4; } @keyframes ds-breathe { to { opacity: 0.35; } } @media (prefers-reduced-motion: reduce) { .ds-status-dot { animation-duration: 1ms !important; } }"
+    },
+    {
+      "name": "Exact-Client Key Tile",
+      "kind": "custom",
+      "refersTo": "key-tile",
+      "description": "A self-contained 72px active-client tile using the shipped slot, badge, fallback class, readiness, and active-state grammar.",
+      "html": "<svg class=\"ds-key-tile\" xmlns=\"http://www.w3.org/2000/svg\" width=\"72\" height=\"72\" viewBox=\"0 0 72 72\" role=\"img\" aria-labelledby=\"ds-key-title\"><title id=\"ds-key-title\">Client 1, WAR, input ready, active</title><defs><linearGradient id=\"ds-slot\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"1\"><stop stop-color=\"#4a86d4\"/><stop offset=\"1\" stop-color=\"#20242b\" stop-opacity=\".28\"/></linearGradient></defs><rect width=\"72\" height=\"72\" rx=\"7\" fill=\"url(#ds-slot)\"/><circle cx=\"17\" cy=\"18\" r=\"13\" fill=\"#3068b0\"/><text x=\"17\" y=\"25\" class=\"ds-key-text ds-key-center ds-key-number\">1</text><rect x=\"40\" y=\"5\" width=\"27\" height=\"27\" rx=\"3\" fill=\"#080a0d\" opacity=\".58\"/><text x=\"53.5\" y=\"22.5\" class=\"ds-key-text ds-key-center ds-key-code\">WAR</text><text x=\"36\" y=\"61\" class=\"ds-key-text ds-key-center ds-key-name\">Client 1</text><circle cx=\"63\" cy=\"63\" r=\"3\" fill=\"#80df89\"/><rect x=\"1.5\" y=\"1.5\" width=\"69\" height=\"69\" rx=\"5.5\" fill=\"none\" stroke=\"#fff\" stroke-width=\"3\"/></svg>",
+      "css": ".ds-key-tile { display: block; width: 72px; height: 72px; border-radius: 7px; } .ds-key-text { fill: #f5f7fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-weight: 800; } .ds-key-center { text-anchor: middle; } .ds-key-number { font-size: 20px; } .ds-key-code { font-size: 8px; } .ds-key-name { font-size: 12px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The exact-client instrument panel",
+    "overview": "The exact-client instrument panel is a dark, compact utility system that turns Stonemite's observed client state into direct, glanceable controls. It feels like trustworthy system instrumentation rather than fantasy-game chrome: identity is vivid, state is explicit, and decoration never outruns what the software knows.\n\nAcross the Stonemite overlay, Ikkinz keys, and the property inspector, the system uses the same slot colors, number badges, class identity, system UI typography, and restrained tonal depth. It does not present delivered input as an observed in-game result, and it does not invent targets, buffs, combat outcomes, or other game state.",
+    "keyCharacteristics": [
+      "Compact dark utility surfaces with high-contrast text.",
+      "Exact identity through slot number, character name, class, and color together.",
+      "State communicated with words, shapes, borders, and color rather than color alone.",
+      "Restrained motion that confirms transitions without carrying steady-state meaning."
+    ],
+    "rules": [
+      {
+        "name": "The Broadcast-Red Rule",
+        "body": "Solid broadcast red is reserved for confirmed broadcast-on state; broadcast-off and unavailable states stay on dark tiles with labeled accents.",
+        "section": "colors"
+      },
+      {
+        "name": "The Redundancy Rule",
+        "body": "Color never carries identity, readiness, progress, success, or failure by itself; pair it with a number, name, class, border, icon, or explicit status text.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two-Registers Rule",
+        "body": "Deck microcopy may use compact uppercase labels for scan speed; property-inspector labels, buttons, help, status, and errors use sentence case.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tonal-First Rule",
+        "body": "Build hierarchy with adjacent charcoal levels, one-pixel lines, and state rails; do not add decorative shadows or glass effects to production controls.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do reuse the shipped Stonemite app and class artwork; use the class-code fallback only when identity artwork is unavailable.",
+      "Do preserve the 72px key grammar, fixed slot/badge pairings, and exact-client labels wherever Ikkinz renders deck state.",
+      "Do show unavailable, unknown, reconnecting, pending, success, and error states with explicit words and redundant visual cues.",
+      "Do reserve animation for bounded boot, progress, and feedback transitions, with a reduced-motion path."
+    ],
+    "donts": [
+      "Don't imply targets, buffs, spells, combat outcomes, or other game state Stonemite does not observe.",
+      "Don't use solid broadcast red for any state except confirmed broadcast on.",
+      "Don't introduce a separate fantasy-game palette, invented icons, or decorative assets when Stonemite identity already exists.",
+      "Don't rely on color alone, hide failures in logs, or replace actionable error copy with a generic warning mark.",
+      "Don't promote the v0 5 × 3 deck map into a universal layout rule for unrelated Stonemite surfaces."
+    ]
+  }
+}
