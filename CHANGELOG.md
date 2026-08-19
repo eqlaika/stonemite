@@ -2,24 +2,48 @@
 
 ## Unreleased
 
-- Enabled loopback integrations by default and made the Stream Deck plugin connect automatically without authentication when Stream Deck Desktop runs on the Stonemite PC
-- Limited address/code authentication to cross-PC LAN access and moved its full pairing UI into the Stonemite setup key
+### Added
+
+- Added a configurable Mouse Clutch, bound to F13 by default, that hold-broadcasts physical mouse movement, buttons, and wheel input from the active EQ client to ready background clients with matching window geometry and DPI
+- Added F13–F24 and keyboard-emulating foot-pedal support, live Mouse Clutch status in the overlay and tray, and fail-safe release when focus, clients, settings, or the controlling Stonemite process change
+- Added the **Stonemite · EQ boxing** Stream Deck plugin for Stream Deck Desktop 7.4+ on macOS 12+ or Windows 10+, with a live six-client roster, character and class identity, input-readiness indicators, exact-client activation, authoritative broadcast state, automatic reconnection, and visible command errors
+- Added a Stream Deck Broadcast key that explicitly turns Stonemite key broadcasting on or off instead of issuing a blind toggle
 - Added a Stream Deck Group key that invites ready boxes from the active client and invokes each character's configured Invite/Follow action after one second
 - Added a Stream Deck Follow key that concurrently sends `/follow <leader>` to ready background clients
 - Added a Stream Deck Assist key that concurrently sends `/assist <main>` to ready background clients
 - Added a Stream Deck Use key that invokes each input-ready character's configured Use Center Screen action
-- Added generic keymap-aware Trushar actions for all 11×12 EQ hotbar buttons and all 14 spell gems
-- Added a configurable Stream Deck Hotkey tile with a custom name, per-tile color with contrast-aware running content, the complete pinned 466-icon Lucide Animated catalog, and all-loaded or stable box-number targets
-- Added shared keymap discovery and all-target preflight so a configured hotkey starts on no boxes unless every requested box is loaded, input-ready, and mapped
-- Resolve semantic actions per character/persona from `Character_Server_Class.ini`, with legacy character and shared `eqclient.ini` support
-- Made Stream Deck character slots and controls independently placeable, added a Stonemite setup key, and removed preset profiles for now
-- Simplified Stream Deck tiles with 15px minimum text, no top rails, a stable Bcast label, distinct action colors, and filled running/armed states
-- Replaced the old MITE key with a two-step Swap key for exchanging the active and selected characters' window numbers
-- Allowed targeted input sequences to run concurrently across independent EQ clients
+- Added a two-step Stream Deck Swap key for exchanging the active and selected characters' stable window numbers without changing the active client
+- Added generic keymap-aware Trushar actions for all 11×12 EQ hotbar buttons, all 14 spell gems, and arbitrary mapped EQ actions
+- Added a configurable Stream Deck Hotkey tile with a custom name, per-tile color, contrast-aware running content, the complete pinned 466-icon Lucide Animated catalog, and all-loaded or stable box-number targets
+- Added shared keymap discovery and all-target preflight so a configured hotkey starts on no boxes unless every requested box is loaded, input-ready, idle, and mapped
+
+### Changed
+
+- Enabled loopback integrations by default and made the Stream Deck plugin connect automatically without authentication when Stream Deck Desktop runs on the Stonemite PC
+- Limited address/code authentication to cross-PC LAN access and moved pairing, reconnection, and saved-credential management into the Stonemite setup key
+- Resolved semantic actions per character and persona from `Character_Server_Class.ini`, with legacy character INI and shared `eqclient.ini` fallbacks
+- Made Stream Deck character slots and controls independently placeable, supported duplicate actions, and removed preset profiles for now
+- Improved Stream Deck feedback with prominent active-client styling, immediate authoritative state after successful actions, 15px minimum text, a stable Bcast label, distinct action colors, filled running and armed states, and bounded icon animations
+- Allowed targeted input sequences to run concurrently across independent EQ clients while still rejecting overlapping sequences for the same client
+- Rebuilt EQ log ingestion around filesystem notifications and a background worker, with periodic reconciliation and reliable handling of partial writes, truncation, recreation, removed sources, malformed records, and notification loss
+- Updated the Stonemite/trusik shared-memory input ABI for independent keyboard and mouse activation; Mouse Clutch requires the matching proxy and an EQ restart after upgrading
+- Clarified and documented the project's policy against unattended gameplay automation while permitting only passive log-driven UI telemetry, notifications, and display-only timers
+
+### Fixed
+
+- Fixed arrow and other extended navigation keys being broadcast as their numpad counterparts by preserving DirectInput's extended scan-code bit
 - Fixed targeted modifier chords reaching background clients as an unmodified key by sequencing modifier press and release around the primary key
 - Fixed rapid client switching corrupting active/PiP label state by guarding overlay swaps against reentrant Windows events and reconciling foreground state during polling
 - Fixed swaps updating labels without reliably foregrounding and focusing the requested EQ window; state now commits only after Windows confirms the target owns foreground and keyboard focus
+- Fixed programmatic client swaps leaving EQ's DirectInput mouse unacquired until the user clicked by reasserting mouse activation after foreground and focus are stable
 - Prevented child processes from inheriting LAN sockets, added graceful `--quit` shutdown, and updated `just quit` so port 19720 is released cleanly
+
+### Developer
+
+- Extracted the reusable, platform-neutral `eqlog` crate with canonical log records, typed `/who` identity and pet events, telemetry reduction, and explicit source-generation resets
+- Reorganized the Rust workspace under `crates/` and moved the Trushar protocol documentation alongside its crate
+- Added schema-validated generation of the separate `.streamDeckPlugin` artifact, which is not bundled with the desktop installer or portable ZIP, plus Marketplace and plugin assets, pinned third-party notices, and automated formatting, linting, type-checking, protocol, rendering, and package validation
+- Added product and Stream Deck visual-system documentation plus GitHub Sponsors metadata
 
 ## v0.5.0
 

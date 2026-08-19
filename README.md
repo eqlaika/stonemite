@@ -6,7 +6,7 @@
 
 EverQuest multiboxing tool for Windows. Requires Windows 10 or later.
 
-Stonemite makes multiboxing EQ easy: PiP overlays with click-to-swap, key broadcasting, character login, automatic character nameplates, a drag-and-drop layout editor, and more. Stonemite is free and open source.
+Stonemite makes multiboxing EQ easy: PiP overlays with click-to-swap, swap hotkeys, filtered key broadcasting, hold-to-broadcast Mouse Clutch, character login, automatic character nameplates, optional Stream Deck controls, a drag-and-drop layout editor, and more. Stonemite is free and open source.
 
 > [!WARNING]
 > **Stonemite is not an automation tool.** Every gameplay input must originate from an immediate physical user action; Stonemite never decides when a gameplay action should occur. Input sequences, loops, and game-state reactions that control EQ are intentionally unsupported. Passive log observation may drive UI telemetry, notifications, and display-only timers, but those features cannot inject input or invoke gameplay controls. Pull requests that add unattended gameplay will not be accepted. Stonemite is designed to comply fully with EverQuest's Terms of Service and EULA.
@@ -19,6 +19,18 @@ Download the latest release from [GitHub Releases](https://github.com/eqlaika/st
 - **Portable** (`stonemite-x86_64-pc-windows-msvc.zip`) — extract and run anywhere
 
 A system tray icon appears with access to all settings. Check for updates from the tray menu.
+
+## Mouse Clutch
+
+Mouse Clutch sends the complete physical mouse—movement, buttons, and wheel—from the foreground EQ client to input-ready background clients while you hold one key. It defaults to F13 and supports F13–F24 and keyboard-emulating foot pedals.
+
+Mouse Clutch requires the DirectInput proxy (`trusik = true` in `config.toml`) and a restart of both Stonemite and EQ. Configure its key under **Settings > Broadcasting**. To keep pointer coordinates aligned, Stonemite includes only clients whose window position, client size, and DPI match the active client. Focus or client loss cancels the clutch safely, and the overlay and tray show its active or releasing state.
+
+## Stream Deck
+
+The separately packaged **Stonemite · EQ boxing** plugin shows a live six-client roster and provides exact-client activation, broadcast control, Group, Follow, Assist, Use, window-number Swap, and configurable mapped Hotkey actions. Same-PC installations connect automatically over loopback; running Stream Deck Desktop on another computer requires one-time LAN pairing.
+
+The plugin requires Stream Deck Desktop 7.4+ on macOS 12+ or Windows 10+. It is not bundled with the Stonemite installer or portable ZIP. See [`streamdeck/README.md`](streamdeck/README.md) for setup, development, and packaging details.
 
 ## Build from source
 
@@ -56,14 +68,14 @@ The app checks for updates against [eqlaika/stonemite](https://github.com/eqlaik
 | **PiP overlays** | Native DWM thumbnails, click-to-swap, drag-to-reorder | Video FX regions routed through Inner Space |
 | **Character labels** | Auto-detected | Manual per-character setup |
 | **Auto-login** | Encrypted credentials, automatic server select, one-click launch | Not available |
-| **Input broadcasting** | Key broadcasting with whitelist/blacklist filtering | Full key/mouse broadcasting and round-robin |
+| **Input broadcasting** | Filtered key broadcasting plus hold-to-broadcast physical Mouse Clutch | Full key/mouse broadcasting and round-robin |
 | **Window management** | Auto-detects EQ windows, z-order stacking | Window layouts with snapping and resizing |
 | **Resource usage** | ~5 MB single exe | Inner Space + ISBoxer addon |
 | **Updates** | One-click from system tray | Manual download through Inner Space |
 
-**When to use Stonemite:** You want multiboxing that just works — PiP overlays, swap hotkeys, key broadcasting, auto-login, and character detection with zero setup. Launch it and go.
+**When to use Stonemite:** You want multiboxing that just works — PiP overlays, swap hotkeys, filtered key broadcasting, hold-to-broadcast mouse input, auto-login, character detection, and optional Stream Deck controls. Launch it and go.
 
-**When to use ISBoxer:** You need mouse broadcasting, round-robin input, or you're already comfortable with the Inner Space ecosystem.
+**When to use ISBoxer:** You need round-robin input, more complex input or layout configuration, or you're already comfortable with the Inner Space ecosystem.
 
 ## Account login
 
@@ -85,7 +97,7 @@ Config lives at `%APPDATA%\Stonemite\config.toml`. See [config/example.toml](con
 
 ## Disclaimer
 
-Stonemite uses standard Windows DWM thumbnail APIs to display copies of game windows. Its DLL proxy intercepts DirectInput only to discover EQ log paths and forward user-initiated keystrokes. It does not intercept rendering, read or modify game memory, or inspect network traffic. It may passively observe EQ logs for UI telemetry, notifications, and display-only timers, but it cannot turn those observations into gameplay input or otherwise automate gameplay.
+Stonemite uses standard Windows DWM thumbnail APIs to display copies of game windows. Its DLL proxy intercepts DirectInput only to discover EQ log paths and expose immediate, user-initiated keyboard or Mouse Clutch input to the selected EQ clients. It does not intercept rendering, read or modify game memory, or inspect network traffic. It may passively observe EQ logs for UI telemetry, notifications, and display-only timers, but it cannot turn those observations into gameplay input or otherwise automate gameplay.
 
 Stonemite is intentionally designed to minimize account risk by avoiding automation and other invasive techniques. The risk of account action is believed to be low when the app is used as intended, but Daybreak has final authority over its rules and enforcement. As with any third-party tool, use Stonemite at your own discretion.
 
