@@ -1,8 +1,7 @@
 # Changelog
 
-## v0.5.0
+## Unreleased
 
-- Added experimental remote integration to support Stream Deck actions.
 - Enabled loopback integrations by default and made the Stream Deck plugin connect automatically without authentication when Stream Deck Desktop runs on the Stonemite PC
 - Limited address/code authentication to cross-PC LAN access and moved its full pairing UI into the Stonemite setup key
 - Added a Stream Deck Group key that invites ready boxes from the active client and invokes each character's configured Invite/Follow action after one second
@@ -18,13 +17,17 @@
 - Replaced the old MITE key with a two-step Swap key for exchanging the active and selected characters' window numbers
 - Allowed targeted input sequences to run concurrently across independent EQ clients
 - Fixed targeted modifier chords reaching background clients as an unmodified key by sequencing modifier press and release around the primary key
+- Fixed rapid client switching corrupting active/PiP label state by guarding overlay swaps against reentrant Windows events and reconciling foreground state during polling
+- Fixed swaps updating labels without reliably foregrounding and focusing the requested EQ window; state now commits only after Windows confirms the target owns foreground and keyboard focus
+- Prevented child processes from inheriting LAN sockets, added graceful `--quit` shutdown, and updated `just quit` so port 19720 is released cleanly
+
+## v0.5.0
+
+- Added experimental remote integration to support Stream Deck actions.
 - Removed anonymous usage telemetry
 - Refresh character and server identity when the same EQ process changes characters or servers
 - Fixed auto-login failing after a self-update by embedding the matching trusik input DLL in stonemite.exe
 - Hardened release builds against missing or invalid embedded trusik DLLs and removed the redundant loose DLL from release packages
-- Fixed rapid client switching corrupting active/PiP label state by guarding overlay swaps against reentrant Windows events and reconciling foreground state during polling
-- Fixed swaps updating labels without reliably foregrounding and focusing the requested EQ window; state now commits only after Windows confirms the target owns foreground and keyboard focus
-- Prevented child processes from inheriting LAN sockets, added graceful `--quit` shutdown, and updated `just quit` so port 19720 is released cleanly
 
 ## v0.4.1
 
