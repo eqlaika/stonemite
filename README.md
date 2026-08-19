@@ -1,7 +1,7 @@
 # Stonemite
 
 <p align="center">
-  <img src="app/assets/app.png" width="128" alt="Stonemite">
+  <img src="crates/stonemite/assets/app.png" width="128" alt="Stonemite">
 </p>
 
 EverQuest multiboxing tool for Windows.
@@ -11,7 +11,7 @@ EverQuest multiboxing tool for Windows.
 Stonemite makes multiboxing EQ easy — PiP overlays with click-to-swap, swap hotkeys, key broadcasting, auto-login, automatic character detection, and a drag-and-drop layout editor. No subscription, no setup wizard.
 
 > [!WARNING]
-> **Stonemite is not an automation tool.** Every gameplay input must originate from an immediate physical user action; Stonemite never decides when an action should occur. Sequences, timers, loops, game-state reactions, and other forms of automated or unattended gameplay are intentionally unsupported. Pull requests that add these capabilities will not be accepted. Stonemite is designed to comply fully with EverQuest's Terms of Service and EULA.
+> **Stonemite is not an automation tool.** Every gameplay input must originate from an immediate physical user action; Stonemite never decides when a gameplay action should occur. Input sequences, loops, and game-state reactions that control EQ are intentionally unsupported. Passive log observation may drive UI telemetry, notifications, and display-only timers, but those features cannot inject input or invoke gameplay controls. Pull requests that add unattended gameplay will not be accepted. Stonemite is designed to comply fully with EverQuest's Terms of Service and EULA.
 
 ## Install
 
@@ -32,6 +32,10 @@ just build-release   # release build
 ```
 
 Target: `x86_64-pc-windows-msvc`
+
+## eqlog library
+
+The workspace includes [`eqlog`](crates/eqlog/), a standalone, platform-neutral Rust package containing the canonical EQ log record types, extensible parser registry, typed `/who` and pet events, and character telemetry reducer. Other passive EQ log applications can reuse it without depending on Stonemite's Windows watcher, UI, input, or Trushar integration.
 
 ## Release
 
@@ -79,7 +83,7 @@ Your passwords are encrypted using [Windows DPAPI](https://learn.microsoft.com/e
 - **Never transmitted** — Stonemite never sends your passwords over the network.
 - **Used only to launch EQ** — passwords are decrypted in memory only when launching the game client.
 
-Stonemite is open source. The encryption code is in [`app/src/crypt.rs`](app/src/crypt.rs), so you can audit exactly what the app does with your data.
+Stonemite is open source. The encryption code is in [`crates/stonemite/src/crypt.rs`](crates/stonemite/src/crypt.rs), so you can audit exactly what the app does with your data.
 
 ## Configuration
 
@@ -87,7 +91,7 @@ Config lives at `%APPDATA%\Stonemite\config.toml`. See [config/example.toml](con
 
 ## Disclaimer
 
-Stonemite uses standard Windows DWM thumbnail APIs to display copies of game windows. Its DLL proxy intercepts DirectInput only to discover EQ log paths and forward user-initiated keystrokes. It does not intercept rendering, read or modify game memory, or inspect network traffic. It cannot run sequences, react to game state, or otherwise automate gameplay.
+Stonemite uses standard Windows DWM thumbnail APIs to display copies of game windows. Its DLL proxy intercepts DirectInput only to discover EQ log paths and forward user-initiated keystrokes. It does not intercept rendering, read or modify game memory, or inspect network traffic. It may passively observe EQ logs for UI telemetry, notifications, and display-only timers, but it cannot turn those observations into gameplay input or otherwise automate gameplay.
 
 Stonemite is intentionally designed to minimize account risk by avoiding automation and other invasive techniques. The risk of account action is believed to be low when the app is used as intended, but Daybreak has final authority over its rules and enforcement. As with any third-party tool, use Stonemite at your own discretion.
 

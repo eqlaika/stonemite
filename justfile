@@ -20,11 +20,11 @@ build-release:
 
 # Get current version from Cargo.toml
 version:
-    @(Get-Content app/Cargo.toml | Select-String '^version = "(.+)"' | ForEach-Object { $_.Matches.Groups[1].Value } | Select-Object -First 1)
+    @(Get-Content crates/stonemite/Cargo.toml | Select-String '^version = "(.+)"' | ForEach-Object { $_.Matches.Groups[1].Value } | Select-Object -First 1)
 
 # Bump version in Cargo.toml (usage: just bump 0.2.0)
 bump new_version:
-    @$content = Get-Content app/Cargo.toml -Raw; $content = $content -replace '(?m)(?<=^\[package\]\r?\nname = "stonemite"\r?\n)version = ".*"', 'version = "{{new_version}}"'; Set-Content app/Cargo.toml $content -NoNewline
+    @$content = Get-Content crates/stonemite/Cargo.toml -Raw; $content = $content -replace '(?m)(?<=^\[package\]\r?\nname = "stonemite"\r?\n)version = ".*"', 'version = "{{new_version}}"'; Set-Content crates/stonemite/Cargo.toml $content -NoNewline
     @Write-Host "Version bumped to {{new_version}}"
 
 # Build release and create zip for distribution
@@ -36,7 +36,7 @@ package: build-release
 
 # Build Inno Setup installer (requires Inno Setup 6)
 installer: build-release
-    @$iscc = (Get-Command "ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source); if (-not $iscc) { $iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" }; if (-not (Test-Path $iscc)) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }; $ver = (Get-Content app/Cargo.toml | Select-String '^version = "(.+)"').Matches.Groups[1].Value; & $iscc /DAppVersion="$ver" installer.iss
+    @$iscc = (Get-Command "ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source); if (-not $iscc) { $iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" }; if (-not (Test-Path $iscc)) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }; $ver = (Get-Content crates/stonemite/Cargo.toml | Select-String '^version = "(.+)"').Matches.Groups[1].Value; & $iscc /DAppVersion="$ver" installer.iss
 
 # Full release flow: bump version, build, package, installer (usage: just release 0.2.0)
 release new_version: (bump new_version) build-release

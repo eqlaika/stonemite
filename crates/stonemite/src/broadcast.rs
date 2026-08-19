@@ -19,7 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::config::Config;
 
-/// Shared memory layout — must match trusik/key_shm.rs exactly.
+/// Shared memory layout — must match crates/trusik/src/key_shm.rs exactly.
 #[repr(C)]
 struct SharedKeyState {
     magic: u32,

@@ -17,7 +17,10 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 rfd = "0.15"
 base64 = "0.22"
 trushar = { path = "../trushar" }
+eqlog = { path = "../eqlog" }
 futures-util = "0.3"
+notify = "8"
+regex = "1"
 tokio = { version = "1", features = ["sync", "time"] }
 
 [dependencies.windows]
@@ -41,4 +44,5 @@ features = [
     "Win32_System_Memory",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
 ]

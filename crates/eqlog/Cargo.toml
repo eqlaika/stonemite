@@ -1,0 +1,8 @@
+[package]
+name = "eqlog"
+version = "0.1.0"
+edition = "2021"
+description = "Platform-neutral EverQuest log parsing and character telemetry primitives"
+license = "GPL-3.0-only"
+repository = "https://github.com/eqlaika/stonemite"
+readme = "README.md"

@@ -265,8 +265,8 @@ struct OverlayState {
     /// the visible assignment so an unchanged SHM value cannot undo a manual
     /// assignment, while a genuinely new login can replace stale identity.
     trusik_identities: HashMap<u32, (String, String)>,
-    /// Log file tailer for /who class detection.
-    log_watcher: log_watcher::LogTailer,
+    /// Latest passive per-character state derived by the EQ log reducer.
+    log_telemetry: HashMap<(String, String), log_watcher::CharacterTelemetry>,
     /// Persistent character knowledge (class, pets).
     character_cache: character_cache::CharacterCache,
 }
@@ -1004,7 +1004,7 @@ unsafe fn init_inner() -> HWND {
         original_ex_styles: HashMap::new(),
         trusik_enabled: cfg.trusik,
         trusik_identities: HashMap::new(),
-        log_watcher: log_watcher::LogTailer::new(),
+        log_telemetry: HashMap::new(),
         character_cache: character_cache::CharacterCache::load(),
     });
 
@@ -1069,8 +1069,9 @@ unsafe fn poll_inner_guarded() {
         if s.trusik_enabled {
             trusik_poll_characters(s);
         }
-        // Poll log files for /who class detection.
-        log_watcher_poll(s);
+        // Publish identity changes to the event-driven log worker. No log
+        // filesystem I/O occurs on the UI polling path.
+        publish_log_sources_inner(s);
         // Update broadcast targets.
         let pids: Vec<u32> = s.eq_windows.iter().map(|w| w.pid).collect();
         crate::broadcast::update_targets(&pids, s.active_pid);
@@ -1175,8 +1176,9 @@ unsafe fn poll_inner_guarded() {
     if s.trusik_enabled {
         trusik_poll_characters(s);
     }
-    // Poll log files for /who class detection.
-    log_watcher_poll(s);
+    // Publish identity changes to the event-driven log worker. No log
+    // filesystem I/O occurs on the UI polling path.
+    publish_log_sources_inner(s);
 
     // Update broadcast targets.
     let pids: Vec<u32> = s.eq_windows.iter().map(|w| w.pid).collect();
@@ -1234,48 +1236,93 @@ fn reconcile_trusik_identity(
     true
 }
 
-/// Poll log files for /who output and update character classes.
-fn log_watcher_poll(s: &mut OverlayState) {
-    let cfg = config::Config::load();
-    let eq_dir = cfg.eq_directory();
-
-    let active_chars: Vec<_> = s
+fn publish_log_sources_inner(s: &OverlayState) {
+    let logs_dir = config::Config::load().eq_directory().join("Logs");
+    let sources = s
         .eq_windows
         .iter()
-        .filter_map(|w| {
-            let name = w.character.as_ref()?;
-            let server = w.server.as_ref()?;
-            (name.clone(), server.clone()).into()
+        .filter_map(|window| {
+            Some(log_watcher::LogSource::new(
+                format!("pid:{}", window.pid),
+                window.character.as_ref()?.as_str(),
+                window.server.as_ref()?.as_str(),
+            ))
         })
         .collect();
+    log_watcher::replace_sources(logs_dir, sources);
+}
 
-    let result = s.log_watcher.poll(&eq_dir, &active_chars);
+/// Publish the current identity snapshot after the log worker starts or the EQ
+/// directory changes. This is last-write-wins and performs no filesystem I/O.
+pub fn publish_log_sources() {
+    if IN_OVERLAY.get() {
+        return;
+    }
+    IN_OVERLAY.set(true);
+    if let Some(s) = state_unguarded().as_ref() {
+        publish_log_sources_inner(s);
+    }
+    IN_OVERLAY.set(false);
+}
 
-    let mut changed = false;
-    for update in &result.class_updates {
-        s.character_cache
-            .set_class(&update.server, &update.character, update.class_abbrev);
-        for w in &mut s.eq_windows {
-            if let (Some(name), Some(server)) = (&w.character, &w.server) {
-                if name.eq_ignore_ascii_case(&update.character)
-                    && server.eq_ignore_ascii_case(&update.server)
-                {
-                    let new_class = Some(update.class_abbrev.to_string());
-                    if w.class != new_class {
-                        w.class = new_class;
-                        changed = true;
+/// Drain a bounded number of parsed log batches on the owner thread. Returns
+/// false when a re-entrant Win32 callback should repost the wake message.
+pub fn drain_log_events() -> bool {
+    if IN_OVERLAY.get() {
+        return false;
+    }
+    IN_OVERLAY.set(true);
+    let batches = log_watcher::drain_ready();
+    if let Some(s) = state_unguarded().as_mut() {
+        apply_log_batches(s, batches);
+    }
+    IN_OVERLAY.set(false);
+    true
+}
+
+fn apply_log_batches(s: &mut OverlayState, batches: Vec<log_watcher::LogBatch>) {
+    let mut class_changed = false;
+    for batch in batches {
+        for diagnostic in batch.diagnostics {
+            debug_log(&format!("eq_logs: {diagnostic}"));
+        }
+        for envelope in batch.envelopes {
+            for change in envelope.telemetry_changes.iter() {
+                let server = change.character.server.as_ref();
+                let character = change.character.character.as_ref();
+                s.log_telemetry.insert(
+                    (server.to_ascii_lowercase(), character.to_ascii_lowercase()),
+                    change.telemetry.clone(),
+                );
+
+                if let Some(class_code) = &change.telemetry.class_code {
+                    s.character_cache
+                        .set_class(server, character, class_code.as_ref());
+                    for window in &mut s.eq_windows {
+                        if let (Some(name), Some(window_server)) =
+                            (&window.character, &window.server)
+                        {
+                            if name.eq_ignore_ascii_case(character)
+                                && window_server.eq_ignore_ascii_case(server)
+                            {
+                                let new_class = Some(class_code.to_string());
+                                if window.class != new_class {
+                                    window.class = new_class;
+                                    class_changed = true;
+                                }
+                            }
+                        }
                     }
+                }
+                if let Some(pet) = &change.telemetry.pet {
+                    s.character_cache.set_pet(server, character, pet.as_ref());
                 }
             }
         }
     }
-    for update in &result.pet_updates {
-        s.character_cache
-            .set_pet(&update.server, &update.owner, &update.pet);
-    }
     s.character_cache.save();
 
-    if changed {
+    if class_changed {
         unsafe { rebuild_thumbnails(s) };
     }
 }
@@ -2583,6 +2630,7 @@ unsafe fn handle_char_assign(s: &mut OverlayState, cmd_id: u32) {
         w.server = Some(candidate.server.clone());
     }
 
+    publish_log_sources_inner(s);
     rebuild_thumbnails(s);
     publish_control_state(s);
 }

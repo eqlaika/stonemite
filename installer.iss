@@ -14,7 +14,7 @@ SolidCompression=yes
 MinVersion=10.0
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-SetupIconFile=app\assets\app.ico
+SetupIconFile=crates\stonemite\assets\app.ico
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
 

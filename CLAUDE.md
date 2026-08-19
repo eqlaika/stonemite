@@ -2,7 +2,7 @@
 
 EverQuest multiboxing tool for Windows.
 
-- **app/** — system tray application with PiP overlay, swap hotkeys, key broadcasting, character autodetect
+- **crates/stonemite/** — system tray application with PiP overlay, swap hotkeys, key broadcasting, character autodetect
 
 ## Build
 
@@ -43,7 +43,11 @@ Update `CHANGELOG.md` before each release. `just release` extracts only the curr
 
 ## Architecture
 
-- Cargo workspace with one active member: `app/`
+- Cargo workspace members under `crates/`:
+  - `crates/stonemite/` — Windows tray application
+  - `crates/eqlog/` — reusable, platform-neutral EQ log parser/event/telemetry package
+  - `crates/trushar/` — integration protocol/server
+  - `crates/trusik/` — injected DirectInput proxy
 
 ### App structure
 
@@ -51,6 +55,7 @@ Update `CHANGELOG.md` before each release. `just release` extracts only the curr
 - `tray.rs` — `Shell_NotifyIconW` system tray, hidden message window, context menu, WM_TIMER polling
 - `eq_windows.rs` — EQ window enumeration via `EnumWindows`, slot assignment, z-order stacking
 - `eq_characters.rs` — character name detection from EQ log files
+- `log_watcher/` — Windows filesystem watcher, authoritative byte-offset tailer, bounded worker runtime, and app adapters built on `eqlog`
 - `overlay.rs` — PiP overlay window with DWM thumbnails (up to 5), hover highlighting, click-to-swap, drag-to-reorder, character labels
 - `build.rs` — embeds app icon as Windows resource
 

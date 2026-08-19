@@ -1,4 +1,9 @@
 [workspace]
-members = ["app", "trusik", "trushar"]
+members = [
+    "crates/eqlog",
+    "crates/stonemite",
+    "crates/trushar",
+    "crates/trusik",
+]
 exclude = ["tools/mkicon"]
 resolver = "2"

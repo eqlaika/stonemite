@@ -22,6 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::broadcast;
 use crate::config;
 use crate::control;
+use crate::log_watcher;
 use crate::overlay;
 use crate::settings_dialog;
 use crate::updater;
@@ -207,6 +208,11 @@ unsafe fn run_inner() {
     let config = config::Config::load();
     let eq_dir = config.eq_directory();
     let trushar_server = control::start(hwnd, &config.trushar, eq_dir);
+    if let Err(error) = log_watcher::start(hwnd) {
+        overlay::debug_log(&format!("eq_logs: {error}"));
+        eprintln!("{error}");
+    }
+    overlay::publish_log_sources();
 
     // Message loop.
     let mut msg = MSG::default();
@@ -215,6 +221,9 @@ unsafe fn run_inner() {
         let _ = windows::Win32::UI::WindowsAndMessaging::DispatchMessageW(&msg);
     }
 
+    // Join the log worker while the hidden window can still receive its final
+    // posted wake. This also stops the notify/ReadDirectoryChangesW backend.
+    log_watcher::stop();
     drop(trushar_server);
     control::stop();
 
@@ -253,6 +262,12 @@ unsafe extern "system" fn wnd_proc(
         }
         x if x == control::WM_CONTROL_COMMAND => {
             control::drain_commands();
+            LRESULT(0)
+        }
+        x if x == log_watcher::WM_LOG_READY => {
+            if !overlay::drain_log_events() {
+                let _ = PostMessageW(hwnd, log_watcher::WM_LOG_READY, WPARAM(0), LPARAM(0));
+            }
             LRESULT(0)
         }
         WM_TRAY => {
@@ -331,7 +346,9 @@ unsafe extern "system" fn wnd_proc(
             let cfg = config::Config::load();
             register_hotkeys(hwnd, &cfg);
             broadcast::on_settings_changed();
-            // Reload overlay config (pip_edge, etc.) and rebuild layout.
+            // Reload overlay config (pip_edge, etc.), update the watched Logs
+            // directory, and rebuild layout.
+            overlay::publish_log_sources();
             overlay::force_rebuild();
             LRESULT(0)
         }

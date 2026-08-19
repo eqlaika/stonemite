@@ -46,7 +46,7 @@ npm run build
 npm run validate
 ```
 
-The asset step generates data URLs from `../app/assets/app.png` and `../app/assets/class_icons/`; the generated TypeScript file is intentionally ignored. Action tiles use vendored Lucide Animated geometry and never fetch icons at runtime; licenses ship in `co.laikasoft.ikkinz.sdPlugin/THIRD_PARTY_NOTICES.md`. The complete configurable-icon catalog is pinned to the commit recorded in `src/render/lucide-animated.generated.ts`. Maintainers update it deliberately with `npx playwright install chromium` followed by `npm run icons`; ordinary builds consume the checked-in frames. The Stream Deck bundle is written to `co.laikasoft.ikkinz.sdPlugin/bin/`.
+The asset step generates data URLs from `../crates/stonemite/assets/app.png` and `../crates/stonemite/assets/class_icons/`; the generated TypeScript file is intentionally ignored. Action tiles use vendored Lucide Animated geometry and never fetch icons at runtime; licenses ship in `co.laikasoft.ikkinz.sdPlugin/THIRD_PARTY_NOTICES.md`. The complete configurable-icon catalog is pinned to the commit recorded in `src/render/lucide-animated.generated.ts`. Maintainers update it deliberately with `npx playwright install chromium` followed by `npm run icons`; ordinary builds consume the checked-in frames. The Stream Deck bundle is written to `co.laikasoft.ikkinz.sdPlugin/bin/`.
 
 To link a development build after validation:
 
