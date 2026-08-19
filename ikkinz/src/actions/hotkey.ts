@@ -22,6 +22,7 @@ import { HOTKEY_ACTION_DEFINITION } from "./key-definitions";
 
 export const HOTKEY_MANIFEST_ID = HOTKEY_ACTION_DEFINITION.uuid;
 const FEEDBACK_TIMEOUT_MS = 3_000;
+const SUCCESS_HOLD_MS = 700;
 const MOTION_FRAME_MS = 125;
 const MAX_TILE_LABEL_LENGTH = 14;
 export const DEFAULT_HOTKEY_COLOR = "#59d8d0";
@@ -50,6 +51,8 @@ interface VisibleHotkey {
   lastImage?: string;
   error?: { message: string; until: number };
   errorTimer?: ReturnType<typeof setTimeout>;
+  successHeld?: boolean;
+  successTimer?: ReturnType<typeof setTimeout>;
 }
 
 export class HotkeyAction extends SingletonAction<HotkeySettings> {
@@ -87,6 +90,7 @@ export class HotkeyAction extends SingletonAction<HotkeySettings> {
   override onWillDisappear(event: WillDisappearEvent<HotkeySettings>): void {
     const key = this.#keys.get(event.action.id);
     if (key?.errorTimer) clearTimeout(key.errorTimer);
+    if (key?.successTimer) clearTimeout(key.successTimer);
     this.#keys.delete(event.action.id);
     this.#inFlight.delete(event.action.id);
     if (this.#inspectorAction?.id === event.action.id)
@@ -100,6 +104,7 @@ export class HotkeyAction extends SingletonAction<HotkeySettings> {
     if (!event.action.isKey()) return;
     const key = this.#keys.get(event.action.id);
     if (key) {
+      this.#clearSuccess(key);
       key.settings = normalizeHotkeySettings(event.payload.settings);
       delete key.lastImage;
     }
@@ -127,9 +132,11 @@ export class HotkeyAction extends SingletonAction<HotkeySettings> {
       return;
     }
 
+    this.#clearSuccess(key);
     this.#inFlight.add(event.action.id);
     this.#syncMotion();
     this.#queueRender();
+    let delivered = false;
     try {
       const result = await this.#client.sendEqActionBatch(
         targetsForSettings(settings),
@@ -144,12 +151,13 @@ export class HotkeyAction extends SingletonAction<HotkeySettings> {
           "Stonemite returned the wrong mapped-hotkey result.",
         );
       }
-      await event.action.showOk();
+      delivered = true;
     } catch (error) {
       this.#setError(key, friendlyHotkeyError(error));
       await event.action.showAlert();
     } finally {
       this.#inFlight.delete(event.action.id);
+      if (delivered) this.#holdSuccess(key);
       this.#syncMotion();
       this.#queueRender();
     }
@@ -236,7 +244,25 @@ export class HotkeyAction extends SingletonAction<HotkeySettings> {
     });
   }
 
+  #holdSuccess(key: VisibleHotkey): void {
+    this.#clearSuccess(key);
+    key.successHeld = true;
+    key.successTimer = setTimeout(() => {
+      delete key.successHeld;
+      delete key.successTimer;
+      this.#queueRender();
+    }, SUCCESS_HOLD_MS);
+    key.successTimer.unref?.();
+  }
+
+  #clearSuccess(key: VisibleHotkey): void {
+    if (key.successTimer) clearTimeout(key.successTimer);
+    delete key.successHeld;
+    delete key.successTimer;
+  }
+
   #setError(key: VisibleHotkey, message: string): void {
+    this.#clearSuccess(key);
     if (key.errorTimer) clearTimeout(key.errorTimer);
     key.error = { message, until: Date.now() + FEEDBACK_TIMEOUT_MS };
     key.errorTimer = setTimeout(() => {
@@ -323,7 +349,8 @@ export class HotkeyAction extends SingletonAction<HotkeySettings> {
         targets: targetSummary(key.settings),
         ...(unavailable ? { status: unavailable.toUpperCase() } : {}),
         available,
-        active: this.#inFlight.has(key.action.id),
+        active: this.#inFlight.has(key.action.id) || Boolean(key.successHeld),
+        animating: this.#inFlight.has(key.action.id),
       },
       this.#motionFrame,
     );

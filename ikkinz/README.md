@@ -72,7 +72,7 @@ Drag **Hotkey** from the Stonemite action list onto any key, then use its proper
 2. Choose an EQ action from the shared mapping list. Only actions mapped on every selected loaded box appear. If the action you want is missing, assign its key mapping in EverQuest for each intended box and choose **Refresh mappings**.
 3. Enter an optional tile name of up to 14 characters.
 4. Choose a Stonemite palette color or use the custom color picker. The idle icon and running background use this color; running text automatically switches between white and dark for contrast.
-5. Search the complete pinned Lucide Animated catalog and select an icon.
+5. Search the icon catalog and select an icon.
 6. Choose **Save tile**.
 
 All-loaded targeting resolves the current loaded roster when the tile is pressed. Before exposing any key, Stonemite requires every requested box to be present, input-ready, free of another targeted sequence, and mapped for the selected action. A predictable failure therefore sends nothing. A process that disappears after delivery starts can still produce an honest failure because input already observed by another EQ client cannot be rolled back.

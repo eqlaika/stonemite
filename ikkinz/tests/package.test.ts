@@ -164,7 +164,9 @@ describe("release inputs", () => {
     expect(html).toContain("Only actions with a key mapping");
     expect(html).toContain("no key mapping");
     expect(html).toContain("lucide-animated-icons.generated.js");
-    expect(html).toContain("No Lucide Animated icons match this search.");
+    expect(html).toContain("No icons match this search.");
+    expect(html).toContain("Choose an icon for this tile.");
+    expect(html).not.toContain("Lucide Animated");
     expect(html).not.toContain('id="connection"');
     expect(html).toContain('id="tile-color"');
     expect(html).toContain('data-color="#59d8d0"');

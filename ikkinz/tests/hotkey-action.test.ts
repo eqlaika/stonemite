@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardStore } from "../src/state/store";
 import { stateFixture } from "./fixtures";
 
@@ -26,6 +26,10 @@ import {
 
 beforeEach(() => {
   sdk.sendToPropertyInspector.mockReset().mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("HotkeyAction", () => {
@@ -56,7 +60,8 @@ describe("HotkeyAction", () => {
     expect(LUCIDE_ANIMATED_ICON_NAMES).not.toContain("footprints");
   });
 
-  it("sends one all-box batch and suppresses another press while it is running", async () => {
+  it("holds a still success fill before returning to idle", async () => {
+    vi.useFakeTimers();
     const store = connectedStore();
     const request = deferred<ReturnType<typeof batchResult>>();
     const client = fakeClient();
@@ -72,24 +77,38 @@ describe("HotkeyAction", () => {
       action,
       payload: { settings: action.settings },
     } as never);
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
 
     const first = hotkey.onKeyDown({ action } as never);
     await hotkey.onKeyDown({ action } as never);
+    await vi.advanceTimersByTimeAsync(0);
     expect(client.sendEqActionBatch).toHaveBeenCalledTimes(1);
     expect(client.sendEqActionBatch).toHaveBeenCalledWith(
       { type: "all_loaded" },
       { type: "keymap", mapping: "DUCK" },
     );
-    await vi.waitFor(() => {
-      const activeImage = action.setImage.mock.calls.at(-1)?.[0] as string;
-      expect(decodeURIComponent(activeImage)).toContain('data-icon="flame"');
-      expect(decodeURIComponent(activeImage)).toContain('data-active="true"');
-    });
+    const activeImage = action.setImage.mock.calls.at(-1)?.[0] as string;
+    expect(decodeURIComponent(activeImage)).toContain('data-icon="flame"');
+    expect(decodeURIComponent(activeImage)).toContain('data-active="true"');
 
     request.resolve(batchResult());
     await first;
-    expect(action.showOk).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(action.showOk).not.toHaveBeenCalled();
+    const successImage = action.setImage.mock.calls.at(-1)?.[0] as string;
+    const successSvg = decodeURIComponent(successImage);
+    expect(successSvg).toContain('data-active="false"');
+    expect(successSvg).toContain(
+      '<rect width="72" height="72" rx="7" fill="#59d8d0"/>',
+    );
+
+    await vi.advanceTimersByTimeAsync(699);
+    expect(action.setImage.mock.calls.at(-1)?.[0]).toBe(successImage);
+    await vi.advanceTimersByTimeAsync(1);
+    const idleImage = action.setImage.mock.calls.at(-1)?.[0] as string;
+    expect(decodeURIComponent(idleImage)).not.toContain(
+      '<rect width="72" height="72" rx="7" fill="#59d8d0"/>',
+    );
   });
 
   it("requires every selected window to be loaded and ready before sending", async () => {
@@ -175,6 +194,8 @@ describe("hotkey rendering", () => {
     const svg = decodeURIComponent(image);
     expect(svg).toContain('data-icon="flame"');
     expect(svg).toContain('data-frame="3"');
+    expect(svg.match(/<svg/gu)).toHaveLength(1);
+    expect(svg).toContain('stroke="#000000"');
     expect(svg).toContain('fill="#e0b848"');
     expect(svg).toContain('style="fill:#000000"');
     expect(svg).toContain(">BURN</text>");

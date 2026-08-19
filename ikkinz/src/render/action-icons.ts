@@ -34,7 +34,41 @@ export function renderConfigurableLucideIcon(
   const svg = active
     ? (definition.frames[frame] ?? definition.normal)
     : definition.normal;
-  return `<g data-icon="${icon}" data-icon-set="lucide-animated" data-active="${active}" data-frame="${frame}" color="${color}" transform="${transform}">${svg}</g>`;
+  return `<g data-icon="${icon}" data-icon-set="lucide-animated" data-active="${active}" data-frame="${frame}" color="${color}" transform="${transform}">${inlineLucideSvg(svg, color)}</g>`;
+}
+
+// Stream Deck drops nested SVG roots in key images, so flatten each catalog frame.
+function inlineLucideSvg(svg: string, color: string): string {
+  const match = svg.match(/^<svg([^>]*)>([\s\S]*)<\/svg>$/u);
+  if (!match) return svg.replaceAll("currentColor", color);
+
+  const attributes = match[1] ?? "";
+  const content = (match[2] ?? "").replaceAll("currentColor", color);
+  const viewBoxValues = attributes
+    .match(/\sviewBox="([^"]+)"/u)?.[1]
+    ?.trim()
+    .split(/\s+/u)
+    .map(Number);
+  const viewBox =
+    viewBoxValues?.length === 4 &&
+    viewBoxValues.every(Number.isFinite) &&
+    viewBoxValues[2] !== 0 &&
+    viewBoxValues[3] !== 0
+      ? (viewBoxValues as [number, number, number, number])
+      : ([0, 0, 24, 24] as const);
+  const normalizedAttributes = attributes
+    .replace(/\s(?:height|viewBox|width|xmlns)="[^"]*"/gu, "")
+    .replaceAll("currentColor", color);
+  const [minX, minY, width, height] = viewBox;
+  const scaleX = 24 / width;
+  const scaleY = 24 / height;
+  const needsViewBoxTransform =
+    minX !== 0 || minY !== 0 || width !== 24 || height !== 24;
+  const normalizedContent = needsViewBoxTransform
+    ? `<g transform="matrix(${scaleX} 0 0 ${scaleY} ${-minX * scaleX} ${-minY * scaleY})">${content}</g>`
+    : content;
+
+  return `<g${normalizedAttributes}>${normalizedContent}</g>`;
 }
 
 const FRAME_COUNT = 8;

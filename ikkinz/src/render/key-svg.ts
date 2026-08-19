@@ -99,12 +99,14 @@ export interface HotkeyTile {
   status?: string;
   available: boolean;
   active: boolean;
+  animating?: boolean;
 }
 
 export function renderHotkeyTile(tile: HotkeyTile, motionFrame = 0): string {
   const chosenColor = normalizeHotkeyColor(tile.color);
   const accent = tile.available ? chosenColor : COLORS.disabled;
   const active = tile.active && tile.available;
+  const animating = active && (tile.animating ?? tile.active);
   const activeForeground = contrastingHotkeyForeground(chosenColor);
   const surface = active
     ? `<rect width="72" height="72" rx="7" fill="${accent}"/>`
@@ -124,7 +126,7 @@ export function renderHotkeyTile(tile: HotkeyTile, motionFrame = 0): string {
     icon,
     foreground,
     motionFrame,
-    active,
+    animating,
     tile.configured ? "translate(8 7) scale(1.35)" : undefined,
   )}${target}<text x="36" y="65" class="${active ? "active-text" : "text"} center"${active ? ` style="fill:${activeForeground}"` : ""} font-size="15"${fittedTextAttributes(label, 7, 62)}>${escapeXml(label)}</text>`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${W}" viewBox="0 0 ${W} ${W}" role="img"><style>${styles()}</style>${body}</svg>`;
