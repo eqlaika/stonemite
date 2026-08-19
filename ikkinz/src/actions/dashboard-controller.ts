@@ -12,15 +12,17 @@ import {
   buildGroupPlan,
   buildKey,
   buildSwapPlan,
+  buildUsePlan,
   type DashboardKey,
 } from "../state/layout";
 import { DashboardStore } from "../state/store";
 import { renderCell } from "../render/key-svg";
 import {
   CommandError,
+  LOCAL_CONNECTION,
   normalizeAddress,
   TrusharClient,
-  type Credentials,
+  type ConnectionConfig,
 } from "../trushar/client";
 import { keyForManifestId } from "./key-definitions";
 
@@ -55,6 +57,7 @@ export class DashboardController {
   #groupInFlight = false;
   #followInFlight = false;
   #assistInFlight = false;
+  #useInFlight = false;
   #swapArmed = false;
   #swapInFlight = false;
 
@@ -187,6 +190,18 @@ export class DashboardController {
         }
         return;
       }
+      if (cell.type === "use" && cell.available && !this.#useInFlight) {
+        const feedbackKey = key.action.id;
+        this.#useInFlight = true;
+        this.#setActionFeedback(feedbackKey, "Using", "use");
+        try {
+          await this.#useCenterScreen();
+          this.#store.clearFeedback(feedbackKey);
+        } finally {
+          this.#useInFlight = false;
+        }
+        return;
+      }
       if (
         cell.type === "broadcast" &&
         cell.available &&
@@ -232,38 +247,17 @@ export class DashboardController {
 
     if (payload.type === "forget") {
       const epoch = ++this.#credentialEpoch;
-      this.#client.disconnect();
-      this.#store.clear();
       await streamDeck.settings.setGlobalSettings<PluginSettings>({});
-      if (epoch === this.#credentialEpoch) await this.#sendStatus();
+      if (epoch !== this.#credentialEpoch) return;
+      this.#client.configure(LOCAL_CONNECTION);
+      this.#store.clear();
+      await this.#sendStatus();
       return;
     }
 
     if (payload.type === "reconnect") {
       const epoch = ++this.#credentialEpoch;
-      const saved =
-        await streamDeck.settings.getGlobalSettings<PluginSettings>();
-      if (epoch !== this.#credentialEpoch) return;
-      if (!saved.address || !saved.authToken) {
-        this.#store.setConnection({
-          state: "idle",
-          title: "Not paired",
-          detail: "Enter a six-digit pairing code first.",
-        });
-        await this.#sendStatus();
-        return;
-      }
-      try {
-        const credentials = credentialsForReconnect(saved, payload.address);
-        if (epoch !== this.#credentialEpoch) return;
-        this.#client.configure(credentials);
-      } catch (error) {
-        this.#store.setConnection({
-          state: "error",
-          title: "Pair again for this address",
-          detail: friendlyError(error),
-        });
-      }
+      this.#client.reconnect();
       if (epoch === this.#credentialEpoch) await this.#sendStatus();
       return;
     }
@@ -351,6 +345,31 @@ export class DashboardController {
     }
   }
 
+  async #useCenterScreen(): Promise<void> {
+    const plan = buildUsePlan(this.#store.view);
+    if (!plan.available) {
+      throw new CommandError(
+        "use_unavailable",
+        "No input-ready boxes can receive Use Center Screen.",
+      );
+    }
+
+    const results = await Promise.allSettled(
+      plan.clients.map((client) =>
+        this.#client.sendEqAction(client.id, { type: "use_center_screen" }),
+      ),
+    );
+    const failures = results.filter((result) => result.status === "rejected");
+    if (failures.length > 0) {
+      throw new CommandError(
+        failures.length === results.length ? "use_failed" : "use_partial",
+        failures.length === results.length
+          ? "No ready box received Use Center Screen."
+          : "Some ready boxes missed Use Center Screen.",
+      );
+    }
+  }
+
   async #formGroup(feedbackKey: string): Promise<void> {
     const plan = buildGroupPlan(this.#store.view);
     if (!plan.available || !plan.active) {
@@ -388,13 +407,9 @@ export class DashboardController {
 
     for (const invitee of invited) {
       try {
-        await this.#client.sendKeys(invitee.id, [
-          {
-            keys: ["left_control", "i"],
-            hold_ms: 50,
-            pause_ms: 40,
-          },
-        ]);
+        await this.#client.sendEqAction(invitee.id, {
+          type: "invite_follow",
+        });
       } catch (error) {
         failures.push(asError(error));
       }
@@ -411,7 +426,7 @@ export class DashboardController {
   #setActionFeedback(
     key: string,
     message: string,
-    motion: "group" | "follow" | "assist",
+    motion: "group" | "follow" | "assist" | "use",
   ): void {
     this.#store.setFeedback(
       key,
@@ -513,23 +528,16 @@ export class DashboardController {
   }
 }
 
-export function credentialsForReconnect(
-  saved: PluginSettings,
-  requestedAddress: JsonValue | undefined,
-): Credentials {
-  if (!saved.address || !saved.authToken)
-    throw new CommandError("not_paired", "Pair this device first.");
-  const savedAddress = normalizeAddress(saved.address);
-  const requested =
-    typeof requestedAddress === "string"
-      ? normalizeAddress(requestedAddress)
-      : savedAddress;
-  if (requested !== savedAddress)
+export function connectionForSettings(saved: PluginSettings): ConnectionConfig {
+  const address = saved.address?.trim() ?? "";
+  const authToken = saved.authToken?.trim() ?? "";
+  if (!address && !authToken) return { ...LOCAL_CONNECTION };
+  if (!address || !authToken)
     throw new CommandError(
-      "address_changed",
-      "The address changed. Use a new six-digit code so the saved credential is never sent to another host.",
+      "invalid_saved_connection",
+      "The saved LAN connection is incomplete. Use this PC or pair over LAN again.",
     );
-  return { address: savedAddress, authToken: saved.authToken };
+  return { address: normalizeAddress(address), authToken };
 }
 
 export async function updateVisibleKeyImage(
@@ -555,6 +563,8 @@ function friendlyError(error: unknown): string {
         return "Timed out";
       case "input_unavailable":
         return "Input not ready";
+      case "eq_action_unbound":
+        return "Action unbound";
       case "group_unavailable":
         return "No ready boxes";
       case "group_partial":
@@ -571,6 +581,12 @@ function friendlyError(error: unknown): string {
         return "Assist failed";
       case "assist_partial":
         return "Partial assist";
+      case "use_unavailable":
+        return "No ready boxes";
+      case "use_failed":
+        return "Use failed";
+      case "use_partial":
+        return "Partial use";
       default:
         return error.message;
     }

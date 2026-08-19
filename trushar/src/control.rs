@@ -48,6 +48,27 @@ impl BroadcastState {
     };
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct EqActionCapabilities {
+    pub use_center_screen: bool,
+    pub invite_follow: bool,
+    pub hotbars: u8,
+    pub hotbar_buttons: u8,
+    pub spell_gems: u8,
+}
+
+impl EqActionCapabilities {
+    pub const fn available(available: bool) -> Self {
+        Self {
+            use_center_screen: available,
+            invite_follow: available,
+            hotbars: if available { MAX_HOTBARS } else { 0 },
+            hotbar_buttons: if available { MAX_HOTBAR_BUTTONS } else { 0 },
+            spell_gems: if available { MAX_SPELL_GEMS } else { 0 },
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Capabilities {
     pub activate: bool,
@@ -55,6 +76,7 @@ pub struct Capabilities {
     pub set_broadcast: bool,
     pub send_text: bool,
     pub send_keys: bool,
+    pub eq_actions: EqActionCapabilities,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,6 +97,7 @@ impl Default for StateData {
                 set_broadcast: false,
                 send_text: false,
                 send_keys: false,
+                eq_actions: EqActionCapabilities::available(false),
             },
         }
     }
@@ -161,6 +184,9 @@ pub enum ActivationStatus {
 pub const MAX_TEXT_CHARS: usize = 256;
 pub const MAX_TEXT_BYTES: usize = 1024;
 pub const MAX_KEY_STROKES: usize = 64;
+pub const MAX_HOTBARS: u8 = 11;
+pub const MAX_HOTBAR_BUTTONS: u8 = 12;
+pub const MAX_SPELL_GEMS: u8 = 14;
 pub const MAX_KEYS_PER_STROKE: usize = 8;
 pub const MAX_INPUT_DURATION_MS: u64 = 15_000;
 pub const DEFAULT_KEY_HOLD_MS: u16 = 75;
@@ -325,6 +351,51 @@ pub fn validate_key_strokes(strokes: &[KeyStroke]) -> Result<(), ControlError> {
     Ok(())
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EqAction {
+    UseCenterScreen,
+    InviteFollow,
+    Hotbar { bar: u8, button: u8 },
+    SpellGem { gem: u8 },
+}
+
+impl EqAction {
+    pub fn hotbar(bar: u8, button: u8) -> Result<Self, ControlError> {
+        let action = Self::Hotbar { bar, button };
+        action.validate()?;
+        Ok(action)
+    }
+
+    pub fn spell_gem(gem: u8) -> Result<Self, ControlError> {
+        let action = Self::SpellGem { gem };
+        action.validate()?;
+        Ok(action)
+    }
+
+    pub fn validate(&self) -> Result<(), ControlError> {
+        match self {
+            Self::Hotbar { bar, button }
+                if !(1..=MAX_HOTBARS).contains(bar)
+                    || !(1..=MAX_HOTBAR_BUTTONS).contains(button) =>
+            {
+                Err(ControlError::new(
+                    ErrorCode::InvalidArgument,
+                    format!(
+                        "hotbar actions require bar 1 to {MAX_HOTBARS} and button 1 to {MAX_HOTBAR_BUTTONS}"
+                    ),
+                ))
+            }
+            Self::SpellGem { gem } if !(1..=MAX_SPELL_GEMS).contains(gem) => {
+                Err(ControlError::new(
+                    ErrorCode::InvalidArgument,
+                    format!("spell gem actions require gem 1 to {MAX_SPELL_GEMS}"),
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputKind {
     Text,
@@ -349,6 +420,9 @@ pub enum CommandOutcome {
         kind: InputKind,
         strokes: usize,
     },
+    EqActionDelivered {
+        action: EqAction,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -366,6 +440,7 @@ pub enum ErrorCode {
     BroadcastOperationFailed,
     InputUnavailable,
     InputOperationFailed,
+    EqActionUnbound,
     CommandTimeout,
     InternalError,
 }
@@ -386,6 +461,7 @@ impl ErrorCode {
             Self::BroadcastOperationFailed => "broadcast_operation_failed",
             Self::InputUnavailable => "input_unavailable",
             Self::InputOperationFailed => "input_operation_failed",
+            Self::EqActionUnbound => "eq_action_unbound",
             Self::CommandTimeout => "command_timeout",
             Self::InternalError => "internal_error",
         }
@@ -432,6 +508,11 @@ pub trait Controller: Send + Sync + 'static {
         &self,
         client_id: ClientId,
         strokes: Vec<KeyStroke>,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>>;
+    fn send_eq_action(
+        &self,
+        client_id: ClientId,
+        action: EqAction,
     ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>>;
 }
 
@@ -510,6 +591,7 @@ impl SnapshotMapper {
                 set_broadcast: broadcast.available,
                 send_text: input_available,
                 send_keys: input_available,
+                eq_actions: EqActionCapabilities::available(input_available),
             },
         }
     }
@@ -550,6 +632,10 @@ pub enum RecordedInput {
         client_id: ClientId,
         strokes: Vec<KeyStroke>,
     },
+    EqAction {
+        client_id: ClientId,
+        action: EqAction,
+    },
 }
 
 impl Default for BroadcastState {
@@ -568,6 +654,7 @@ impl InMemoryController {
                 set_broadcast: broadcast.available,
                 send_text: false,
                 send_keys: false,
+                eq_actions: EqActionCapabilities::available(false),
             },
             ..StateData::default()
         };
@@ -759,6 +846,7 @@ fn memory_data(state: &MemoryState) -> StateData {
             set_broadcast: state.broadcast.available,
             send_text: input_available,
             send_keys: input_available,
+            eq_actions: EqActionCapabilities::available(input_available),
         },
     }
 }
@@ -978,6 +1066,24 @@ impl Controller for InMemoryController {
                 kind: InputKind::Keys,
                 strokes: count,
             })
+        })
+    }
+
+    fn send_eq_action(
+        &self,
+        client_id: ClientId,
+        action: EqAction,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            action.validate()?;
+            let mut state = inner.state.lock().expect("memory controller poisoned");
+            prepare_memory_input(&inner, &mut state, &client_id)?;
+            state.inputs.push(RecordedInput::EqAction {
+                client_id,
+                action: action.clone(),
+            });
+            Ok(CommandOutcome::EqActionDelivered { action })
         })
     }
 }

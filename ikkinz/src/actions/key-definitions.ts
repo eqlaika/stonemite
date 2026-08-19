@@ -36,6 +36,12 @@ export const DASHBOARD_ACTION_DEFINITIONS = [
     uuid: `${UUID_PREFIX}.follow`,
   },
   {
+    key: "use",
+    name: "Use",
+    tooltip: "Invoke Use Center Screen on every ready character.",
+    uuid: `${UUID_PREFIX}.use`,
+  },
+  {
     key: "assist",
     name: "Assist",
     tooltip:
@@ -50,8 +56,8 @@ export const DASHBOARD_ACTION_DEFINITIONS = [
   },
   {
     key: "logo",
-    name: "Stonemite logo",
-    tooltip: "An inert Stonemite logo tile.",
+    name: "Stonemite setup",
+    tooltip: "Show connection status and configure access from another PC.",
     uuid: `${UUID_PREFIX}.logo`,
   },
 ] as const satisfies ReadonlyArray<DashboardActionDefinition>;

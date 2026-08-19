@@ -204,8 +204,9 @@ unsafe fn run_inner() {
 
     // The dispatcher is now ready. The dedicated runtime thread is joined
     // before this Win32 window and the overlay/broadcast owner state go away.
-    let trushar_config = config::Config::load().trushar;
-    let trushar_server = control::start(hwnd, &trushar_config);
+    let config = config::Config::load();
+    let eq_dir = config.eq_directory();
+    let trushar_server = control::start(hwnd, &config.trushar, eq_dir);
 
     // Message loop.
     let mut msg = MSG::default();

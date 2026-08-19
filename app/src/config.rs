@@ -77,7 +77,7 @@ impl Default for TrusharConfig {
 }
 
 fn default_trushar_enabled() -> bool {
-    false
+    true
 }
 
 fn default_trushar_bind() -> String {
@@ -252,9 +252,7 @@ impl Config {
         let Some(path) = Self::path() else {
             return Self::default();
         };
-        let enable_integrations_path = path.with_file_name("enable-local-integrations");
-        let enable_local_integrations = enable_integrations_path.exists();
-        let mut config = if path.exists() {
+        let config = if path.exists() {
             match std::fs::read_to_string(&path) {
                 Ok(contents) => toml::from_str(&contents).unwrap_or_default(),
                 Err(_) => Self::default(),
@@ -262,17 +260,8 @@ impl Config {
         } else {
             Self::default()
         };
-        if enable_local_integrations {
-            config.trushar.enabled = true;
-        }
-        match config.save() {
-            Ok(()) if enable_local_integrations => {
-                if let Err(error) = std::fs::remove_file(enable_integrations_path) {
-                    eprintln!("Failed to clear the local integrations installer marker: {error}");
-                }
-            }
-            Ok(()) => {}
-            Err(error) => eprintln!("Failed to save config: {error}"),
+        if let Err(error) = config.save() {
+            eprintln!("Failed to save config: {error}");
         }
         config
     }
@@ -517,10 +506,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_config_gets_safe_trushar_defaults() {
+    fn legacy_config_enables_loopback_integrations_by_default() {
         let config: Config = toml::from_str("eq_dir = 'C:\\EverQuest'").unwrap();
 
-        assert!(!config.trushar.enabled);
+        assert!(config.trushar.enabled);
         assert_eq!(config.trushar.bind, "127.0.0.1:19720");
         assert_eq!(config.trushar.auth_token, None);
     }

@@ -5,6 +5,7 @@ import {
   ProtocolError,
   parseServerMessage,
   type ClientMessage,
+  type EqAction,
   type KeyStroke,
   type ServerMessage,
   type Success,
@@ -30,10 +31,20 @@ const DEFAULT_TIMING: TrusharTiming = {
   heartbeatTimeoutMs: 5_000,
 } as const;
 
-export interface Credentials {
+export const DEFAULT_LOCAL_ADDRESS = "127.0.0.1:19720";
+
+export interface ConnectionConfig {
   address: string;
+  authToken?: string;
+}
+
+export interface Credentials extends ConnectionConfig {
   authToken: string;
 }
+
+export const LOCAL_CONNECTION: ConnectionConfig = {
+  address: DEFAULT_LOCAL_ADDRESS,
+};
 
 export interface TrusharClientOptions {
   onState: (state: TrusharState) => void;
@@ -67,7 +78,7 @@ export class CommandError extends Error {
 export class TrusharClient {
   #socket: WebSocket | null = null;
   #pairing: ActivePairing | null = null;
-  #credentials: Credentials | null = null;
+  #credentials: ConnectionConfig | null = null;
   #generation = 0;
   #requestSequence = 0;
   #reconnectAttempt = 0;
@@ -87,15 +98,26 @@ export class TrusharClient {
     this.#timing = { ...DEFAULT_TIMING, ...options.timing };
   }
 
-  configure(credentials: Credentials | null): void {
-    this.#cancelPairing();
-    this.#generation += 1;
-    this.#credentials = credentials
+  configure(credentials: ConnectionConfig | null): void {
+    const next = credentials
       ? {
           address: normalizeAddress(credentials.address),
-          authToken: credentials.authToken,
+          ...(credentials.authToken
+            ? { authToken: credentials.authToken }
+            : {}),
         }
       : null;
+    const unchanged =
+      this.#credentials === null
+        ? next === null
+        : next !== null &&
+          this.#credentials.address === next.address &&
+          this.#credentials.authToken === next.authToken;
+    if (unchanged) return;
+
+    this.#cancelPairing();
+    this.#generation += 1;
+    this.#credentials = next;
     this.#cancelReconnect();
     this.#stopHeartbeat();
     this.#closeSocket();
@@ -106,8 +128,8 @@ export class TrusharClient {
     if (!this.#credentials) {
       this.#onStatus({
         state: "idle",
-        title: "Not paired",
-        detail: "Open Stonemite settings to begin.",
+        title: "Disconnected",
+        detail: "The Stonemite connection is stopped.",
       });
       return;
     }
@@ -119,8 +141,8 @@ export class TrusharClient {
     if (!this.#credentials) {
       this.#onStatus({
         state: "idle",
-        title: "Not paired",
-        detail: "Enter a pairing code first.",
+        title: "Disconnected",
+        detail: "The Stonemite connection is stopped.",
       });
       return;
     }
@@ -139,6 +161,7 @@ export class TrusharClient {
   }
 
   disconnect(): void {
+    this.#cancelPairing();
     this.configure(null);
   }
 
@@ -337,16 +360,37 @@ export class TrusharClient {
     );
   }
 
+  async sendEqAction(
+    clientId: string,
+    action: EqAction,
+  ): Promise<Extract<ServerMessage, { type: "result" }>> {
+    return this.#request(
+      {
+        type: "send_eq_action",
+        version: PROTOCOL_VERSION,
+        request_id: this.#nextRequestId("eq-action"),
+        client_id: clientId,
+        action,
+      },
+      "eq_action_delivered",
+    );
+  }
+
   #connect(generation: number, reconnecting: boolean): void {
     const credentials = this.#credentials;
     if (!credentials || generation !== this.#generation) return;
+    const local = !credentials.authToken;
     this.#onStatus({
       state: reconnecting ? "reconnecting" : "connecting",
       title: reconnecting ? "Reconnecting" : "Connecting",
-      detail: `Contacting ${credentials.address}.`,
+      detail: local
+        ? "Looking for Stonemite on this PC."
+        : `Contacting ${credentials.address}.`,
     });
     const socket = new WebSocket(endpoint(credentials.address, "/trushar/v1"), {
-      headers: { Authorization: `Bearer ${credentials.authToken}` },
+      ...(credentials.authToken
+        ? { headers: { Authorization: `Bearer ${credentials.authToken}` } }
+        : {}),
       handshakeTimeout: this.#timing.commandTimeoutMs,
       maxPayload: MAX_MESSAGE_BYTES,
     });
@@ -404,7 +448,9 @@ export class TrusharClient {
         state: "error",
         title: "Connection rejected",
         detail: terminalFailure
-          ? "Pair again to refresh this device credential."
+          ? credentials.authToken
+            ? "Pair again to refresh this device credential."
+            : "Check the integration access setting in Stonemite."
           : `Stonemite returned HTTP ${response.statusCode}. Retrying.`,
       });
       socket.terminate();
@@ -460,9 +506,7 @@ export class TrusharClient {
     }
     if (message.type === "error") {
       if (!message.request_id)
-        throw new ProtocolError(
-          "Authenticated endpoint returned an uncorrelated error.",
-        );
+        throw new ProtocolError("Stonemite returned an uncorrelated error.");
       const pending = this.#pending.get(message.request_id);
       if (!pending) return;
       clearTimeout(pending.timer);
@@ -473,7 +517,7 @@ export class TrusharClient {
       return;
     }
     throw new ProtocolError(
-      "Authenticated endpoint returned a pairing-only message.",
+      "Stonemite returned a pairing-only message on the control endpoint.",
     );
   }
 
@@ -547,7 +591,7 @@ export class TrusharClient {
         this.#onStatus({
           state: "reconnecting",
           title: "Connection stalled",
-          detail: "The private LAN link stopped responding. Retrying.",
+          detail: "The Stonemite connection stopped responding. Retrying.",
         });
         socket.terminate();
       }, this.#timing.heartbeatTimeoutMs);

@@ -1,6 +1,6 @@
 use crate::control::{
     validate_key_strokes, validate_text_input, ActivationStatus, ClientId, ClientTarget,
-    CommandOutcome, ControlError, InputKind, KeyCode, KeyStroke, StateSnapshot,
+    CommandOutcome, ControlError, EqAction, InputKind, KeyCode, KeyStroke, StateSnapshot,
     DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_PAUSE_MS,
 };
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,12 @@ pub enum ClientMessage {
         client_id: String,
         strokes: Vec<WireKeyStroke>,
     },
+    SendEqAction {
+        version: u16,
+        request_id: String,
+        client_id: String,
+        action: WireEqAction,
+    },
 }
 
 impl ClientMessage {
@@ -55,7 +61,8 @@ impl ClientMessage {
             | Self::SwapWindowNumbers { version, .. }
             | Self::SetBroadcast { version, .. }
             | Self::SendText { version, .. }
-            | Self::SendKeys { version, .. } => *version,
+            | Self::SendKeys { version, .. }
+            | Self::SendEqAction { version, .. } => *version,
         }
     }
 
@@ -66,7 +73,8 @@ impl ClientMessage {
             | Self::SwapWindowNumbers { request_id, .. }
             | Self::SetBroadcast { request_id, .. }
             | Self::SendText { request_id, .. }
-            | Self::SendKeys { request_id, .. } => request_id,
+            | Self::SendKeys { request_id, .. }
+            | Self::SendEqAction { request_id, .. } => request_id,
         }
     }
 
@@ -108,6 +116,12 @@ impl ClientMessage {
                     .map(KeyStroke::try_from)
                     .collect::<Result<Vec<_>, _>>()?;
                 validate_key_strokes(&strokes)?;
+            }
+            Self::SendEqAction {
+                client_id, action, ..
+            } => {
+                ClientId::new(client_id.clone())?;
+                EqAction::try_from(action.clone())?;
             }
             _ => {}
         }
@@ -174,6 +188,39 @@ impl TryFrom<WireKeyStroke> for KeyStroke {
             .map(KeyCode::new)
             .collect::<Result<Vec<_>, _>>()?;
         KeyStroke::new(keys, value.hold_ms, value.pause_ms)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WireEqAction {
+    UseCenterScreen,
+    InviteFollow,
+    Hotbar { bar: u8, button: u8 },
+    SpellGem { gem: u8 },
+}
+
+impl TryFrom<WireEqAction> for EqAction {
+    type Error = ControlError;
+
+    fn try_from(value: WireEqAction) -> Result<Self, Self::Error> {
+        match value {
+            WireEqAction::UseCenterScreen => Ok(Self::UseCenterScreen),
+            WireEqAction::InviteFollow => Ok(Self::InviteFollow),
+            WireEqAction::Hotbar { bar, button } => Self::hotbar(bar, button),
+            WireEqAction::SpellGem { gem } => Self::spell_gem(gem),
+        }
+    }
+}
+
+impl From<EqAction> for WireEqAction {
+    fn from(value: EqAction) -> Self {
+        match value {
+            EqAction::UseCenterScreen => Self::UseCenterScreen,
+            EqAction::InviteFollow => Self::InviteFollow,
+            EqAction::Hotbar { bar, button } => Self::Hotbar { bar, button },
+            EqAction::SpellGem { gem } => Self::SpellGem { gem },
+        }
     }
 }
 
@@ -318,6 +365,9 @@ pub enum Success {
         input: WireInputKind,
         strokes: usize,
     },
+    EqActionDelivered {
+        action: WireEqAction,
+    },
 }
 
 impl From<CommandOutcome> for Success {
@@ -341,6 +391,9 @@ impl From<CommandOutcome> for Success {
             CommandOutcome::InputDelivered { kind, strokes } => Self::InputDelivered {
                 input: kind.into(),
                 strokes,
+            },
+            CommandOutcome::EqActionDelivered { action } => Self::EqActionDelivered {
+                action: action.into(),
             },
         }
     }
@@ -407,6 +460,13 @@ impl From<&StateSnapshot> for WireState {
                 set_broadcast: value.capabilities.set_broadcast,
                 send_text: value.capabilities.send_text,
                 send_keys: value.capabilities.send_keys,
+                eq_actions: WireEqActionCapabilities {
+                    use_center_screen: value.capabilities.eq_actions.use_center_screen,
+                    invite_follow: value.capabilities.eq_actions.invite_follow,
+                    hotbars: value.capabilities.eq_actions.hotbars,
+                    hotbar_buttons: value.capabilities.eq_actions.hotbar_buttons,
+                    spell_gems: value.capabilities.eq_actions.spell_gems,
+                },
             },
         }
     }
@@ -449,6 +509,20 @@ pub struct WireBroadcast {
     pub enabled: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WireEqActionCapabilities {
+    #[serde(default)]
+    pub use_center_screen: bool,
+    #[serde(default)]
+    pub invite_follow: bool,
+    #[serde(default)]
+    pub hotbars: u8,
+    #[serde(default)]
+    pub hotbar_buttons: u8,
+    #[serde(default)]
+    pub spell_gems: u8,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WireCapabilities {
     pub activate: bool,
@@ -457,6 +531,8 @@ pub struct WireCapabilities {
     pub set_broadcast: bool,
     pub send_text: bool,
     pub send_keys: bool,
+    #[serde(default)]
+    pub eq_actions: WireEqActionCapabilities,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -636,6 +712,15 @@ mod tests {
                     pause_ms: 50,
                 }],
             },
+            ClientMessage::SendEqAction {
+                version: 1,
+                request_id: "nine".into(),
+                client_id: "client-1".into(),
+                action: WireEqAction::Hotbar {
+                    bar: 11,
+                    button: 12,
+                },
+            },
         ];
         for message in messages {
             round_trip(&message);
@@ -666,6 +751,7 @@ mod tests {
                 set_broadcast: true,
                 send_text: true,
                 send_keys: true,
+                eq_actions: crate::control::EqActionCapabilities::available(true),
             },
         };
         let messages = [
@@ -700,6 +786,13 @@ mod tests {
                 },
                 &snapshot,
             ),
+            ServerMessage::success(
+                "action".into(),
+                Success::EqActionDelivered {
+                    action: WireEqAction::SpellGem { gem: 14 },
+                },
+                &snapshot,
+            ),
             ServerMessage::error(
                 Some("five".into()),
                 ControlError::new(ErrorCode::ClientNotFound, "not found"),
@@ -730,6 +823,7 @@ mod tests {
         )
         .unwrap();
         assert!(!capabilities.swap_window_numbers);
+        assert_eq!(capabilities.eq_actions, WireEqActionCapabilities::default());
     }
 
     #[test]
@@ -776,6 +870,18 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(unknown_key.error.code, ErrorCode::InvalidArgument);
+
+        for invalid_action in [
+            r#"{"type":"hotbar","bar":0,"button":1}"#,
+            r#"{"type":"hotbar","bar":1,"button":13}"#,
+            r#"{"type":"spell_gem","gem":15}"#,
+        ] {
+            let request = format!(
+                r#"{{"type":"send_eq_action","version":1,"request_id":"x","client_id":"client-1","action":{invalid_action}}}"#
+            );
+            let error = decode_client_message(&request).unwrap_err();
+            assert_eq!(error.error.code, ErrorCode::InvalidArgument);
+        }
     }
 
     #[test]

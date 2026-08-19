@@ -50,8 +50,16 @@ describe("trushar parser", () => {
     delete raw.clients[1]!.input_ready;
     const capabilities = raw.capabilities as Record<string, unknown>;
     delete capabilities.swap_window_numbers;
+    delete capabilities.eq_actions;
     const parsed = parseState(raw);
     expect(parsed.capabilities.swap_window_numbers).toBe(false);
+    expect(parsed.capabilities.eq_actions).toEqual({
+      use_center_screen: false,
+      invite_follow: false,
+      hotbars: 0,
+      hotbar_buttons: 0,
+      spell_gems: 0,
+    });
     expect(parsed.clients.map((client) => client.id)).toEqual([
       "client-1",
       "client-2",
@@ -94,6 +102,26 @@ describe("trushar parser", () => {
     ).toMatchObject({
       type: "result",
       result: { type: "window_numbers_swapped" },
+    });
+    expect(
+      parseServerMessage(
+        JSON.stringify({
+          type: "result",
+          version: 1,
+          request_id: "action",
+          result: {
+            type: "eq_action_delivered",
+            action: { type: "hotbar", bar: 11, button: 12 },
+          },
+          state,
+        }),
+      ),
+    ).toMatchObject({
+      type: "result",
+      result: {
+        type: "eq_action_delivered",
+        action: { type: "hotbar", bar: 11, button: 12 },
+      },
     });
     expect(
       parseServerMessage(
@@ -162,6 +190,38 @@ describe("trushar parser", () => {
         request_id: "x",
         result: { type: "broadcast_set", enabled: "yes" },
         state: stateFixture(),
+      }),
+    ],
+    [
+      "malformed EQ action result",
+      JSON.stringify({
+        type: "result",
+        version: 1,
+        request_id: "x",
+        result: {
+          type: "eq_action_delivered",
+          action: { type: "spell_gem", gem: 15 },
+        },
+        state: stateFixture(),
+      }),
+    ],
+    [
+      "malformed EQ action capabilities",
+      JSON.stringify({
+        type: "state",
+        version: 1,
+        state: stateFixture({
+          capabilities: {
+            ...stateFixture().capabilities,
+            eq_actions: {
+              use_center_screen: true,
+              invite_follow: true,
+              hotbars: -1,
+              hotbar_buttons: 12,
+              spell_gems: 14,
+            },
+          },
+        }),
       }),
     ],
     [

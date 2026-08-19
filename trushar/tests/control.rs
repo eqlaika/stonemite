@@ -1,6 +1,7 @@
 use trushar::control::{
-    ActivationStatus, BroadcastState, ClientTarget, CommandOutcome, Controller, ErrorCode,
-    InMemoryController, InputKind, KeyCode, KeyStroke, RecordedInput, SnapshotMapper, SourceClient,
+    ActivationStatus, BroadcastState, ClientTarget, CommandOutcome, Controller, EqAction,
+    ErrorCode, InMemoryController, InputKind, KeyCode, KeyStroke, RecordedInput, SnapshotMapper,
+    SourceClient,
 };
 
 fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
@@ -55,6 +56,10 @@ fn maps_zero_and_multiple_loaded_clients_without_confusing_window_number_with_la
     assert!(mapped.clients[0].input_ready);
     assert!(mapped.capabilities.swap_window_numbers);
     assert!(mapped.capabilities.send_text && mapped.capabilities.send_keys);
+    assert!(mapped.capabilities.eq_actions.use_center_screen);
+    assert_eq!(mapped.capabilities.eq_actions.hotbars, 11);
+    assert_eq!(mapped.capabilities.eq_actions.hotbar_buttons, 12);
+    assert_eq!(mapped.capabilities.eq_actions.spell_gems, 14);
     assert_eq!(mapped.clients[1].class_code.as_deref(), Some("SHM"));
 }
 
@@ -361,13 +366,41 @@ fn targeted_text_and_key_sequences_use_exact_ids_and_record_delivery() {
                 submit: true,
             },
             RecordedInput::Keys {
-                client_id: client,
+                client_id: client.clone(),
+                strokes: vec![stroke.clone()],
+            },
+        ]
+    );
+    let action = EqAction::hotbar(11, 12).unwrap();
+    let delivered = block_on(control.send_eq_action(client.clone(), action.clone())).unwrap();
+    assert_eq!(
+        delivered,
+        CommandOutcome::EqActionDelivered {
+            action: action.clone()
+        }
+    );
+    assert_eq!(
+        control.recorded_inputs(),
+        vec![
+            RecordedInput::Text {
+                client_id: client.clone(),
+                text: "/who".into(),
+                submit: true,
+            },
+            RecordedInput::Keys {
+                client_id: client.clone(),
                 strokes: vec![stroke],
+            },
+            RecordedInput::EqAction {
+                client_id: client,
+                action
             },
         ]
     );
     let capabilities = control.snapshot().capabilities;
     assert!(capabilities.send_text && capabilities.send_keys);
+    assert!(capabilities.eq_actions.use_center_screen);
+    assert!(capabilities.eq_actions.invite_follow);
 }
 
 #[test]
@@ -404,4 +437,7 @@ fn targeted_input_reports_unavailable_invalid_failed_and_disappeared() {
 
     assert!(KeyCode::new("launch_missiles").is_err());
     assert!(KeyStroke::new(Vec::new(), 50, 50).is_err());
+    assert!(EqAction::hotbar(0, 1).is_err());
+    assert!(EqAction::hotbar(1, 13).is_err());
+    assert!(EqAction::spell_gem(15).is_err());
 }

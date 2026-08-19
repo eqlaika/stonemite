@@ -3,98 +3,117 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Stonemite · EQ boxing connection</title>
+    <title>Stonemite connection</title>
     <link rel="stylesheet" href="pairing.css" />
     <script src="sdpi-components.js"></script>
     <script src="pairing.js" defer></script>
   </head>
   <body>
-    <!--
-      THESIS: Pair once, then make connection truth unmistakable; this refuses a generic settings form with hidden status.
-      OWN-WORLD: Stonemite charcoal surfaces, cyan link state, green readiness, amber recovery, and the overlay's direct utility language.
-      STORY: Enter the address Stonemite shows, exchange its short-lived code, then trust the saved connection and clear recovery actions.
-      FIRST VIEWPORT: A compact link-status header leads directly into address and six-digit code, with the primary Pair action immediately beneath.
-      FORM: Operate-mode extension of the approved 72 px Stream Deck study; no separate concept seed.
-      FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
-    -->
     <main>
       <header
         class="connection"
-        data-state="idle"
+        data-state="connecting"
         id="connection"
         role="status"
         aria-live="polite"
-        aria-busy="false"
+        aria-busy="true"
       >
         <span class="status-dot" aria-hidden="true"></span>
-        <span>
-          <strong id="status-title">Not paired</strong>
-          <small id="status-detail">Open Stonemite settings to begin.</small>
+        <span class="status-copy">
+          <strong id="status-title">Connecting</strong>
+          <small id="status-detail">Looking for Stonemite on this PC.</small>
         </span>
+        <span class="mode-badge" id="connection-mode">This PC</span>
       </header>
 
-      <form id="pair-form" novalidate>
-        <label for="address">Stonemite address</label>
-        <input
-          id="address"
-          name="address"
-          type="text"
-          placeholder="stonemite-pc.local:19720"
-          autocomplete="off"
-          spellcheck="false"
-          aria-describedby="address-help address-error"
-        />
-        <p class="help" id="address-help">
-          Use the address shown by Stonemite, including the port.
-        </p>
-        <p class="error" id="address-error" role="alert" hidden></p>
-
-        <label for="code">Pairing code</label>
-        <input
-          id="code"
-          name="code"
-          type="text"
-          inputmode="numeric"
-          autocomplete="one-time-code"
-          maxlength="7"
-          placeholder="000 000"
-          aria-describedby="code-help code-error"
-        />
-        <p class="help" id="code-help">
-          In Stonemite, choose Pair a device. The code expires after five
-          minutes.
-        </p>
-        <p class="error" id="code-error" role="alert" hidden></p>
-        <p class="error" id="connection-error" role="alert" hidden></p>
-
-        <button class="primary" id="pair" type="submit">
-          Pair with Stonemite
-        </button>
-      </form>
-
-      <section class="paired-actions" aria-label="Connection actions">
-        <button id="reconnect" type="button">Reconnect</button>
-        <button class="quiet" id="forget" type="button">
-          Forget this device
-        </button>
+      <section
+        class="recovery"
+        id="recovery"
+        aria-labelledby="recovery-title"
+        hidden
+      >
+        <strong id="recovery-title">Not connected yet</strong>
+        <p id="recovery-detail"></p>
+        <button id="retry" type="button">Retry now</button>
       </section>
 
-      <section class="layout-help" aria-labelledby="layout-title">
-        <strong id="layout-title">Customize your deck</strong>
-        <ol>
-          <li>Start with the included editable 5 × 3 profile or any layout.</li>
-          <li>
-            Drag individual character slots and controls from
-            <strong>Stonemite · EQ boxing</strong> wherever you want them.
-          </li>
-          <li>Leave each key image at its default so live state can render.</li>
-        </ol>
-      </section>
+      <details class="lan-panel" id="lan-panel">
+        <summary id="lan-summary">Connect to another PC</summary>
+        <div class="lan-body">
+          <p class="intro">
+            Only use LAN setup when Stream Deck Desktop and Stonemite run on
+            different PCs.
+          </p>
 
-      <p class="privacy">
-        The long credential stays in Stream Deck's plugin settings. Use LAN
-        access only on a trusted private network.
-      </p>
+          <section
+            class="lan-current"
+            id="lan-current"
+            aria-labelledby="lan-current-title"
+            hidden
+          >
+            <span>
+              <small id="lan-current-title">Paired Stonemite PC</small>
+              <strong id="lan-address"></strong>
+            </span>
+            <div class="paired-actions">
+              <button id="lan-reconnect" type="button">Reconnect</button>
+              <button id="replace-lan" type="button">Pair another PC</button>
+            </div>
+            <button class="quiet full" id="use-local" type="button">
+              Use this PC
+            </button>
+          </section>
+
+          <form id="pair-form" novalidate>
+            <label for="address">Stonemite address</label>
+            <input
+              id="address"
+              name="address"
+              type="text"
+              placeholder="jaggedpine.local:19720"
+              autocomplete="off"
+              spellcheck="false"
+              aria-describedby="address-help address-error"
+            />
+            <p class="help" id="address-help">
+              Enter the address shown in Stonemite, including the port.
+            </p>
+            <p class="error" id="address-error" role="alert" hidden></p>
+
+            <label for="code">Pairing code</label>
+            <input
+              id="code"
+              name="code"
+              type="text"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              maxlength="7"
+              placeholder="000 000"
+              aria-describedby="code-help code-error"
+            />
+            <p class="help" id="code-help">
+              In Stonemite, choose Pair a device. The code expires after five
+              minutes.
+            </p>
+            <p class="error" id="code-error" role="alert" hidden></p>
+            <p class="error" id="connection-error" role="alert" hidden></p>
+
+            <button class="primary" id="pair" type="submit">
+              Pair over LAN
+            </button>
+            <button class="quiet full" id="cancel-replace" type="button" hidden>
+              Cancel
+            </button>
+          </form>
+
+          <p class="privacy">
+            LAN credentials stay in Stream Deck's plugin settings. Use
+            unencrypted LAN access only on a trusted private network.
+          </p>
+        </div>
+      </details>
+
+      <p class="scope">Connection setup applies to every Stonemite key.</p>
     </main>
   </body>
 </html>

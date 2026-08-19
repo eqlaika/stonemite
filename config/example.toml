@@ -47,14 +47,13 @@ pip_edge = "right"
 # update_check_interval_days = 7
 
 # Generic trushar control/state and targeted-input WebSocket API. The server is
-# disabled by default. Enable integrations in Settings > General, or set
-# enabled = true here. Settings can configure this-PC or paired local-network
-# access. Enabling the server opts into all operations; targeted input also
-# requires trusik = true. These settings require restart.
-# The default bind is IPv4 loopback only; no token is needed for a trusted
-# native localhost client that sends no Origin header.
+# enabled by default on IPv4 loopback so trusted apps on this PC work without
+# setup or authentication. Settings can disable integrations or configure
+# paired local-network access. Targeted input also requires trusik = true.
+# Integration settings require restart. A native localhost client sends no
+# Origin header; browser-originated unauthenticated connections are rejected.
 # [trushar]
-# enabled = true
+# enabled = false
 # bind = "127.0.0.1:19720"
 
 # LAN access is explicit. Settings generates the long credential and pairs

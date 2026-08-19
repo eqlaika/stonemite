@@ -1,7 +1,5 @@
-import { once } from "node:events";
-import { WebSocketServer } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CommandError } from "../src/trushar/client";
+import { CommandError, LOCAL_CONNECTION } from "../src/trushar/client";
 import { definitionForKey } from "../src/actions/key-definitions";
 import { DEFAULT_LAYOUT, type DashboardKey } from "../src/state/layout";
 import { DashboardStore } from "../src/state/store";
@@ -24,7 +22,7 @@ vi.mock("@elgato/streamdeck", () => ({
 }));
 
 import {
-  credentialsForReconnect,
+  connectionForSettings,
   DashboardController,
   updateVisibleKeyImage,
   type VisibleKey,
@@ -162,15 +160,15 @@ describe("DashboardController", () => {
     expect(swap.setImage).toHaveBeenCalledTimes(settledFrameCount);
   });
 
-  it("invites ready named boxes, waits one second, then sends Ctrl+I", async () => {
+  it("invites ready named boxes, waits one second, then sends Invite/Follow", async () => {
     vi.useFakeTimers();
     const store = groupStore();
-    const firstAcceptance = deferred<ReturnType<typeof inputResult>>();
+    const firstAcceptance = deferred<ReturnType<typeof eqActionResult>>();
     const client = fakeClient();
     client.sendText.mockResolvedValue(inputResult("text"));
-    client.sendKeys
+    client.sendEqAction
       .mockReturnValueOnce(firstAcceptance.promise)
-      .mockResolvedValue(inputResult("keys"));
+      .mockResolvedValue(eqActionResult({ type: "invite_follow" }));
     const action = new DashboardController(store, client as never);
     const group = fakeKey("group", 0, 3);
 
@@ -183,7 +181,7 @@ describe("DashboardController", () => {
       ["leader-id", "/invite Serein", true],
       ["leader-id", "/invite Rook", true],
     ]);
-    expect(client.sendKeys).not.toHaveBeenCalled();
+    expect(client.sendEqAction).not.toHaveBeenCalled();
     expect(store.view.feedback.get("0,3")).toMatchObject({
       kind: "pending",
       message: "Waiting 1 sec",
@@ -193,39 +191,21 @@ describe("DashboardController", () => {
     await action.onKeyDown({ action: group } as never);
     expect(client.sendText).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(999);
-    expect(client.sendKeys).not.toHaveBeenCalled();
+    expect(client.sendEqAction).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(client.sendKeys).toHaveBeenCalledTimes(1);
+    expect(client.sendEqAction).toHaveBeenCalledTimes(1);
     expect(store.view.feedback.get("0,3")).toMatchObject({
       kind: "pending",
       message: "Accepting",
     });
-    firstAcceptance.resolve(inputResult("keys"));
+    firstAcceptance.resolve(eqActionResult({ type: "invite_follow" }));
     await vi.advanceTimersByTimeAsync(0);
     await press;
 
-    expect(client.sendKeys.mock.calls).toEqual([
-      [
-        "serein-id",
-        [
-          {
-            keys: ["left_control", "i"],
-            hold_ms: 50,
-            pause_ms: 40,
-          },
-        ],
-      ],
-      [
-        "rook-id",
-        [
-          {
-            keys: ["left_control", "i"],
-            hold_ms: 50,
-            pause_ms: 40,
-          },
-        ],
-      ],
+    expect(client.sendEqAction.mock.calls).toEqual([
+      ["serein-id", { type: "invite_follow" }],
+      ["rook-id", { type: "invite_follow" }],
     ]);
     expect(store.view.feedback.get("0,3")).toBeUndefined();
     expect(group.showAlert).not.toHaveBeenCalled();
@@ -238,7 +218,9 @@ describe("DashboardController", () => {
     client.sendText
       .mockRejectedValueOnce(new CommandError("send_failed", "missed"))
       .mockResolvedValue(inputResult("text"));
-    client.sendKeys.mockResolvedValue(inputResult("keys"));
+    client.sendEqAction.mockResolvedValue(
+      eqActionResult({ type: "invite_follow" }),
+    );
     const action = new DashboardController(store, client as never);
     const group = fakeKey("group", 0, 3);
 
@@ -249,14 +231,10 @@ describe("DashboardController", () => {
     await press;
 
     expect(client.sendText).toHaveBeenCalledTimes(2);
-    expect(client.sendKeys).toHaveBeenCalledTimes(1);
-    expect(client.sendKeys).toHaveBeenCalledWith("rook-id", [
-      {
-        keys: ["left_control", "i"],
-        hold_ms: 50,
-        pause_ms: 40,
-      },
-    ]);
+    expect(client.sendEqAction).toHaveBeenCalledTimes(1);
+    expect(client.sendEqAction).toHaveBeenCalledWith("rook-id", {
+      type: "invite_follow",
+    });
     expect(store.view.feedback.get("0,3")).toMatchObject({
       kind: "error",
       message: "Partial send",
@@ -447,6 +425,73 @@ describe("DashboardController", () => {
     expect(decodeURIComponent(broadcastImage)).not.toContain("DONE");
   });
 
+  it("sends Use Center Screen to every ready box concurrently", async () => {
+    vi.useFakeTimers();
+    const store = groupStore();
+    const deliveries = [
+      deferred<ReturnType<typeof eqActionResult>>(),
+      deferred<ReturnType<typeof eqActionResult>>(),
+      deferred<ReturnType<typeof eqActionResult>>(),
+      deferred<ReturnType<typeof eqActionResult>>(),
+    ];
+    const client = fakeClient();
+    client.sendEqAction
+      .mockReturnValueOnce(deliveries[0]!.promise)
+      .mockReturnValueOnce(deliveries[1]!.promise)
+      .mockReturnValueOnce(deliveries[2]!.promise)
+      .mockReturnValueOnce(deliveries[3]!.promise);
+    const action = new DashboardController(store, client as never);
+    const use = fakeKey("use", 1, 4);
+
+    await action.onWillAppear({ action: use } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+    const press = action.onKeyDown({ action: use } as never);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(client.sendEqAction.mock.calls).toEqual([
+      ["leader-id", { type: "use_center_screen" }],
+      ["serein-id", { type: "use_center_screen" }],
+      ["unknown-id", { type: "use_center_screen" }],
+      ["rook-id", { type: "use_center_screen" }],
+    ]);
+    expect(store.view.feedback.get("1,4")).toMatchObject({
+      kind: "pending",
+      message: "Using",
+      motion: "use",
+    });
+    await action.onKeyDown({ action: use } as never);
+    expect(client.sendEqAction).toHaveBeenCalledTimes(4);
+
+    for (const delivery of deliveries)
+      delivery.resolve(eqActionResult({ type: "use_center_screen" }));
+    await press;
+    expect(store.view.feedback.get("1,4")).toBeUndefined();
+    expect(use.showAlert).not.toHaveBeenCalled();
+  });
+
+  it("reports partial Use Center Screen delivery", async () => {
+    vi.useFakeTimers();
+    const store = groupStore();
+    const client = fakeClient();
+    client.sendEqAction
+      .mockResolvedValueOnce(eqActionResult({ type: "use_center_screen" }))
+      .mockRejectedValueOnce(new CommandError("eq_action_unbound", "unbound"))
+      .mockResolvedValueOnce(eqActionResult({ type: "use_center_screen" }))
+      .mockResolvedValueOnce(eqActionResult({ type: "use_center_screen" }));
+    const action = new DashboardController(store, client as never);
+    const use = fakeKey("use", 1, 4);
+
+    await action.onWillAppear({ action: use } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+    await action.onKeyDown({ action: use } as never);
+
+    expect(store.view.feedback.get("1,4")).toMatchObject({
+      kind: "error",
+      message: "Partial use",
+    });
+    expect(use.showAlert).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the Logo action inert and ignores unknown actions", async () => {
     vi.useFakeTimers();
     const store = groupStore();
@@ -472,6 +517,7 @@ describe("DashboardController", () => {
     expect(client.setBroadcast).not.toHaveBeenCalled();
     expect(client.sendText).not.toHaveBeenCalled();
     expect(client.sendKeys).not.toHaveBeenCalled();
+    expect(client.sendEqAction).not.toHaveBeenCalled();
     expect(store.view.feedback.size).toBe(0);
     for (const key of reserved) expect(key.showAlert).not.toHaveBeenCalled();
   });
@@ -491,39 +537,16 @@ describe("DashboardController", () => {
     expect(decodeURIComponent(image)).toContain(">1</text>");
   });
 
-  it("cannot restore forgotten credentials from a delayed reconnect or pair", async () => {
-    const settings = deferred<{ address: string; authToken: string }>();
-    sdk.getGlobalSettings.mockReturnValue(settings.promise);
-    const store = connectedStore();
-    const client = fakeClient();
-    const action = new DashboardController(store, client as never);
-
-    const reconnect = action.onSendToPlugin({
-      payload: {
-        type: "reconnect",
-        address: "server-a.local:19720",
-      },
-    } as never);
-    await Promise.resolve();
-    const forget = action.onSendToPlugin({
-      payload: { type: "forget" },
-    } as never);
-    settings.resolve({
-      address: "server-a.local:19720",
-      authToken: "old-token",
-    });
-    await Promise.all([reconnect, forget]);
-    expect(client.disconnect).toHaveBeenCalledTimes(1);
-    expect(client.configure).not.toHaveBeenCalled();
-    expect(sdk.setGlobalSettings).toHaveBeenCalledTimes(1);
-    expect(sdk.setGlobalSettings).toHaveBeenCalledWith({});
-
-    sdk.setGlobalSettings.mockClear();
+  it("returns to loopback and cannot restore a delayed LAN pairing", async () => {
     const pairing = deferred<{
       address: string;
       authToken: string;
     }>();
+    const store = connectedStore();
+    const client = fakeClient();
     client.pair.mockReturnValue(pairing.promise);
+    const action = new DashboardController(store, client as never);
+
     const pair = action.onSendToPlugin({
       payload: {
         type: "pair",
@@ -531,62 +554,64 @@ describe("DashboardController", () => {
         code: "482731",
       },
     } as never);
-    const forgetPair = action.onSendToPlugin({
+    const useThisPc = action.onSendToPlugin({
       payload: { type: "forget" },
     } as never);
     pairing.resolve({
       address: "server-a.local:19720",
       authToken: "new-token",
     });
-    await Promise.all([pair, forgetPair]);
+    await Promise.all([pair, useThisPc]);
+
+    expect(client.configure).toHaveBeenCalledTimes(1);
+    expect(client.configure).toHaveBeenCalledWith(LOCAL_CONNECTION);
     expect(sdk.setGlobalSettings).toHaveBeenCalledTimes(1);
     expect(sdk.setGlobalSettings).toHaveBeenCalledWith({});
-    expect(client.configure).not.toHaveBeenCalled();
   });
 
-  it("never sends a saved token to an edited server address", async () => {
-    const serverB = new WebSocketServer({ port: 0 });
-    await once(serverB, "listening");
-    const bound = serverB.address();
-    if (!bound || typeof bound === "string") throw new Error("No test port.");
-    let connections = 0;
-    serverB.on("connection", () => {
-      connections += 1;
-    });
+  it("keeps the LAN connection active when clearing its credential fails", async () => {
+    sdk.setGlobalSettings.mockRejectedValueOnce(
+      new Error("settings unavailable"),
+    );
     const store = connectedStore();
     const client = fakeClient();
     const action = new DashboardController(store, client as never);
-    sdk.getGlobalSettings.mockResolvedValue({
-      address: "server-a.local:19720",
-      authToken: "server-a-token",
-    });
 
-    await action.onSendToPlugin({
-      payload: {
-        type: "reconnect",
-        address: `127.0.0.1:${bound.port}`,
-      },
-    } as never);
+    await expect(
+      action.onSendToPlugin({ payload: { type: "forget" } } as never),
+    ).rejects.toThrow("settings unavailable");
+
     expect(client.configure).not.toHaveBeenCalled();
-    expect(connections).toBe(0);
-    await new Promise<void>((resolve) => serverB.close(() => resolve()));
+    expect(store.view.snapshot).not.toBeNull();
+  });
+
+  it("retries the already configured local or LAN connection", async () => {
+    const store = connectedStore();
+    const client = fakeClient();
+    const action = new DashboardController(store, client as never);
+
+    await action.onSendToPlugin({ payload: { type: "reconnect" } } as never);
+
+    expect(client.reconnect).toHaveBeenCalledTimes(1);
+    expect(client.configure).not.toHaveBeenCalled();
   });
 });
 
 describe("action helpers", () => {
-  it("binds a credential to its normalized paired address", () => {
+  it("uses loopback by default and normalizes complete LAN settings", () => {
+    expect(connectionForSettings({})).toEqual(LOCAL_CONNECTION);
     expect(
-      credentialsForReconnect(
-        { address: "SERVER-A.local:19720", authToken: "token" },
-        "server-a.local:19720",
-      ),
+      connectionForSettings({
+        address: "SERVER-A.local:19720",
+        authToken: " token ",
+      }),
     ).toEqual({ address: "server-a.local:19720", authToken: "token" });
     expect(() =>
-      credentialsForReconnect(
-        { address: "server-a.local:19720", authToken: "token" },
-        "server-b.local:19720",
-      ),
-    ).toThrow("address changed");
+      connectionForSettings({ address: "server-a.local:19720" }),
+    ).toThrow("incomplete");
+    expect(() => connectionForSettings({ authToken: "token" })).toThrow(
+      "incomplete",
+    );
   });
 
   it("only caches an image after setImage succeeds, allowing a later retry", async () => {
@@ -700,8 +725,10 @@ function fakeClient() {
     setBroadcast: vi.fn(),
     sendText: vi.fn(),
     sendKeys: vi.fn(),
+    sendEqAction: vi.fn(),
     pair: vi.fn(),
     configure: vi.fn(),
+    reconnect: vi.fn(),
     disconnect: vi.fn(),
   };
 }
@@ -776,6 +803,19 @@ function inputResult(input: "text" | "keys") {
       type: "input_delivered" as const,
       input,
       strokes: 1,
+    },
+    state: stateFixture(),
+  };
+}
+
+function eqActionResult(action: import("../src/types/trushar").EqAction) {
+  return {
+    type: "result" as const,
+    version: 1 as const,
+    request_id: "eq-action-1",
+    result: {
+      type: "eq_action_delivered" as const,
+      action,
     },
     state: stateFixture(),
   };

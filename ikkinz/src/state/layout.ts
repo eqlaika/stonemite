@@ -1,4 +1,4 @@
-import type { DashboardView, Feedback } from "./store";
+import type { ConnectionPhase, DashboardView, Feedback } from "./store";
 import type { TrusharClient, TrusharState } from "../types/trushar";
 
 export const GRID_COLUMNS = 5;
@@ -10,13 +10,14 @@ export type DashboardKey =
   | "group"
   | "broadcast"
   | "follow"
+  | "use"
   | "assist"
   | "swap"
   | "logo";
 
 export const DEFAULT_LAYOUT = [
   ["character-1", "character-2", "character-3", "group", "broadcast"],
-  ["character-4", "character-5", "character-6", "follow", "blank"],
+  ["character-4", "character-5", "character-6", "follow", "use"],
   ["logo", "blank", "blank", "assist", "swap"],
 ] as const satisfies ReadonlyArray<ReadonlyArray<DashboardKey | "blank">>;
 
@@ -49,7 +50,7 @@ export type KeyCell = { row?: number; column?: number } & (
     }
   | { type: "empty"; slot: CharacterSlot }
   | { type: "blank" }
-  | { type: "logo" }
+  | { type: "logo"; connection: ConnectionPhase }
   | {
       type: "group";
       available: boolean;
@@ -64,6 +65,12 @@ export type KeyCell = { row?: number; column?: number } & (
     }
   | {
       type: "assist";
+      available: boolean;
+      ready: number;
+      status: string;
+    }
+  | {
+      type: "use";
       available: boolean;
       ready: number;
       status: string;
@@ -143,7 +150,8 @@ export function buildGroupPlan(view: DashboardView): GroupPlan {
         )
       : [];
   const inputAvailable = Boolean(
-    snapshot?.capabilities.send_text && snapshot.capabilities.send_keys,
+    snapshot?.capabilities.send_text &&
+    snapshot.capabilities.eq_actions.invite_follow,
   );
   const available =
     view.connection.state === "connected" &&
@@ -206,6 +214,34 @@ export function buildFollowPlan(view: DashboardView): FollowPlan {
     status = `${followers.length} ${followers.length === 1 ? "BOX" : "BOXES"} READY`;
 
   return { leader, followers, available, status };
+}
+
+export interface UsePlan {
+  clients: TrusharClient[];
+  available: boolean;
+  status: string;
+}
+
+export function buildUsePlan(view: DashboardView): UsePlan {
+  const clients =
+    view.snapshot?.clients.filter((client) => client.input_ready) ?? [];
+  const capabilityAvailable = Boolean(
+    view.snapshot?.capabilities.eq_actions.use_center_screen,
+  );
+  const available =
+    view.connection.state === "connected" &&
+    capabilityAvailable &&
+    clients.length > 0;
+
+  let status: string;
+  if (view.connection.state !== "connected") status = "OFFLINE";
+  else if (!view.snapshot) status = "NO STATE";
+  else if (!capabilityAvailable) status = "UPDATE STONEMITE";
+  else if (clients.length === 0) status = "NO READY BOXES";
+  else
+    status = `${clients.length} ${clients.length === 1 ? "BOX" : "BOXES"} READY`;
+
+  return { clients, available, status };
 }
 
 export type AssistMain = FollowLeader;
@@ -280,7 +316,8 @@ export function buildKey(
   feedbackKey: string = key,
   swapArmed = false,
 ): KeyCell {
-  if (key === "logo") return { type: "logo" };
+  if (key === "logo")
+    return { type: "logo", connection: view.connection.state };
 
   const feedback = view.feedback.get(feedbackKey);
   if (feedback && feedback.until > Date.now())
@@ -331,6 +368,15 @@ export function buildKey(
         type: "follow",
         available: plan.available,
         ready: plan.followers.length,
+        status: plan.status,
+      };
+    }
+    case "use": {
+      const plan = buildUsePlan(view);
+      return {
+        type: "use",
+        available: plan.available,
+        ready: plan.clients.length,
         status: plan.status,
       };
     }

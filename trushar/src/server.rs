@@ -808,6 +808,40 @@ async fn handle_frame(
                     commands.push(Box::pin(async move { (request_id, future.await) }));
                     true
                 }
+                Ok(ClientMessage::SendEqAction {
+                    request_id,
+                    client_id,
+                    action,
+                    ..
+                }) => {
+                    if commands.len() >= MAX_IN_FLIGHT_COMMANDS {
+                        let response = ServerMessage::error(
+                            Some(request_id),
+                            ControlError::new(
+                                ErrorCode::InvalidArgument,
+                                "too many commands are already in flight",
+                            ),
+                        );
+                        return send_message(websocket, &response).await.is_ok();
+                    }
+                    let client_id = match crate::control::ClientId::new(client_id) {
+                        Ok(client_id) => client_id,
+                        Err(error) => {
+                            let response = ServerMessage::error(Some(request_id), error);
+                            return send_message(websocket, &response).await.is_ok();
+                        }
+                    };
+                    let action = match crate::control::EqAction::try_from(action) {
+                        Ok(action) => action,
+                        Err(error) => {
+                            let response = ServerMessage::error(Some(request_id), error);
+                            return send_message(websocket, &response).await.is_ok();
+                        }
+                    };
+                    let future = controller.send_eq_action(client_id, action);
+                    commands.push(Box::pin(async move { (request_id, future.await) }));
+                    true
+                }
                 Err(error) => {
                     let response = ServerMessage::error(error.request_id, error.error);
                     send_message(websocket, &response).await.is_ok()

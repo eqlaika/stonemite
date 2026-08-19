@@ -3,12 +3,13 @@
 use futures_util::future::BoxFuture;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use trushar::control::{
-    BroadcastState, ClientId, ClientTarget, CommandOutcome, ControlError, Controller, ErrorCode,
-    InputKind, KeyStroke, SnapshotMapper, SourceClient, StateHub, StateSnapshot,
+    BroadcastState, ClientId, ClientTarget, CommandOutcome, ControlError, Controller, EqAction,
+    ErrorCode, InputKind, KeyStroke, SnapshotMapper, SourceClient, StateHub, StateSnapshot,
     DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_PAUSE_MS,
 };
 use trushar::server::{ServerConfig, ServerHandle};
@@ -50,6 +51,11 @@ enum UiCommand {
         strokes: Vec<KeyStroke>,
         reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
     },
+    SendEqAction {
+        client_id: ClientId,
+        action: EqAction,
+        reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
+    },
 }
 
 struct ResolvedStroke {
@@ -67,9 +73,14 @@ enum InputPhase {
     Finish,
 }
 
+enum ActiveInputKind {
+    Input(InputKind),
+    EqAction(EqAction),
+}
+
 struct ActiveInput {
     pid: u32,
-    kind: InputKind,
+    kind: ActiveInputKind,
     strokes: Vec<ResolvedStroke>,
     index: usize,
     phase: InputPhase,
@@ -84,6 +95,8 @@ struct UiState {
     hub: Arc<StateHub>,
     tray_hwnd: HWND,
     active_inputs: HashMap<u32, ActiveInput>,
+    keymaps: HashMap<PathBuf, crate::eq_keymap::EqKeymapResolver>,
+    default_eq_dir: PathBuf,
     pairing: Option<trushar::server::PairingHandle>,
     pairing_auth_token: Option<String>,
 }
@@ -214,11 +227,27 @@ impl Controller for ProductionController {
             reply,
         })
     }
+
+    fn send_eq_action(
+        &self,
+        client_id: ClientId,
+        action: EqAction,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>> {
+        self.enqueue(INPUT_TIMEOUT, move |reply| UiCommand::SendEqAction {
+            client_id,
+            action,
+            reply,
+        })
+    }
 }
 
 /// Initialize the bounded dispatcher and optionally start the dedicated server thread.
 /// Called after the tray window exists and before its message loop starts.
-pub fn start(hwnd: HWND, config: &crate::config::TrusharConfig) -> Option<ServerHandle> {
+pub fn start(
+    hwnd: HWND,
+    config: &crate::config::TrusharConfig,
+    eq_dir: PathBuf,
+) -> Option<ServerHandle> {
     let (sender, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
     let hub = Arc::new(StateHub::new(Default::default()));
     *ui() = Some(UiState {
@@ -228,6 +257,8 @@ pub fn start(hwnd: HWND, config: &crate::config::TrusharConfig) -> Option<Server
         hub: hub.clone(),
         tray_hwnd: hwnd,
         active_inputs: HashMap::new(),
+        keymaps: HashMap::new(),
+        default_eq_dir: eq_dir,
         pairing: None,
         pairing_auth_token: None,
     });
@@ -349,6 +380,11 @@ pub fn drain_commands() {
                 strokes,
                 reply,
             } => start_key_input(client_id, strokes, reply),
+            UiCommand::SendEqAction {
+                client_id,
+                action,
+                reply,
+            } => start_eq_action(client_id, action, reply),
         }
     }
 }
@@ -455,9 +491,12 @@ fn start_text_input(
         .and_then(|()| resolve_text_strokes(&text, submit));
     match resolved {
         Ok(strokes) => {
-            if let Err((reply, error)) =
-                start_resolved_input(client_id, InputKind::Text, strokes, reply)
-            {
+            if let Err((reply, error)) = start_resolved_input(
+                client_id,
+                ActiveInputKind::Input(InputKind::Text),
+                strokes,
+                reply,
+            ) {
                 let _ = reply.send(Err(error));
             }
         }
@@ -476,14 +515,79 @@ fn start_key_input(
         .and_then(|()| resolve_key_strokes(&strokes));
     match resolved {
         Ok(strokes) => {
+            if let Err((reply, error)) = start_resolved_input(
+                client_id,
+                ActiveInputKind::Input(InputKind::Keys),
+                strokes,
+                reply,
+            ) {
+                let _ = reply.send(Err(error));
+            }
+        }
+        Err(error) => {
+            let _ = reply.send(Err(error));
+        }
+    }
+}
+
+fn start_eq_action(
+    client_id: ClientId,
+    action: EqAction,
+    reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
+) {
+    let resolved = action.validate().and_then(|()| {
+        let source = resolve_input_source(&client_id)?;
+        let Some(state) = ui().as_mut() else {
+            return Err(ControlError::new(
+                ErrorCode::InternalError,
+                "control dispatcher is stopped",
+            ));
+        };
+        let eq_dir = crate::eq_windows::process_eq_directory(source.private_key as u32)
+            .unwrap_or_else(|| state.default_eq_dir.clone());
+        let binding = state
+            .keymaps
+            .entry(eq_dir.clone())
+            .or_insert_with(|| crate::eq_keymap::EqKeymapResolver::new(eq_dir))
+            .resolve(
+                &action,
+                crate::eq_keymap::ClientIdentity {
+                    character: source.character.as_deref(),
+                    server: source.server.as_deref(),
+                    class_code: source.class_code.as_deref(),
+                },
+            )
+            .map_err(map_eq_action_error)?;
+        Ok(vec![ResolvedStroke {
+            scans: binding.scans,
+            hold: Duration::from_millis(u64::from(DEFAULT_KEY_HOLD_MS)),
+            pause: Duration::ZERO,
+        }])
+    });
+
+    match resolved {
+        Ok(strokes) => {
             if let Err((reply, error)) =
-                start_resolved_input(client_id, InputKind::Keys, strokes, reply)
+                start_resolved_input(client_id, ActiveInputKind::EqAction(action), strokes, reply)
             {
                 let _ = reply.send(Err(error));
             }
         }
         Err(error) => {
             let _ = reply.send(Err(error));
+        }
+    }
+}
+
+fn map_eq_action_error(error: crate::eq_keymap::ResolveError) -> ControlError {
+    match error {
+        crate::eq_keymap::ResolveError::Unbound => ControlError::new(
+            ErrorCode::EqActionUnbound,
+            "the selected EQ action has no primary or alternate key binding",
+        ),
+        crate::eq_keymap::ResolveError::Read(message)
+        | crate::eq_keymap::ResolveError::Malformed(message) => {
+            ControlError::new(ErrorCode::InputOperationFailed, message)
         }
     }
 }
@@ -495,7 +599,7 @@ type StartInputError = (
 
 fn start_resolved_input(
     client_id: ClientId,
-    kind: InputKind,
+    kind: ActiveInputKind,
     strokes: Vec<ResolvedStroke>,
     reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
 ) -> Result<(), StartInputError> {
@@ -566,7 +670,7 @@ fn map_targeted_input_error(error: crate::broadcast::TargetedInputError) -> Cont
     ControlError::new(code, message)
 }
 
-fn resolve_input_pid(client_id: &ClientId) -> Result<u32, ControlError> {
+fn resolve_input_source(client_id: &ClientId) -> Result<SourceClient, ControlError> {
     if !crate::broadcast::is_available() {
         return Err(ControlError::new(
             ErrorCode::InputUnavailable,
@@ -584,14 +688,14 @@ fn resolve_input_pid(client_id: &ClientId) -> Result<u32, ControlError> {
         .iter()
         .find(|source| state.mapper.id_for_key(source.private_key) == Some(client_id))
     {
-        let pid = source.private_key as u32;
-        if !crate::broadcast::is_target_ready(pid) {
+        let source = source.clone();
+        if !crate::broadcast::is_target_ready(source.private_key as u32) {
             return Err(ControlError::new(
                 ErrorCode::InputUnavailable,
                 "targeted input is unavailable because the selected client's trusik proxy is not ready",
             ));
         }
-        return Ok(pid);
+        return Ok(source);
     }
     let code = if state.mapper.is_retired(client_id) {
         ErrorCode::TargetDisappeared
@@ -599,6 +703,10 @@ fn resolve_input_pid(client_id: &ClientId) -> Result<u32, ControlError> {
         ErrorCode::ClientNotFound
     };
     Err(ControlError::new(code, "the target client is not loaded"))
+}
+
+fn resolve_input_pid(client_id: &ClientId) -> Result<u32, ControlError> {
+    Ok(resolve_input_source(client_id)?.private_key as u32)
 }
 
 fn resolve_text_strokes(text: &str, submit: bool) -> Result<Vec<ResolvedStroke>, ControlError> {
@@ -890,9 +998,14 @@ fn advance_one_input(state: &mut UiState, mut input: ActiveInput) {
     }
     let phase = input.phase;
     if phase == InputPhase::Finish {
-        let result = Ok(CommandOutcome::InputDelivered {
-            kind: input.kind,
-            strokes: input.strokes.len(),
+        let result = Ok(match &input.kind {
+            ActiveInputKind::Input(kind) => CommandOutcome::InputDelivered {
+                kind: *kind,
+                strokes: input.strokes.len(),
+            },
+            ActiveInputKind::EqAction(action) => CommandOutcome::EqActionDelivered {
+                action: action.clone(),
+            },
         });
         finish_input(input, Some(result));
         return;

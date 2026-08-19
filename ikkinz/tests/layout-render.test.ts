@@ -79,7 +79,13 @@ describe("default 5 by 3 layout", () => {
     const empty = buildGrid(
       view({ snapshot: stateFixture({ clients: [], active_client_id: null }) }),
     );
-    expect(empty.filter((cell) => cell.type === "empty")).toHaveLength(6);
+    const emptySlots = empty.filter((cell) => cell.type === "empty");
+    expect(emptySlots).toHaveLength(6);
+    const emptySvg = decodeSvg(renderCell(emptySlots[0]!));
+    expect(emptySvg).toContain('<circle cx="36" cy="36" r="13" fill="#203040"');
+    expect(emptySvg).toContain(">1</text>");
+    expect(emptySvg).not.toContain("SLOT 1");
+    expect(emptySvg).not.toContain("NOT LOADED");
     expect(
       empty.find((cell) => cell.row === 2 && cell.column === 0),
     ).toMatchObject({ type: "logo" });
@@ -246,6 +252,39 @@ describe("default 5 by 3 layout", () => {
     });
   });
 
+  it("uses a reserved tile for all-boxes Use Center Screen", () => {
+    const snapshot = stateFixture({ clients: sixClients() });
+    const use = buildCell(view({ snapshot }), 1, 4);
+    expect(use).toMatchObject({
+      type: "use",
+      available: true,
+      ready: 5,
+      status: "5 BOXES READY",
+    });
+    const svg = decodeSvg(renderCell(use));
+    expect(svg).toContain('data-icon="use"');
+    expect(svg).toContain('data-icon-set="lucide-animated"');
+    expect(svg).toContain(`stroke="${ACTION_COLORS.use}"`);
+    expect(svg).toContain('data-motion-part="pointer"');
+    expect(svg).toContain(">Use</text>");
+    expect(svg).not.toContain("BOXES READY");
+
+    const unavailableSnapshot = stateFixture({ clients: sixClients() });
+    unavailableSnapshot.capabilities.eq_actions.use_center_screen = false;
+    const unavailable = buildCell(
+      view({ snapshot: unavailableSnapshot }),
+      1,
+      4,
+    );
+    expect(unavailable).toMatchObject({
+      type: "use",
+      available: false,
+      ready: 5,
+      status: "UPDATE STONEMITE",
+    });
+    expect(decodeSvg(renderCell(unavailable))).toContain('stroke="#6d737c"');
+  });
+
   it("replaces the ambient STONE tile with Assist for ready background boxes", () => {
     const snapshot = stateFixture({ clients: sixClients() });
     const assist = buildCell(view({ snapshot }), 2, 3);
@@ -298,7 +337,7 @@ describe("default 5 by 3 layout", () => {
     });
   });
 
-  it("animates action icons while Group, Follow, and Assist are in flight", () => {
+  it("animates action icons while Group, Follow, Assist, and Use are in flight", () => {
     const pendingGroup = buildCell(
       view({
         feedback: new Map([
@@ -375,6 +414,32 @@ describe("default 5 by 3 layout", () => {
     expect(assistFrame).toContain('stroke="#101615"');
     expect(assistFrame).toContain(">Assist</text>");
     expect(assistFrame).not.toContain("SENDING");
+
+    const pendingUse = buildCell(
+      view({
+        feedback: new Map([
+          [
+            "1,4",
+            {
+              kind: "pending",
+              message: "Using",
+              motion: "use",
+              until: Date.now() + 1_000,
+            },
+          ],
+        ]),
+      }),
+      1,
+      4,
+    );
+    const useFrameZero = decodeSvg(renderCell(pendingUse, 0));
+    const useFrameTwo = decodeSvg(renderCell(pendingUse, 2));
+    expect(useFrameZero).toContain('data-icon="use"');
+    expect(useFrameZero).toContain('data-active="true"');
+    expect(useFrameZero).toContain(`fill="${ACTION_COLORS.use}"`);
+    expect(useFrameZero).toContain('stroke="#101615"');
+    expect(useFrameZero).toContain(">Use</text>");
+    expect(useFrameTwo).not.toBe(useFrameZero);
   });
 
   it("turns the MITE key into an explicit two-step window-number swap", () => {
@@ -543,13 +608,37 @@ describe("default 5 by 3 layout", () => {
     });
   });
 
-  it("places the inert Stonemite logo at bottom left", () => {
+  it("places Stonemite setup at bottom left and signals connection recovery", () => {
     const logo = buildCell(view(), 2, 0);
     const svg = decodeSvg(renderCell(logo));
-    expect(logo).toMatchObject({ type: "logo", row: 2, column: 0 });
+    expect(logo).toMatchObject({
+      type: "logo",
+      connection: "connected",
+      row: 2,
+      column: 0,
+    });
     expect(svg).toContain("<image");
     expect(svg).not.toContain("<text");
     expect(svg).not.toContain("<path");
+
+    const offline = buildCell(
+      view({
+        connection: {
+          state: "reconnecting",
+          title: "Reconnecting",
+          detail: "Looking for Stonemite on this PC.",
+        },
+      }),
+      2,
+      0,
+    );
+    const offlineSvg = decodeSvg(renderCell(offline));
+    expect(offline).toMatchObject({
+      type: "logo",
+      connection: "reconnecting",
+    });
+    expect(offlineSvg).toContain(">CONNECTING</text>");
+    expect(offlineSvg).toContain('fill="#ffc75c"');
   });
 });
 
@@ -575,9 +664,8 @@ describe("SVG rendering", () => {
     expect(svg).not.toContain(`<Mora & "Rook">`);
   });
 
-  it("keeps the three remaining reserved cells blank", () => {
+  it("keeps the two remaining reserved cells blank", () => {
     const coordinates = [
-      [1, 4],
       [2, 1],
       [2, 2],
     ] as const;

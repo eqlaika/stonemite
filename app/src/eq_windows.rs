@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
+use std::path::PathBuf;
 use windows::Win32::Foundation::{CloseHandle, BOOL, HMODULE, HWND, LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
@@ -61,21 +62,28 @@ unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
 }
 
 unsafe fn is_eqgame_process(pid: u32) -> bool {
-    let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
-        return false;
-    };
+    process_executable_path(pid).is_some_and(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("eqgame.exe"))
+    })
+}
 
-    let mut buf = [0u16; 260];
+/// Return the installation directory for one live EQ process.
+///
+/// Semantic keymaps live beside that process's `eqgame.exe`, which can differ
+/// from Stonemite's configured installation when several EQ installs are open.
+pub fn process_eq_directory(pid: u32) -> Option<PathBuf> {
+    unsafe { process_executable_path(pid) }
+        .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
+}
+
+unsafe fn process_executable_path(pid: u32) -> Option<PathBuf> {
+    let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+    let mut buf = [0u16; 32_768];
     let len = K32GetModuleFileNameExW(handle, HMODULE::default(), &mut buf);
     let _ = CloseHandle(handle);
-
-    if len == 0 {
-        return false;
-    }
-
-    let path = OsString::from_wide(&buf[..len as usize]);
-    let path_lower = path.to_string_lossy().to_lowercase();
-    path_lower.ends_with("eqgame.exe")
+    (len > 0).then(|| PathBuf::from(OsString::from_wide(&buf[..len as usize])))
 }
 
 /// Get the work area of the primary monitor based on an existing EQ window,

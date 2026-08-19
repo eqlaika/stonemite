@@ -37,7 +37,61 @@ describe("address validation", () => {
   );
 });
 
-describe("LAN pairing and commands", () => {
+describe("local and LAN connections", () => {
+  it("connects to loopback without sending an Authorization header", async () => {
+    const server = await startServer();
+    const statuses: ConnectionStatus[] = [];
+    const states: TrusharState[] = [];
+    let authorization: string | undefined;
+    server.wss.on("connection", (socket, request) => {
+      authorization = request.headers.authorization;
+      socket.send(
+        JSON.stringify({ type: "state", version: 1, state: stateFixture() }),
+      );
+    });
+    const client = new TrusharClient({
+      onState: (state) => states.push(state),
+      onStatus: (status) => statuses.push(status),
+    });
+    cleanups.push(() => client.disconnect());
+
+    client.configure({ address: `127.0.0.1:${server.port}` });
+
+    await vi.waitFor(() => expect(states).toHaveLength(1));
+    expect(authorization).toBeUndefined();
+    expect(statuses.at(-1)).toMatchObject({
+      state: "connected",
+      title: "Connected",
+    });
+  });
+
+  it("does not reconnect when the same connection settings are applied twice", async () => {
+    const server = await startServer();
+    let connections = 0;
+    server.wss.on("connection", (socket) => {
+      connections += 1;
+      socket.send(
+        JSON.stringify({ type: "state", version: 1, state: stateFixture() }),
+      );
+    });
+    const client = new TrusharClient({
+      onState: () => undefined,
+      onStatus: () => undefined,
+    });
+    cleanups.push(() => client.disconnect());
+    const settings = {
+      address: `127.0.0.1:${server.port}`,
+      authToken: "token",
+    };
+
+    client.configure(settings);
+    await vi.waitFor(() => expect(connections).toBe(1));
+    client.configure({ ...settings });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(connections).toBe(1);
+  });
+
   it("pairs without Origin, reconnects with Authorization, and correlates out-of-order results", async () => {
     const server = await startServer();
     const address = `127.0.0.1:${server.port}`;
@@ -154,7 +208,7 @@ describe("LAN pairing and commands", () => {
     expect(normalSocket?.readyState).toBe(1);
   });
 
-  it("sends exact-client number swaps, text submission, and semantic key chords", async () => {
+  it("sends exact-client swaps, text, key chords, and EQ actions", async () => {
     const server = await startServer();
     const requests: Array<Record<string, unknown>> = [];
     server.wss.on("connection", (socket) => {
@@ -176,11 +230,16 @@ describe("LAN pairing and commands", () => {
                     active_previous_number: 1,
                     selected_previous_number: 2,
                   }
-                : {
-                    type: "input_delivered",
-                    input: request.type === "send_text" ? "text" : "keys",
-                    strokes: 1,
-                  },
+                : request.type === "send_eq_action"
+                  ? {
+                      type: "eq_action_delivered",
+                      action: request.action,
+                    }
+                  : {
+                      type: "input_delivered",
+                      input: request.type === "send_text" ? "text" : "keys",
+                      strokes: 1,
+                    },
             state: stateFixture(),
           }),
         );
@@ -202,8 +261,14 @@ describe("LAN pairing and commands", () => {
     await client.sendKeys("serein-id", [
       { keys: ["left_control", "i"], hold_ms: 50, pause_ms: 40 },
     ]);
+    await client.sendEqAction("serein-id", {
+      type: "hotbar",
+      bar: 11,
+      button: 12,
+    });
+    await client.sendEqAction("serein-id", { type: "spell_gem", gem: 14 });
 
-    expect(requests).toHaveLength(3);
+    expect(requests).toHaveLength(5);
     expect(requests[0]).toMatchObject({
       type: "swap_window_numbers",
       version: 1,
@@ -221,6 +286,18 @@ describe("LAN pairing and commands", () => {
       version: 1,
       client_id: "serein-id",
       strokes: [{ keys: ["left_control", "i"], hold_ms: 50, pause_ms: 40 }],
+    });
+    expect(requests[3]).toMatchObject({
+      type: "send_eq_action",
+      version: 1,
+      client_id: "serein-id",
+      action: { type: "hotbar", bar: 11, button: 12 },
+    });
+    expect(requests[4]).toMatchObject({
+      type: "send_eq_action",
+      version: 1,
+      client_id: "serein-id",
+      action: { type: "spell_gem", gem: 14 },
     });
   });
 
@@ -356,7 +433,7 @@ describe("LAN pairing and commands", () => {
     expect(statuses.at(-1)?.title).toBe("Protocol error");
   });
 
-  it("rejects pairing-only and uncorrelated error messages on the authenticated endpoint", async () => {
+  it("rejects pairing-only and uncorrelated error messages on the control endpoint", async () => {
     for (const message of [
       { type: "paired", version: 1, auth_token: "wrong-endpoint-token" },
       {

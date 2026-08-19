@@ -23,8 +23,23 @@ export interface TrusharState {
     set_broadcast: boolean;
     send_text: boolean;
     send_keys: boolean;
+    eq_actions: EqActionCapabilities;
   };
 }
+
+export interface EqActionCapabilities {
+  use_center_screen: boolean;
+  invite_follow: boolean;
+  hotbars: number;
+  hotbar_buttons: number;
+  spell_gems: number;
+}
+
+export type EqAction =
+  | { type: "use_center_screen" }
+  | { type: "invite_follow" }
+  | { type: "hotbar"; bar: number; button: number }
+  | { type: "spell_gem"; gem: number };
 
 export interface WireError {
   code: string;
@@ -46,7 +61,8 @@ export type Success =
       selected_previous_number: number;
     }
   | { type: "broadcast_set"; enabled: boolean }
-  | { type: "input_delivered"; input: "text" | "keys"; strokes: number };
+  | { type: "input_delivered"; input: "text" | "keys"; strokes: number }
+  | { type: "eq_action_delivered"; action: EqAction };
 
 export type ServerMessage =
   | { type: "state"; version: 1; state: TrusharState }
@@ -95,6 +111,13 @@ export type ClientMessage =
       request_id: string;
       client_id: string;
       strokes: KeyStroke[];
+    }
+  | {
+      type: "send_eq_action";
+      version: 1;
+      request_id: string;
+      client_id: string;
+      action: EqAction;
     };
 
 export class ProtocolError extends Error {
@@ -217,6 +240,11 @@ export function parseSuccess(value: unknown): Success {
         input: value.input,
         strokes: value.strokes as number,
       };
+    case "eq_action_delivered":
+      return {
+        type: "eq_action_delivered",
+        action: parseEqAction(value.action),
+      };
     default:
       throw new ProtocolError("Result type is not supported.");
   }
@@ -276,8 +304,77 @@ export function parseState(value: unknown): TrusharState {
       set_broadcast: value.capabilities.set_broadcast as boolean,
       send_text: value.capabilities.send_text as boolean,
       send_keys: value.capabilities.send_keys as boolean,
+      eq_actions: parseEqActionCapabilities(value.capabilities.eq_actions),
     },
   };
+}
+
+function parseEqActionCapabilities(value: unknown): EqActionCapabilities {
+  if (value === undefined) {
+    return {
+      use_center_screen: false,
+      invite_follow: false,
+      hotbars: 0,
+      hotbar_buttons: 0,
+      spell_gems: 0,
+    };
+  }
+  if (
+    !isRecord(value) ||
+    !isBoolean(value.use_center_screen) ||
+    !isBoolean(value.invite_follow)
+  ) {
+    throw new ProtocolError("EQ action capabilities are malformed.");
+  }
+  for (const name of ["hotbars", "hotbar_buttons", "spell_gems"] as const) {
+    if (!Number.isSafeInteger(value[name]) || (value[name] as number) < 0)
+      throw new ProtocolError("EQ action capabilities are malformed.");
+  }
+  return {
+    use_center_screen: value.use_center_screen,
+    invite_follow: value.invite_follow,
+    hotbars: value.hotbars as number,
+    hotbar_buttons: value.hotbar_buttons as number,
+    spell_gems: value.spell_gems as number,
+  };
+}
+
+function parseEqAction(value: unknown): EqAction {
+  if (!isRecord(value) || typeof value.type !== "string")
+    throw new ProtocolError("EQ action is malformed.");
+  switch (value.type) {
+    case "use_center_screen":
+      return { type: "use_center_screen" };
+    case "invite_follow":
+      return { type: "invite_follow" };
+    case "hotbar":
+      if (
+        !Number.isSafeInteger(value.bar) ||
+        (value.bar as number) < 1 ||
+        (value.bar as number) > 11 ||
+        !Number.isSafeInteger(value.button) ||
+        (value.button as number) < 1 ||
+        (value.button as number) > 12
+      ) {
+        throw new ProtocolError("EQ hotbar action is malformed.");
+      }
+      return {
+        type: "hotbar",
+        bar: value.bar as number,
+        button: value.button as number,
+      };
+    case "spell_gem":
+      if (
+        !Number.isSafeInteger(value.gem) ||
+        (value.gem as number) < 1 ||
+        (value.gem as number) > 14
+      ) {
+        throw new ProtocolError("EQ spell-gem action is malformed.");
+      }
+      return { type: "spell_gem", gem: value.gem as number };
+    default:
+      throw new ProtocolError("EQ action type is not supported.");
+  }
 }
 
 function parseClient(value: unknown): TrusharClient {

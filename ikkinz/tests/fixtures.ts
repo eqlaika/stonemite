@@ -25,6 +25,13 @@ export function stateFixture(
       set_broadcast: true,
       send_text: true,
       send_keys: true,
+      eq_actions: {
+        use_center_screen: true,
+        invite_follow: true,
+        hotbars: 11,
+        hotbar_buttons: 12,
+        spell_gems: 14,
+      },
     },
     ...overrides,
   };

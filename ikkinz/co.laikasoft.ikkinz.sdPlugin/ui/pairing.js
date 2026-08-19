@@ -3,6 +3,17 @@
   const connection = document.querySelector("#connection");
   const title = document.querySelector("#status-title");
   const detail = document.querySelector("#status-detail");
+  const mode = document.querySelector("#connection-mode");
+  const recovery = document.querySelector("#recovery");
+  const recoveryDetail = document.querySelector("#recovery-detail");
+  const retry = document.querySelector("#retry");
+  const lanPanel = document.querySelector("#lan-panel");
+  const lanSummary = document.querySelector("#lan-summary");
+  const lanCurrent = document.querySelector("#lan-current");
+  const lanAddress = document.querySelector("#lan-address");
+  const lanReconnect = document.querySelector("#lan-reconnect");
+  const replaceLan = document.querySelector("#replace-lan");
+  const useLocal = document.querySelector("#use-local");
   const form = document.querySelector("#pair-form");
   const address = document.querySelector("#address");
   const code = document.querySelector("#code");
@@ -10,23 +21,46 @@
   const codeError = document.querySelector("#code-error");
   const connectionError = document.querySelector("#connection-error");
   const pair = document.querySelector("#pair");
-  const reconnect = document.querySelector("#reconnect");
-  const forget = document.querySelector("#forget");
+  const cancelReplace = document.querySelector("#cancel-replace");
 
-  let paired = false;
+  let lanPaired = false;
+  let pairedAddress = "";
+  let replacingLan = false;
+  let pairingAttempted = false;
   let operationBusy = false;
-  let connectionState = "idle";
+  let connectionState = "connecting";
 
   function updateControls() {
-    const connecting = ["pairing", "connecting"].includes(connectionState);
-    const busy = operationBusy || connecting;
+    const busy = operationBusy || connectionState === "pairing";
+    const showRecovery = ["idle", "reconnecting", "error"].includes(
+      connectionState,
+    );
+
     connection.setAttribute("aria-busy", busy ? "true" : "false");
     form.setAttribute("aria-busy", busy ? "true" : "false");
-    pair.disabled = busy || paired;
-    reconnect.disabled = busy || !paired || connectionState === "connected";
-    forget.disabled = busy || !paired;
-    address.disabled = busy || paired;
-    code.disabled = busy || paired;
+    mode.textContent =
+      lanPaired || connectionState === "pairing" ? "LAN" : "This PC";
+    lanSummary.textContent = lanPaired
+      ? "Manage LAN connection"
+      : "Connect to another PC";
+    lanCurrent.hidden = !lanPaired;
+    form.hidden = lanPaired && !replacingLan;
+    cancelReplace.hidden = !replacingLan;
+    lanAddress.textContent = pairedAddress;
+
+    recovery.hidden = !showRecovery;
+    recoveryDetail.textContent = lanPaired
+      ? "Check that Stonemite is running on the paired PC and that both PCs are on the same private network."
+      : "Stonemite connects automatically on this PC. Open Stonemite and confirm Integrations is enabled if it stays offline.";
+
+    pair.disabled = busy;
+    retry.disabled = busy;
+    lanReconnect.disabled = busy;
+    replaceLan.disabled = busy;
+    useLocal.disabled = busy || !lanPaired;
+    cancelReplace.disabled = busy;
+    address.disabled = busy;
+    code.disabled = busy;
   }
 
   function setOperationBusy(busy) {
@@ -53,37 +87,69 @@
   }
 
   function setConnectionError(message) {
-    clearErrors();
     connectionError.textContent = message;
     connectionError.hidden = false;
   }
 
   function showStatus(status) {
-    connectionState = status?.state || "idle";
+    connectionState = status?.state || "connecting";
     connection.dataset.state = connectionState;
-    title.textContent = status?.title || "Not paired";
-    detail.textContent = status?.detail || "Open Stonemite settings to begin.";
+    title.textContent = status?.title || "Connecting";
+    detail.textContent = status?.detail || "Looking for Stonemite on this PC.";
     operationBusy = false;
-    if (connectionState === "error")
-      setConnectionError(status.detail || "Connection failed.");
-    else if (connectionState === "connected") clearErrors();
+
+    if (connectionState === "connected") {
+      pairingAttempted = false;
+      clearErrors();
+    } else if (connectionState === "error" && pairingAttempted) {
+      setConnectionError(status?.detail || "LAN pairing failed.");
+    }
     updateControls();
   }
 
   function applyGlobalSettings(saved) {
-    paired = typeof saved?.authToken === "string" && saved.authToken.length > 0;
-    if (typeof saved?.address === "string" && saved.address)
-      address.value = saved.address;
+    const wasLanPaired = lanPaired;
+    lanPaired =
+      typeof saved?.address === "string" &&
+      saved.address.length > 0 &&
+      typeof saved?.authToken === "string" &&
+      saved.authToken.length > 0;
+    pairedAddress = lanPaired ? saved.address : "";
+
+    if (lanPaired) {
+      address.value = pairedAddress;
+      replacingLan = false;
+      pairingAttempted = false;
+      if (!wasLanPaired) lanPanel.open = false;
+    } else if (wasLanPaired) {
+      address.value = "";
+      code.value = "";
+      replacingLan = false;
+      pairingAttempted = false;
+      lanPanel.open = false;
+    }
     updateControls();
   }
 
-  code.addEventListener("input", () => {
+  function formatCode() {
     const digits = code.value.replace(/\D/g, "").slice(0, 6);
     code.value =
       digits.length > 3 ? `${digits.slice(0, 3)} ${digits.slice(3)}` : digits;
     clearErrors();
-  });
+  }
 
+  async function reconnect() {
+    clearErrors();
+    setOperationBusy(true);
+    try {
+      await client.send("sendToPlugin", { type: "reconnect" });
+    } catch {
+      setOperationBusy(false);
+      setConnectionError("Stream Deck could not retry the connection.");
+    }
+  }
+
+  code.addEventListener("input", formatCode);
   address.addEventListener("input", clearErrors);
 
   form.addEventListener("submit", async (event) => {
@@ -100,7 +166,9 @@
       code.focus();
       return;
     }
+
     clearErrors();
+    pairingAttempted = true;
     setOperationBusy(true);
     code.value = "";
     try {
@@ -111,25 +179,34 @@
       });
     } catch {
       setOperationBusy(false);
-      setConnectionError("Stream Deck could not send the pairing request.");
+      setConnectionError("Stream Deck could not send the LAN pairing request.");
     }
   });
 
-  reconnect.addEventListener("click", async () => {
+  retry.addEventListener("click", reconnect);
+  lanReconnect.addEventListener("click", reconnect);
+
+  replaceLan.addEventListener("click", () => {
     clearErrors();
-    setOperationBusy(true);
-    try {
-      await client.send("sendToPlugin", {
-        type: "reconnect",
-        address: address.value.trim(),
-      });
-    } catch {
-      setOperationBusy(false);
-      setConnectionError("Stream Deck could not send the reconnect request.");
-    }
+    replacingLan = true;
+    pairingAttempted = false;
+    lanPanel.open = true;
+    code.value = "";
+    updateControls();
+    address.focus();
+    address.select();
   });
 
-  forget.addEventListener("click", async () => {
+  cancelReplace.addEventListener("click", () => {
+    clearErrors();
+    replacingLan = false;
+    pairingAttempted = false;
+    address.value = pairedAddress;
+    code.value = "";
+    updateControls();
+  });
+
+  useLocal.addEventListener("click", async () => {
     clearErrors();
     setOperationBusy(true);
     code.value = "";
@@ -137,13 +214,14 @@
       await client.send("sendToPlugin", { type: "forget" });
     } catch {
       setOperationBusy(false);
-      setConnectionError("Stream Deck could not forget this device.");
+      setConnectionError("Stream Deck could not switch back to this PC.");
     }
   });
 
   client.sendToPropertyInspector.subscribe((event) => {
-    if (event?.payload?.type === "connection-status")
+    if (event?.payload?.type === "connection-status") {
       showStatus(event.payload.status);
+    }
   });
 
   client.didReceiveGlobalSettings.subscribe((event) => {

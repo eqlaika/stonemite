@@ -28,7 +28,6 @@ Name: "{userstartup}\Stonemite"; Filename: "{app}\stonemite.exe"; Tasks: autosta
 
 [Tasks]
 Name: "autostart"; Description: "Start Stonemite when Windows starts"; Flags: unchecked
-Name: "integrations"; Description: "Enable integrations for apps on this PC"; Flags: unchecked
 
 [Run]
 Filename: "{app}\stonemite.exe"; Description: "Launch Stonemite"; Flags: nowait postinstall skipifsilent
@@ -68,21 +67,6 @@ begin
       end;
       Exit;
     end;
-  end;
-end;
-
-procedure CurStepChanged(CurStep: TSetupStep);
-var
-  ConfigDir: String;
-begin
-  if CurStep = ssPostInstall then
-  begin
-    ConfigDir := ExpandConstant('{userappdata}\Stonemite');
-    if not DirExists(ConfigDir) then
-      ForceDirectories(ConfigDir);
-
-    if WizardIsTaskSelected('integrations') then
-      SaveStringToFile(ConfigDir + '\enable-local-integrations', '', False);
   end;
 end;
 

@@ -3,8 +3,9 @@ import {
   createDashboardKeyActions,
   type PluginSettings,
 } from "./actions/dashboard-key";
+import { connectionForSettings } from "./actions/dashboard-controller";
 import { DashboardStore, type ConnectionStatus } from "./state/store";
-import { normalizeAddress, TrusharClient } from "./trushar/client";
+import { TrusharClient } from "./trushar/client";
 
 streamDeck.logger.setLevel("info");
 streamDeck.settings.useExperimentalMessageIdentifiers = true;
@@ -34,21 +35,17 @@ streamDeckConnected = true;
 applySettings(await streamDeck.settings.getGlobalSettings<PluginSettings>());
 
 function applySettings(settings: PluginSettings): void {
-  if (!settings.address || !settings.authToken) {
-    client.configure(null);
-    return;
-  }
   try {
-    client.configure({
-      address: normalizeAddress(settings.address),
-      authToken: settings.authToken,
-    });
+    client.configure(connectionForSettings(settings));
   } catch (error) {
+    client.disconnect();
     store.setConnection({
       state: "error",
-      title: "Saved address not valid",
+      title: "Saved connection not valid",
       detail:
-        error instanceof Error ? error.message : "Pair this device again.",
+        error instanceof Error
+          ? error.message
+          : "Use this PC or pair over LAN again.",
     });
   }
 }

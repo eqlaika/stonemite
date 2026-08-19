@@ -14,12 +14,14 @@ const COLORS = {
   green: "#80df89",
   red: "#ff826f",
   disabled: "#6d737c",
+  notification: "#203040",
 };
 
 export const ACTION_COLORS = {
   group: SLOT_COLORS[0],
   follow: COLORS.green,
   assist: SLOT_COLORS[3],
+  use: SLOT_COLORS[4],
   swap: COLORS.cyan,
 } satisfies Record<ActionIcon, string>;
 
@@ -43,11 +45,11 @@ export function renderCell(cell: KeyCell, motionFrame = 0): string {
           cell.interaction,
         );
       case "empty":
-        return `${base()}<text x="36" y="31" class="muted center medium">SLOT ${cell.slot}</text><text x="36" y="56" class="quiet center tiny" textLength="62" lengthAdjust="spacingAndGlyphs">NOT LOADED</text>`;
+        return `${base()}<circle cx="36" cy="36" r="13" fill="${COLORS.notification}"/><text x="36" y="43" class="text center large">${cell.slot}</text>`;
       case "blank":
         return base();
       case "logo":
-        return renderLogo();
+        return renderLogo(cell.connection);
       case "group":
         return renderActionTile(
           "group",
@@ -65,6 +67,12 @@ export function renderCell(cell: KeyCell, motionFrame = 0): string {
           "assist",
           "Assist",
           cell.available ? ACTION_COLORS.assist : COLORS.disabled,
+        );
+      case "use":
+        return renderActionTile(
+          "use",
+          "Use",
+          cell.available ? ACTION_COLORS.use : COLORS.disabled,
         );
       case "broadcast":
         return renderBroadcast(cell.available, cell.enabled);
@@ -174,7 +182,7 @@ function renderBroadcast(available: boolean, enabled: boolean): string {
 function renderFeedback(
   kind: "pending" | "error",
   message: string,
-  motion: "group" | "follow" | "assist" | undefined,
+  motion: "group" | "follow" | "assist" | "use" | undefined,
   motionFrame: number,
 ): string {
   if (kind === "pending" && motion) {
@@ -182,6 +190,7 @@ function renderFeedback(
       group: "Group",
       follow: "Follow",
       assist: "Assist",
+      use: "Use",
     } as const;
     return renderActionTile(
       motion,
@@ -208,8 +217,17 @@ function fittedTextAttributes(
     : "";
 }
 
-function renderLogo(): string {
-  return `${base()}<image href="${APP_IMAGE}" x="5" y="7" width="62" height="58" preserveAspectRatio="xMidYMid meet"/>`;
+function renderLogo(
+  connection: Extract<KeyCell, { type: "logo" }>["connection"],
+): string {
+  const image = `<image href="${APP_IMAGE}" x="5" y="7" width="62" height="58" preserveAspectRatio="xMidYMid meet"/>`;
+  if (connection === "connected") return `${base()}${image}`;
+
+  const error = connection === "error" || connection === "idle";
+  const label =
+    connection === "pairing" ? "PAIRING" : error ? "SETUP" : "CONNECTING";
+  const accent = error ? COLORS.red : COLORS.amber;
+  return `${base()}<image href="${APP_IMAGE}" x="11" y="3" width="50" height="48" preserveAspectRatio="xMidYMid meet"/><circle cx="9" cy="62" r="3" fill="${accent}"/><text x="40" y="67" fill="${accent}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" font-weight="850" text-anchor="middle"${fittedTextAttributes(label, 7, 54)}>${label}</text>`;
 }
 
 function renderBoot(stage: number): string {

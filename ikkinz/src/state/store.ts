@@ -12,7 +12,7 @@ export interface ConnectionStatus {
 export interface Feedback {
   kind: "pending" | "error";
   message: string;
-  motion?: "group" | "follow" | "assist";
+  motion?: "group" | "follow" | "assist" | "use";
   until: number;
 }
 
@@ -24,9 +24,9 @@ export interface DashboardView {
 }
 
 const INITIAL_STATUS: ConnectionStatus = {
-  state: "idle",
-  title: "Not paired",
-  detail: "Open Stonemite settings to begin.",
+  state: "connecting",
+  title: "Connecting",
+  detail: "Looking for Stonemite on this PC.",
 };
 
 export class DashboardStore {

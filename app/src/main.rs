@@ -8,6 +8,7 @@ mod config;
 mod control;
 mod crypt;
 mod eq_characters;
+mod eq_keymap;
 mod eq_windows;
 mod log_watcher;
 mod overlay;

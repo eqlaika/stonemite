@@ -2,6 +2,7 @@
   color-scheme: dark;
   --bg: #24262a;
   --surface: #30343a;
+  --inset: #1c1e22;
   --line: #4a5059;
   --text: #f5f7fa;
   --muted: #b8c0ca;
@@ -14,6 +15,10 @@
 
 * {
   box-sizing: border-box;
+}
+
+html {
+  scrollbar-color: var(--line) var(--bg);
 }
 
 body {
@@ -31,13 +36,16 @@ main {
 
 .connection {
   display: grid;
-  grid-template-columns: 10px 1fr;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
-  margin-bottom: 18px;
   padding: 12px;
   border-radius: 12px;
   background: var(--surface);
+}
+
+.status-copy {
+  min-width: 0;
 }
 
 .status-dot {
@@ -74,10 +82,96 @@ main {
 
 .connection small,
 .help,
+.intro,
 .privacy,
-.layout-help {
+.recovery p,
+.scope {
   color: var(--muted);
   line-height: 1.4;
+}
+
+.connection small {
+  overflow-wrap: anywhere;
+}
+
+.mode-badge {
+  align-self: start;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.recovery {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.recovery strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.recovery p {
+  margin: 0 0 10px;
+}
+
+.lan-panel {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.lan-panel summary {
+  padding: 12px 2px;
+  color: var(--text);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.lan-panel summary::marker {
+  color: var(--cyan);
+}
+
+.lan-body {
+  padding: 0 0 14px;
+}
+
+.intro {
+  margin: 0 0 12px;
+}
+
+.lan-current {
+  margin-bottom: 12px;
+}
+
+.lan-current > span {
+  display: block;
+  padding: 10px;
+  border-radius: 7px;
+  background: var(--inset);
+}
+
+.lan-current small,
+.lan-current strong {
+  display: block;
+}
+
+.lan-current small {
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.lan-current strong {
+  overflow-wrap: anywhere;
+  font-size: 12px;
 }
 
 label {
@@ -93,7 +187,7 @@ input {
   border: 1px solid var(--line);
   border-radius: 7px;
   outline: 0;
-  background: #1c1e22;
+  background: var(--inset);
   color: var(--text);
   font: inherit;
   font-variant-numeric: tabular-nums;
@@ -101,9 +195,15 @@ input {
 }
 
 input:focus-visible,
-button:focus-visible {
+button:focus-visible,
+summary:focus-visible {
   outline: 2px solid var(--cyan);
   outline-offset: 2px;
+}
+
+input::placeholder {
+  color: #9fa8b3;
+  opacity: 1;
 }
 
 input[aria-invalid="true"] {
@@ -116,7 +216,7 @@ input[aria-invalid="true"] {
 }
 
 .error {
-  margin: 10px 0 0;
+  margin: 9px 0 0;
   color: #ffc6bd;
   line-height: 1.4;
 }
@@ -157,39 +257,33 @@ button:disabled {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 8px;
+}
+
+.full {
+  width: 100%;
+  margin-top: 8px;
 }
 
 .quiet {
   color: #ffd0c9;
 }
 
-.layout-help {
-  margin-top: 16px;
-  padding: 12px;
-  border-radius: 12px;
-  background: var(--surface);
-  line-height: 1.4;
-}
-
-.layout-help strong {
-  color: var(--text);
-}
-
-.layout-help ol {
-  margin: 8px 0 0;
-  padding-left: 18px;
-}
-
-.layout-help li + li {
-  margin-top: 5px;
-}
-
 .privacy {
-  margin: 16px 0 0;
+  margin: 14px 0 0;
   padding-top: 12px;
   border-top: 1px solid var(--line);
   font-size: 10px;
+}
+
+.scope {
+  margin: 12px 0 0;
+  font-size: 10px;
+  text-align: center;
+}
+
+[hidden] {
+  display: none !important;
 }
 
 ::selection {

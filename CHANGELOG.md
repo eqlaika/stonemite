@@ -3,10 +3,15 @@
 ## v0.5.0
 
 - Added experimental remote integration to support Stream Deck actions.
-- Added an Ikkinz Group key that invites ready boxes from the active client and sends `Ctrl+I` to accept after one second
+- Enabled loopback integrations by default and made Ikkinz connect automatically without authentication when Stream Deck Desktop runs on the Stonemite PC
+- Limited address/code authentication to cross-PC LAN access and moved its full pairing UI into the Stonemite setup key
+- Added an Ikkinz Group key that invites ready boxes from the active client and invokes each character's configured Invite/Follow action after one second
 - Added an Ikkinz Follow key that concurrently sends `/follow <leader>` to ready background clients
 - Added an Ikkinz Assist key that concurrently sends `/assist <main>` to ready background clients
-- Made Ikkinz character slots and controls independently placeable, kept an editable 5×3 default profile, added an inert Stonemite logo key, and left three profile positions blank
+- Added an Ikkinz Use key that invokes each input-ready character's configured Use Center Screen action
+- Added generic keymap-aware Trushar actions for all 11×12 EQ hotbar buttons and all 14 spell gems
+- Resolve semantic actions per character/persona from `Character_Server_Class.ini`, with legacy character and shared `eqclient.ini` support
+- Made Ikkinz character slots and controls independently placeable, kept an editable 5×3 default profile, added a Stonemite setup key, and left two profile positions blank
 - Simplified Ikkinz tiles with 15px minimum text, no top rails, a stable Bcast label, distinct action colors, and filled running/armed states
 - Replaced the Ikkinz MITE key with a two-step Swap key for exchanging the active and selected characters' window numbers
 - Allowed targeted input sequences to run concurrently across independent EQ clients

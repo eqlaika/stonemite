@@ -138,6 +138,7 @@ The exact-client instrument panel is a dark, compact utility system that turns S
 Across the Stonemite overlay, Ikkinz keys, and the property inspector, the system uses the same slot colors, number badges, class identity, system UI typography, and restrained tonal depth. It does not present delivered input as an observed in-game result, and it does not invent targets, buffs, combat outcomes, or other game state.
 
 **Key Characteristics:**
+
 - Compact dark utility surfaces with high-contrast text.
 - Exact identity through slot number, character name, class, and color together.
 - State communicated with words, shapes, borders, and color rather than color alone.
@@ -148,19 +149,23 @@ Across the Stonemite overlay, Ikkinz keys, and the property inspector, the syste
 Charcoal surfaces keep the interface quiet while cyan, green, amber, and coral report link and operation state; six paired slot-and-badge hues preserve identity between the desktop overlay and deck.
 
 ### Primary
+
 - **Link cyan** (`colors.link-cyan`): The connection accent, input caret, Swap action color, selection color, primary property-inspector action, focus outline, and boot/link signal.
 
 ### Secondary
+
 - **Ready green** (`colors.ready-green`): Connected, input-ready, complete, and success states plus the Follow action.
 - **Recovery amber** (`colors.recovery-amber`): Pairing, connecting, reconnecting, pending, unsupported-layout, and not-ready states.
 - **Error coral** (`colors.error-coral`): Failed feedback, connection errors, and invalid-field borders. Error copy uses the softer `colors.error-copy` on dark property-inspector surfaces.
 - **Server olive** (`colors.server-olive`): The detected-server utility accent; it is informational rather than a readiness signal.
 
 ### Tertiary
-- **Slots 1–6** (`colors.slot-blue`, `colors.slot-green`, `colors.slot-rose`, `colors.slot-amber`, `colors.slot-orchid`, `colors.slot-teal`): Full identity surfaces in fixed Stonemite order. Group reuses slot blue and Assist reuses slot amber so action colors stay within the established palette.
+
+- **Slots 1–6** (`colors.slot-blue`, `colors.slot-green`, `colors.slot-rose`, `colors.slot-amber`, `colors.slot-orchid`, `colors.slot-teal`): Full identity surfaces in fixed Stonemite order. Group reuses slot blue, Assist slot amber, and Use slot orchid so action colors stay within the established palette.
 - **Badges 1–6** (`colors.badge-blue`, `colors.badge-green`, `colors.badge-rose`, `colors.badge-amber`, `colors.badge-orchid`, `colors.badge-teal`): Darker circular number fields paired one-to-one with the slot surfaces.
 
 ### Neutral
+
 - **Key depth** (`colors.key-high` to `colors.key-deep`): The restrained diagonal tonal gradient behind utility, boot, broadcast-off, and feedback keys. `colors.key-black` veils unavailable clients and backs class-code fallbacks.
 - **Key structure** (`colors.empty-gray`, `colors.ambient-gray`, `colors.boot-line`): Empty and reserved dark surfaces plus quiet boot separators.
 - **Property-inspector depth** (`colors.pi-canvas`, `colors.pi-surface`, `colors.pi-inset`): Canvas, status/help panels, and inset fields. One-pixel `colors.pi-line` borders separate controls without adding shadow.
@@ -180,10 +185,11 @@ Charcoal surfaces keep the interface quiet while cyan, green, amber, and coral r
 **Character:** A single native UI stack keeps the surfaces immediate and legible across Windows, macOS, Stream Deck, and Stream Deck Mobile. Weight, size, alignment, and short labels create hierarchy without a decorative display face.
 
 ### Hierarchy
+
 - **Key number** (800, 20px, 1): Heavy centered slot numerals inside the circular badges.
 - **Key value** (800, 15–18px, 1): Short central values stay large; longer text fits horizontally without dropping below the 15px floor.
 - **Key label** (750–850, 15px minimum, 1): Uppercase deck copy never renders smaller than the standard character-name size. Long strings fit horizontally within the 72px canvas instead of reducing font size.
-- **Action label** (800, 15px, 1): A single large title-case verb—“Group,” “Follow,” “Assist,” “Swap,” or “Bcast”—anchored below the action icon with no lower qualifier.
+- **Action label** (800, 15px, 1): A single large title-case verb—“Group,” “Follow,” “Assist,” “Use,” “Swap,” or “Bcast”—anchored below the action icon with no lower qualifier.
 - **Character name** (800, 15px, 1): Centered near the bottom edge; long names fit horizontally without shrinking below the deck-wide floor.
 - **Property-inspector title** (700, 13px, 1.4): The leading status statement.
 - **Property-inspector body** (400–700, 10–12px, 1.4): Labels, help, actions, instructions, privacy copy, and explicit errors. User-facing copy remains sentence case.
@@ -194,11 +200,11 @@ Charcoal surfaces keep the interface quiet while cyan, green, amber, and coral r
 
 ## Layout
 
-Ikkinz key art is authored at exactly 72 × 72 pixels. Character slots 1–6, Group, Follow, Assist, Bcast, Swap, and the inert Stonemite logo are separate, position-independent actions. The shipped editable five-column by three-row profile arranges character identity across the first two rows, places the controls around them, puts Logo at bottom left, and leaves three positions blank. The profile is a useful default rather than a behavior map: users may move or duplicate any action.
+Ikkinz key art is authored at exactly 72 × 72 pixels. Character slots 1–6, Group, Follow, Assist, Use, Bcast, Swap, and Stonemite setup are separate, position-independent actions. The shipped editable five-column by three-row profile arranges character identity across the first two rows, places the controls around them, puts Setup at bottom left, and leaves two positions blank. The profile is a useful default rather than a behavior map: users may move or duplicate any action.
 
 Dark key surfaces have no colored top rails. Character keys use a 13px-radius badge centered at (17, 18), a 29 × 29 class image at the top right when known, a bottom-centered name, and a 3px readiness dot at the lower right. The active character replaces its slot gradient with an active-white surface, keeps a 3px slot-color outline, switches its labels to dark ink, and states “ACTIVE” explicitly. Missing clients and unavailable controls remain in place rather than collapsing the grid.
 
-The property inspector is a compact single column with 12px outer padding. It declares a 260px minimum width, uses full-width 34px fields and the primary action, separates paired actions into two equal columns with an 8px gap, and relies on the observed 5–18px spacing rhythm. There is no width media-query breakpoint in the shipped property inspector.
+Only Stonemite setup owns a property inspector. It is a compact single column with 12px outer padding and a 260px minimum width. A status header identifies **This PC** or **LAN**; local recovery appears only when needed, and the full address/code form stays behind the **Connect to another PC** disclosure. After LAN pairing, the form collapses into the paired address and bounded management actions. Full-width 34px fields and buttons follow the established 5–18px spacing rhythm.
 
 ## Elevation & Depth
 
@@ -215,45 +221,52 @@ Corners are compact and consistent: Stream Deck artwork and property-inspector i
 ## Components
 
 ### Buttons
+
 - **Shape:** Full-width primary and paired secondary actions are at least 34px high with the control radius.
 - **Primary:** Link-cyan fill, dark on-accent text, 700 weight, and a cyan border; its shipped hover fill is `#78e4de`.
 - **Secondary:** Property-inspector surface fill with a one-pixel line border; hover moves to `#3a3f46`. The destructive quiet action uses `#ffd0c9` text without becoming a filled danger button.
 - **Focus / Disabled:** Keyboard focus is a 2px link-cyan outline with a 2px offset. Disabled controls retain their label, use 0.55 opacity, and show a wait cursor while work is in progress.
 
 ### Inputs / Fields
+
 - **Style:** Full-width 34px inset fields use a one-pixel line border, the key radius, 6px × 9px padding, tabular numerals, and a link-cyan caret.
 - **Focus:** The same 2px link-cyan outline and 2px offset used by buttons.
-- **Error / Disabled:** Invalid fields change the border to error coral, set `aria-invalid`, and expose adjacent role-alert copy. Busy or paired fields are disabled rather than accepting edits that cannot apply.
+- **Error / Disabled:** Invalid fields change the border to error coral, set `aria-invalid`, and expose adjacent role-alert copy. Busy fields are disabled; a paired LAN connection replaces the pairing form with its saved address and management actions.
 
 ### Status Panels
-- **Style:** The property-inspector connection panel is a two-column status header with a 9px dot, explicit title, explanatory detail, 12px padding, and the panel radius.
+
+- **Style:** The property-inspector connection panel is a three-column status header with a 9px dot, explicit title and detail, and a compact **This PC** or **LAN** badge. It uses 12px padding and the panel radius.
 - **State:** Muted means idle, ready green means connected, recovery amber means pairing/connecting/reconnecting, and error coral means error. The dot always accompanies live title and detail text.
-- **Supporting panel:** Layout help uses the same panel surface, padding, radius, and muted body text; privacy copy is separated by a one-pixel line rather than placed in another card.
+- **Recovery and disclosure:** A compact tonal recovery panel appears only while idle, reconnecting, or failed. LAN setup and management use one native disclosure separated by one-pixel lines; privacy copy remains inside that disclosed LAN context.
 
 ### Key Tiles
+
 - **Base grammar:** Every tile is a 72px square with the key radius. Non-character tiles use the restrained key gradient with no colored top rail and deck copy no smaller than 15px; long labels fit horizontally instead of shrinking. Reserved profile positions remain empty rather than requiring placeholder actions.
 - **Identity:** Character tiles combine the fixed slot surface, darker number badge, class icon or explicit code fallback, character name, readiness dot, and optional unavailable veil. The active tile becomes active-white with dark labels, a slot-color outline, and an explicit “ACTIVE” marker.
 - **Bcast:** Off uses the dark base, broadcast-off icon, and one “Bcast” label; unavailable switches to broadcast-unavailable and says “UNAVAILABLE.” On replaces the entire surface with solid broadcast red while keeping the white lightning mark and the same “Bcast” label.
-- **Group / Follow / Assist:** Actions use vendored Lucide Animated geometry—Users Round, Route, and Target—above one large “Group,” “Follow,” or “Assist” label. Group is blue, Follow is green, and Assist is gold. Idle tiles keep a dark surface with the action color on the icon; while an action is running, the entire tile fills with its action color and the icon and fixed action word invert to dark ink. Ready-box counts and lower qualifiers remain omitted for hardware-scale legibility.
+- **Group / Follow / Assist / Use:** Actions use vendored Lucide Animated geometry—Users Round, Route, Target, and Mouse Pointer Click—above one large “Group,” “Follow,” “Assist,” or “Use” label. Group is blue, Follow is green, Assist is gold, and Use is orchid. Idle tiles keep a dark surface with the action color on the icon; while an action is running, the entire tile fills with its action color and the icon and fixed action word invert to dark ink. Ready-box counts and lower qualifiers remain omitted for hardware-scale legibility.
 - **Window-number swap:** Lucide’s Arrow Left Right sits above one large “Swap” label in both idle and armed modes. Swap is cyan: idle keeps a dark surface with the cyan icon, while armed mode fills the tile cyan, inverts its icon and word to dark ink, staggers the two source arrow motions, and temporarily relabels character tiles as “CURRENT” or “SELECT.”
-- **Logo:** The inert Logo action centers the real Stonemite app artwork on the standard dark key surface. Pressing it never triggers a command or claims a state.
-- **Feedback / Error:** Pending Group, Follow, and Assist actions preserve the same large action word while their tile fills with its action-specific color and the icon animates in dark ink. Other pending and error states replace only the operated key with recovery amber or error coral iconography plus 15px “WORKING” or “FAILED” copy and a fitted 15px message. Empty character actions remain explicit with 15px “NOT LOADED.”
+- **Stonemite setup:** The setup action centers the real Stonemite app artwork on the standard dark key surface while connected. Pairing and connection recovery add an amber or coral dot plus explicit 15px status copy. Pressing it never triggers a command; selecting it in Stream Deck opens the one plugin-wide connection inspector.
+- **Feedback / Error:** Pending Group, Follow, Assist, and Use actions preserve the same large action word while their tile fills with its action-specific color and the icon animates in dark ink. Other pending and error states replace only the operated key with recovery amber or error coral iconography plus 15px “WORKING” or “FAILED” copy and a fitted 15px message. Empty character actions show only their slot number in a centered 13px-radius circle filled with Stonemite’s notification blue-gray (`#203040`).
 
 ### Motion and Accessibility States
-- **Boot:** Visible non-logo actions advance through synchronized, position-independent static boot frames at 0ms, 160ms, 620ms, and 1050ms; motion is a bounded handoff into authoritative live state, not a source of information. Logo remains stable throughout.
-- **Feedback:** Group, Follow, and Assist redraw one filled active 72px key at 8fps only while their bounded input operation is running. Armed Swap uses the same filled-state treatment and animation budget until the user picks a character or cancels. The large action word remains stable throughout motion.
+
+- **Boot:** Visible non-setup actions advance through synchronized, position-independent static boot frames at 0ms, 160ms, 620ms, and 1050ms; motion is a bounded handoff into authoritative live state, not a source of information. Setup remains on its real app artwork and adds explicit connection status when recovery is needed.
+- **Feedback:** Group, Follow, Assist, and Use redraw one filled active 72px key at 8fps only while their bounded input operation is running. Armed Swap uses the same filled-state treatment and animation budget until the user picks a character or cancels. The large action word remains stable throughout motion.
 - **Connection:** Pairing, connecting, and reconnecting dots breathe over 1.2s with `ease-in-out`; reduced-motion preference collapses the animation to 1ms.
 - **Access:** Property-inspector fields have explicit labels and described-by help/error relationships; status regions are live, busy state is exposed, errors use role alerts, and steady-state meaning remains available without animation or color perception.
 
 ## Do's and Don'ts
 
 ### Do:
+
 - Do reuse the shipped Stonemite app and class artwork; use the class-code fallback only when identity artwork is unavailable.
 - Do preserve the 72px key grammar, fixed slot/badge pairings, and exact-client labels wherever Ikkinz renders deck state.
 - Do show unavailable, unknown, reconnecting, pending, success, and error states with explicit words and redundant visual cues.
 - Do reserve animation for bounded boot, progress, and feedback transitions, with a reduced-motion path.
 
 ### Don't:
+
 - Don't imply targets, buffs, spells, combat outcomes, or other game state Stonemite does not observe.
 - Don't use solid broadcast red for any state except confirmed broadcast on.
 - Don't introduce a separate fantasy-game palette, invented icons, or decorative assets when Stonemite identity already exists.

@@ -33,6 +33,7 @@ const EXPECTED_PROFILE_ACTIONS = {
   "1,1": "co.laikasoft.ikkinz.character-slot-5",
   "2,1": "co.laikasoft.ikkinz.character-slot-6",
   "3,1": "co.laikasoft.ikkinz.follow",
+  "4,1": "co.laikasoft.ikkinz.use",
   "0,2": "co.laikasoft.ikkinz.logo",
   "3,2": "co.laikasoft.ikkinz.assist",
   "4,2": "co.laikasoft.ikkinz.swap",
@@ -99,11 +100,13 @@ describe("release inputs", () => {
       Category?: string;
       Name?: string;
       Nodejs?: { Debug?: string; Version?: string };
+      PropertyInspectorPath?: string;
     };
     expect(manifest.Name).toBe("Stonemite · EQ boxing");
     expect(manifest.Category).toBe("Stonemite · EQ boxing");
     expect(manifest.Nodejs?.Version).toBe("24");
     expect(manifest.Nodejs?.Debug).toBeUndefined();
+    expect(manifest.PropertyInspectorPath).toBeUndefined();
     expect(
       manifest.Actions?.map(({ Name, Tooltip, UUID }) => ({
         name: Name,
@@ -119,7 +122,11 @@ describe("release inputs", () => {
     );
     for (const action of manifest.Actions ?? []) {
       expect(action.Icon).toBe("imgs/actions/stonemite/icon");
-      expect(action.PropertyInspectorPath).toBe("ui/pairing.html");
+      expect(action.PropertyInspectorPath).toBe(
+        action.UUID === "co.laikasoft.ikkinz.logo"
+          ? "ui/pairing.html"
+          : undefined,
+      );
     }
   });
 

@@ -9,7 +9,8 @@ use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use tokio_tungstenite::{client_async, WebSocketStream};
 use trushar::control::{BroadcastState, InMemoryController, RecordedInput};
 use trushar::protocol::{
-    ClientMessage, PairingRequest, ServerMessage, Success, Target, WireInputKind, WireKeyStroke,
+    ClientMessage, PairingRequest, ServerMessage, Success, Target, WireEqAction, WireInputKind,
+    WireKeyStroke,
 };
 use trushar::server::{ServerConfig, ServerHandle, ENDPOINT_PATH, PAIRING_ENDPOINT_PATH};
 
@@ -237,10 +238,32 @@ async fn real_network_listener_upgrade_commands_fanout_reconnect_and_shutdown() 
             ..
         }
     ));
+    send(
+        &mut one,
+        ClientMessage::SendEqAction {
+            version: 1,
+            request_id: "action-1".into(),
+            client_id: second.as_str().into(),
+            action: WireEqAction::SpellGem { gem: 14 },
+        },
+    )
+    .await;
+    assert!(matches!(
+        receive_result(&mut one, "action-1").await,
+        ServerMessage::Result {
+            result: Success::EqActionDelivered {
+                action: WireEqAction::SpellGem { gem: 14 },
+            },
+            ..
+        }
+    ));
     assert!(matches!(
         control.recorded_inputs().as_slice(),
-        [RecordedInput::Text { client_id, .. }, RecordedInput::Keys { .. }]
-            if client_id == &second
+        [
+            RecordedInput::Text { client_id, .. },
+            RecordedInput::Keys { .. },
+            RecordedInput::EqAction { action: trushar::control::EqAction::SpellGem { gem: 14 }, .. },
+        ] if client_id == &second
     ));
 
     let mut two = connect(address, None, None).await.unwrap();

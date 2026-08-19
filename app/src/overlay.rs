@@ -19,7 +19,8 @@ use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+    GetKeyState, ReleaseCapture, SendInput, SetCapture, SetFocus, TrackMouseEvent, INPUT, INPUT_0,
+    INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, TME_LEAVE, TRACKMOUSEEVENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -1933,6 +1934,25 @@ unsafe fn repair_keyboard_focus(hwnd: HWND) -> bool {
     target_has_keyboard_focus(hwnd)
 }
 
+/// EQ reads the mouse through DirectInput and can leave its device unacquired
+/// after a programmatic activation until real mouse input arrives — foreground
+/// and keyboard focus are correct, but mouselook and clicks are dead until the
+/// user clicks once. A zero-delta relative move is invisible to the user yet
+/// flows through the hardware input pipeline to the foreground client,
+/// prompting it to reacquire the mouse.
+unsafe fn nudge_mouse_input() {
+    let input = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dwFlags: MOUSEEVENTF_MOVE,
+                ..Default::default()
+            },
+        },
+    };
+    let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+}
+
 unsafe fn confirm_foreground_and_focus(hwnd: HWND) -> ForegroundRequest {
     if !IsWindow(hwnd).as_bool() {
         return ForegroundRequest::TargetDisappeared;
@@ -2176,6 +2196,7 @@ unsafe fn reassert_active_foreground(
     if request != ForegroundRequest::Confirmed {
         return Err(foreground_request_error(request));
     }
+    nudge_mouse_input();
     Ok(trushar::control::CommandOutcome::Activated {
         status: trushar::control::ActivationStatus::AlreadyActive,
         foreground_confirmed: true,
@@ -2280,6 +2301,9 @@ unsafe fn swap_to_guarded(
     show_toast_inner(s, &toast_label);
     debug_assert_client_partition(s);
     publish_control_state(s);
+    // Nudge last, after all window churn, so the injected input reaches a
+    // stably-foreground client.
+    nudge_mouse_input();
     Ok(trushar::control::CommandOutcome::Activated {
         status: trushar::control::ActivationStatus::Activated,
         foreground_confirmed: true,
