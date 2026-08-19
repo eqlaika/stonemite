@@ -33,10 +33,6 @@ just build-release   # release build
 
 Target: `x86_64-pc-windows-msvc`
 
-## eqlog library
-
-The workspace includes [`eqlog`](crates/eqlog/), a standalone, platform-neutral Rust package containing the canonical EQ log record types, extensible parser registry, typed `/who` and pet events, and character telemetry reducer. Other passive EQ log applications can reuse it without depending on Stonemite's Windows watcher, UI, input, or Trushar integration.
-
 ## Release
 
 ```
