@@ -1,7 +1,41 @@
 // Lucide icon geometry (ISC) with motion adapted from Lucide Animated (MIT).
 // The full notices ship in co.laikasoft.ikkinz.sdPlugin/THIRD_PARTY_NOTICES.md.
 
+import {
+  LUCIDE_ANIMATED_ICONS,
+  type LucideAnimatedIcon,
+} from "./lucide-animated.generated";
+
 export type ActionIcon = "group" | "follow" | "assist" | "use" | "swap";
+export type { LucideAnimatedIcon };
+
+export const LUCIDE_ANIMATED_ICON_NAMES = Object.keys(
+  LUCIDE_ANIMATED_ICONS,
+) as LucideAnimatedIcon[];
+
+export function isLucideAnimatedIcon(
+  value: unknown,
+): value is LucideAnimatedIcon {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(LUCIDE_ANIMATED_ICONS, value)
+  );
+}
+
+export function renderConfigurableLucideIcon(
+  icon: LucideAnimatedIcon,
+  color: string,
+  motionFrame: number,
+  active: boolean,
+  transform = "translate(18 5.5) scale(1.5)",
+): string {
+  const definition = LUCIDE_ANIMATED_ICONS[icon];
+  const frame = normalizedMotionFrame(motionFrame);
+  const svg = active
+    ? (definition.frames[frame] ?? definition.normal)
+    : definition.normal;
+  return `<g data-icon="${icon}" data-icon-set="lucide-animated" data-active="${active}" data-frame="${frame}" color="${color}" transform="${transform}">${svg}</g>`;
+}
 
 const FRAME_COUNT = 8;
 const ICON_TRANSFORM = "translate(18 5.5) scale(1.5)";

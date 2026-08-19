@@ -5,13 +5,13 @@
 //! `<Character>_<server>_<class>.ini`. An older `<Character>_<server>.ini`
 //! profile is also supported for compatibility.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use trushar::control::EqAction;
+use trushar::control::{EqAction, EqMappingName, MAX_HOTBAR_BUTTONS, MAX_SPELL_GEMS};
 
 const ALT_FLAG: u32 = 0x1000_0000;
 const CONTROL_FLAG: u32 = 0x2000_0000;
@@ -79,24 +79,43 @@ impl EqKeymapResolver {
         action
             .validate()
             .map_err(|error| ResolveError::Malformed(error.message))?;
-        let keymaps = self.effective_keymaps(identity)?;
-        let stem = action_stem(action);
+        self.resolve_mapping(&action.mapping_name(), identity)
+    }
 
-        for binding in 1..=2 {
-            let name = format!("KEYMAPPING_{stem}_{binding}");
-            let encoded = match keymaps
-                .as_ref()
-                .and_then(|keymaps| keymaps.values.get(&name))
-            {
-                Some(value) => parse_mapping(value, &name)?,
-                None => default_mapping(action, binding).unwrap_or(0),
-            };
-            if encoded != 0 {
-                return decode_mapping(encoded, &name);
+    pub fn resolve_mapping(
+        &mut self,
+        mapping: &EqMappingName,
+        identity: ClientIdentity<'_>,
+    ) -> Result<ResolvedBinding, ResolveError> {
+        let keymaps = self.effective_keymaps(identity)?;
+        resolve_from_keymaps(mapping, keymaps.as_ref())
+    }
+
+    pub fn mapped_actions(
+        &mut self,
+        identity: ClientIdentity<'_>,
+    ) -> Result<BTreeSet<EqMappingName>, ResolveError> {
+        let keymaps = self.effective_keymaps(identity)?;
+        let mut candidates = known_default_mapping_names();
+        if let Some(keymaps) = &keymaps {
+            for key in keymaps.values.keys() {
+                if let Some(mapping) = mapping_name_from_key(key) {
+                    candidates.insert(mapping);
+                }
             }
         }
 
-        Err(ResolveError::Unbound)
+        let mut mapped = BTreeSet::new();
+        for mapping in candidates {
+            match resolve_from_keymaps(&mapping, keymaps.as_ref()) {
+                Ok(_) => {
+                    mapped.insert(mapping);
+                }
+                Err(ResolveError::Unbound) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(mapped)
     }
 
     /// A character/persona file with a `[KeyMaps]` section is the complete
@@ -271,30 +290,69 @@ fn decode_mapping(encoded: u32, name: &str) -> Result<ResolvedBinding, ResolveEr
     Ok(ResolvedBinding { scans })
 }
 
-fn action_stem(action: &EqAction) -> String {
-    match action {
-        EqAction::UseCenterScreen => "USE".to_owned(),
-        EqAction::InviteFollow => "INVITE_FOLLOW".to_owned(),
-        EqAction::Hotbar { bar, button } => format!("HOT{bar}_{button}"),
-        EqAction::SpellGem { gem } => format!("CAST{gem}"),
+fn resolve_from_keymaps(
+    mapping: &EqMappingName,
+    keymaps: Option<&KeymapFile>,
+) -> Result<ResolvedBinding, ResolveError> {
+    for binding in 1..=2 {
+        let name = format!("KEYMAPPING_{}_{binding}", mapping.as_str());
+        let encoded = match keymaps.and_then(|keymaps| keymaps.values.get(&name)) {
+            Some(value) => parse_mapping(value, &name)?,
+            None => default_mapping(mapping, binding).unwrap_or(0),
+        };
+        if encoded != 0 {
+            return decode_mapping(encoded, &name);
+        }
     }
+    Err(ResolveError::Unbound)
 }
 
-fn default_mapping(action: &EqAction, binding: u8) -> Option<u32> {
+fn mapping_name_from_key(key: &str) -> Option<EqMappingName> {
+    let rest = key.strip_prefix("KEYMAPPING_")?;
+    let (mapping, binding) = rest.rsplit_once('_')?;
+    if !matches!(binding, "1" | "2") {
+        return None;
+    }
+    EqMappingName::new(mapping).ok()
+}
+
+fn known_default_mapping_names() -> BTreeSet<EqMappingName> {
+    let mut mappings = BTreeSet::new();
+    for name in ["USE", "INVITE_FOLLOW"] {
+        mappings.insert(EqMappingName::new(name).expect("literal mapping name"));
+    }
+    for button in 1..=MAX_HOTBAR_BUTTONS {
+        mappings
+            .insert(EqMappingName::new(format!("HOT1_{button}")).expect("generated mapping name"));
+    }
+    for gem in 1..=MAX_SPELL_GEMS {
+        mappings.insert(EqMappingName::new(format!("CAST{gem}")).expect("generated mapping name"));
+    }
+    mappings
+}
+
+fn default_mapping(mapping: &EqMappingName, binding: u8) -> Option<u32> {
     if binding != 1 {
         return None;
     }
-    match action {
-        EqAction::UseCenterScreen => Some(0x16),             // U
-        EqAction::InviteFollow => Some(CONTROL_FLAG | 0x17), // Ctrl+I
-        EqAction::Hotbar { bar: 1, button } => number_row_scan(*button).map(u32::from),
-        EqAction::Hotbar { .. } => None,
-        EqAction::SpellGem { gem } if *gem <= 12 => {
-            number_row_scan(*gem).map(|scan| ALT_FLAG | u32::from(scan))
-        }
-        EqAction::SpellGem { gem: 13 } => Some(ALT_FLAG | 0x16), // Alt+U
-        EqAction::SpellGem { gem: 14 } => Some(ALT_FLAG | 0x17), // Alt+I
-        EqAction::SpellGem { .. } => None,
+    match mapping.as_str() {
+        "USE" => Some(0x16),                          // U
+        "INVITE_FOLLOW" => Some(CONTROL_FLAG | 0x17), // Ctrl+I
+        value if value.starts_with("HOT1_") => value
+            .strip_prefix("HOT1_")
+            .and_then(|button| button.parse::<u8>().ok())
+            .and_then(number_row_scan)
+            .map(u32::from),
+        value if value.starts_with("CAST") => match value
+            .strip_prefix("CAST")
+            .and_then(|gem| gem.parse::<u8>().ok())
+        {
+            Some(gem @ 1..=12) => number_row_scan(gem).map(|scan| ALT_FLAG | u32::from(scan)),
+            Some(13) => Some(ALT_FLAG | 0x16), // Alt+U
+            Some(14) => Some(ALT_FLAG | 0x17), // Alt+I
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -582,6 +640,57 @@ mod tests {
     }
 
     #[test]
+    fn discovers_and_resolves_arbitrary_explicit_mappings() {
+        let dir = TestDir::new();
+        dir.write(
+            "eqclient.ini",
+            "[KeyMaps]\nKEYMAPPING_DUCK_1=44\nKEYMAPPING_SIT_STAND_1=0\nKEYMAPPING_CMD_TOGGLE_ADVANCED_LOOT_WIN_2=36\nKEYMAPPING_USE_1=0\nKEYMAPPING_USE_2=0\n",
+        );
+        let mut resolver = EqKeymapResolver::new(dir.0.clone());
+        let mapped = resolver.mapped_actions(ClientIdentity::default()).unwrap();
+
+        assert!(mapped.contains(&EqMappingName::new("DUCK").unwrap()));
+        assert!(mapped.contains(&EqMappingName::new("CMD_TOGGLE_ADVANCED_LOOT_WIN").unwrap()));
+        assert!(!mapped.contains(&EqMappingName::new("SIT_STAND").unwrap()));
+        assert!(!mapped.contains(&EqMappingName::new("USE").unwrap()));
+        assert!(mapped.contains(&EqMappingName::new("CAST14").unwrap()));
+        assert_eq!(
+            resolver.resolve(
+                &EqAction::keymap("duck").unwrap(),
+                ClientIdentity::default()
+            ),
+            Ok(ResolvedBinding { scans: vec![44] })
+        );
+        assert_eq!(
+            resolver.resolve(
+                &EqAction::keymap("cmd_toggle_advanced_loot_win").unwrap(),
+                ClientIdentity::default()
+            ),
+            Ok(ResolvedBinding { scans: vec![36] })
+        );
+    }
+
+    #[test]
+    fn generic_mapping_discovery_uses_the_effective_persona_profile() {
+        let dir = TestDir::new();
+        dir.write("eqclient.ini", "[KeyMaps]\nKEYMAPPING_DUCK_1=44\n");
+        dir.write(
+            "Laika_xegony_RNG.ini",
+            "[KeyMaps]\nKEYMAPPING_SIT_STAND_1=45\n",
+        );
+        let mut resolver = EqKeymapResolver::new(dir.0.clone());
+        let mapped = resolver
+            .mapped_actions(ClientIdentity {
+                character: Some("Laika"),
+                server: Some("xegony"),
+                class_code: Some("RNG"),
+            })
+            .unwrap();
+        assert!(mapped.contains(&EqMappingName::new("SIT_STAND").unwrap()));
+        assert!(!mapped.contains(&EqMappingName::new("DUCK").unwrap()));
+    }
+
+    #[test]
     fn rejects_malformed_relevant_mapping() {
         let dir = TestDir::new();
         dir.write(
@@ -591,6 +700,10 @@ mod tests {
         let mut resolver = EqKeymapResolver::new(dir.0.clone());
         assert!(matches!(
             resolver.resolve(&EqAction::spell_gem(1).unwrap(), ClientIdentity::default()),
+            Err(ResolveError::Malformed(_))
+        ));
+        assert!(matches!(
+            resolver.mapped_actions(ClientIdentity::default()),
             Err(ResolveError::Malformed(_))
         ));
     }

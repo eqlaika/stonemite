@@ -33,13 +33,18 @@ export interface EqActionCapabilities {
   hotbars: number;
   hotbar_buttons: number;
   spell_gems: number;
+  keymap_actions: boolean;
 }
 
 export type EqAction =
   | { type: "use_center_screen" }
   | { type: "invite_follow" }
   | { type: "hotbar"; bar: number; button: number }
-  | { type: "spell_gem"; gem: number };
+  | { type: "spell_gem"; gem: number }
+  | { type: "keymap"; mapping: string };
+
+export type EqActionTargets =
+  { type: "all_loaded" } | { type: "window_numbers"; window_numbers: number[] };
 
 export interface WireError {
   code: string;
@@ -62,7 +67,18 @@ export type Success =
     }
   | { type: "broadcast_set"; enabled: boolean }
   | { type: "input_delivered"; input: "text" | "keys"; strokes: number }
-  | { type: "eq_action_delivered"; action: EqAction };
+  | { type: "eq_action_delivered"; action: EqAction }
+  | {
+      type: "eq_keymap_actions_listed";
+      mappings: string[];
+      window_numbers: number[];
+      next_after?: string;
+    }
+  | {
+      type: "eq_action_batch_delivered";
+      action: EqAction;
+      window_numbers: number[];
+    };
 
 export type ServerMessage =
   | { type: "state"; version: 1; state: TrusharState }
@@ -117,6 +133,20 @@ export type ClientMessage =
       version: 1;
       request_id: string;
       client_id: string;
+      action: EqAction;
+    }
+  | {
+      type: "list_eq_keymap_actions";
+      version: 1;
+      request_id: string;
+      targets: EqActionTargets;
+      after?: string;
+    }
+  | {
+      type: "send_eq_action_batch";
+      version: 1;
+      request_id: string;
+      targets: EqActionTargets;
       action: EqAction;
     };
 
@@ -245,6 +275,33 @@ export function parseSuccess(value: unknown): Success {
         type: "eq_action_delivered",
         action: parseEqAction(value.action),
       };
+    case "eq_keymap_actions_listed": {
+      if (
+        !Array.isArray(value.mappings) ||
+        !value.mappings.every(isEqMappingName) ||
+        !isWindowNumberResultList(value.window_numbers) ||
+        (value.next_after !== undefined && !isEqMappingName(value.next_after))
+      ) {
+        throw new ProtocolError("EQ keymap action list is malformed.");
+      }
+      const result: Extract<Success, { type: "eq_keymap_actions_listed" }> = {
+        type: "eq_keymap_actions_listed",
+        mappings: value.mappings,
+        window_numbers: value.window_numbers,
+      };
+      if (typeof value.next_after === "string")
+        result.next_after = value.next_after;
+      return result;
+    }
+    case "eq_action_batch_delivered":
+      if (!isWindowNumberResultList(value.window_numbers)) {
+        throw new ProtocolError("EQ action batch result is malformed.");
+      }
+      return {
+        type: "eq_action_batch_delivered",
+        action: parseEqAction(value.action),
+        window_numbers: value.window_numbers,
+      };
     default:
       throw new ProtocolError("Result type is not supported.");
   }
@@ -317,6 +374,7 @@ function parseEqActionCapabilities(value: unknown): EqActionCapabilities {
       hotbars: 0,
       hotbar_buttons: 0,
       spell_gems: 0,
+      keymap_actions: false,
     };
   }
   if (
@@ -336,6 +394,9 @@ function parseEqActionCapabilities(value: unknown): EqActionCapabilities {
     hotbars: value.hotbars as number,
     hotbar_buttons: value.hotbar_buttons as number,
     spell_gems: value.spell_gems as number,
+    keymap_actions: isBoolean(value.keymap_actions)
+      ? value.keymap_actions
+      : false,
   };
 }
 
@@ -372,6 +433,11 @@ function parseEqAction(value: unknown): EqAction {
         throw new ProtocolError("EQ spell-gem action is malformed.");
       }
       return { type: "spell_gem", gem: value.gem as number };
+    case "keymap":
+      if (!isEqMappingName(value.mapping)) {
+        throw new ProtocolError("EQ keymap action is malformed.");
+      }
+      return { type: "keymap", mapping: value.mapping };
     default:
       throw new ProtocolError("EQ action type is not supported.");
   }
@@ -410,6 +476,23 @@ function parseClient(value: unknown): TrusharClient {
     }
   }
   return client;
+}
+
+function isEqMappingName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= 128 &&
+    /^[A-Z0-9_]+$/u.test(value)
+  );
+}
+
+function isWindowNumberResultList(value: unknown): value is number[] {
+  return (
+    Array.isArray(value) &&
+    value.every((number) => Number.isSafeInteger(number) && number >= 1) &&
+    new Set(value).size === value.length
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

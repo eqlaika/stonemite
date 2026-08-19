@@ -55,6 +55,7 @@ pub struct EqActionCapabilities {
     pub hotbars: u8,
     pub hotbar_buttons: u8,
     pub spell_gems: u8,
+    pub keymap_actions: bool,
 }
 
 impl EqActionCapabilities {
@@ -65,6 +66,9 @@ impl EqActionCapabilities {
             hotbars: if available { MAX_HOTBARS } else { 0 },
             hotbar_buttons: if available { MAX_HOTBAR_BUTTONS } else { 0 },
             spell_gems: if available { MAX_SPELL_GEMS } else { 0 },
+            // Discovery is a protocol/server feature and remains usable while
+            // no trusik input channel is currently ready.
+            keymap_actions: true,
         }
     }
 }
@@ -187,6 +191,9 @@ pub const MAX_KEY_STROKES: usize = 64;
 pub const MAX_HOTBARS: u8 = 11;
 pub const MAX_HOTBAR_BUTTONS: u8 = 12;
 pub const MAX_SPELL_GEMS: u8 = 14;
+pub const MAX_EQ_TARGET_WINDOWS: usize = 6;
+pub const MAX_EQ_MAPPING_NAME_BYTES: usize = 128;
+pub const EQ_KEYMAP_PAGE_SIZE: usize = 64;
 pub const MAX_KEYS_PER_STROKE: usize = 8;
 pub const MAX_INPUT_DURATION_MS: u64 = 15_000;
 pub const DEFAULT_KEY_HOLD_MS: u16 = 75;
@@ -351,12 +358,71 @@ pub fn validate_key_strokes(strokes: &[KeyStroke]) -> Result<(), ControlError> {
     Ok(())
 }
 
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct EqMappingName(String);
+
+impl EqMappingName {
+    pub fn new(value: impl Into<String>) -> Result<Self, ControlError> {
+        let value = value.into().to_ascii_uppercase();
+        if value.is_empty()
+            || value.len() > MAX_EQ_MAPPING_NAME_BYTES
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err(ControlError::new(
+                ErrorCode::InvalidArgument,
+                "EQ mapping names must contain 1 to 128 ASCII letters, numbers, or underscores",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EqActionTargets {
+    AllLoaded,
+    WindowNumbers(Vec<usize>),
+}
+
+impl EqActionTargets {
+    pub fn window_numbers(window_numbers: Vec<usize>) -> Result<Self, ControlError> {
+        let targets = Self::WindowNumbers(window_numbers);
+        targets.validate()?;
+        Ok(targets)
+    }
+
+    pub fn validate(&self) -> Result<(), ControlError> {
+        if let Self::WindowNumbers(window_numbers) = self {
+            let unique: HashSet<usize> = window_numbers.iter().copied().collect();
+            if window_numbers.is_empty()
+                || window_numbers.len() > MAX_EQ_TARGET_WINDOWS
+                || unique.len() != window_numbers.len()
+                || window_numbers
+                    .iter()
+                    .any(|number| !(1..=MAX_EQ_TARGET_WINDOWS).contains(number))
+            {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidArgument,
+                    "EQ action targets require 1 to 6 unique Stonemite window numbers from 1 to 6",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EqAction {
     UseCenterScreen,
     InviteFollow,
     Hotbar { bar: u8, button: u8 },
     SpellGem { gem: u8 },
+    Keymap { mapping: EqMappingName },
 }
 
 impl EqAction {
@@ -370,6 +436,23 @@ impl EqAction {
         let action = Self::SpellGem { gem };
         action.validate()?;
         Ok(action)
+    }
+
+    pub fn keymap(mapping: impl Into<String>) -> Result<Self, ControlError> {
+        Ok(Self::Keymap {
+            mapping: EqMappingName::new(mapping)?,
+        })
+    }
+
+    pub fn mapping_name(&self) -> EqMappingName {
+        let value = match self {
+            Self::UseCenterScreen => "USE".to_owned(),
+            Self::InviteFollow => "INVITE_FOLLOW".to_owned(),
+            Self::Hotbar { bar, button } => format!("HOT{bar}_{button}"),
+            Self::SpellGem { gem } => format!("CAST{gem}"),
+            Self::Keymap { mapping } => return mapping.clone(),
+        };
+        EqMappingName(value)
     }
 
     pub fn validate(&self) -> Result<(), ControlError> {
@@ -422,6 +505,15 @@ pub enum CommandOutcome {
     },
     EqActionDelivered {
         action: EqAction,
+    },
+    EqKeymapActionsListed {
+        mappings: Vec<EqMappingName>,
+        window_numbers: Vec<usize>,
+        next_after: Option<EqMappingName>,
+    },
+    EqActionBatchDelivered {
+        action: EqAction,
+        window_numbers: Vec<usize>,
     },
 }
 
@@ -512,6 +604,16 @@ pub trait Controller: Send + Sync + 'static {
     fn send_eq_action(
         &self,
         client_id: ClientId,
+        action: EqAction,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>>;
+    fn list_eq_keymap_actions(
+        &self,
+        targets: EqActionTargets,
+        after: Option<EqMappingName>,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>>;
+    fn send_eq_action_batch(
+        &self,
+        targets: EqActionTargets,
         action: EqAction,
     ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>>;
 }
@@ -619,6 +721,7 @@ struct MemoryState {
     disappear_on_input: HashSet<ClientId>,
     retired_ids: HashSet<ClientId>,
     inputs: Vec<RecordedInput>,
+    mapped_actions: HashMap<ClientId, HashSet<EqMappingName>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -698,6 +801,9 @@ impl InMemoryController {
                 activatable,
                 input_ready,
             });
+            state
+                .mapped_actions
+                .insert(id.clone(), memory_default_mappings());
             (id, memory_data(&state))
         };
         self.inner.hub.publish(data);
@@ -711,6 +817,7 @@ impl InMemoryController {
                 state.retired_ids.insert(id.clone());
             }
             state.clients.retain(|client| &client.id != id);
+            state.mapped_actions.remove(id);
             memory_data(&state)
         };
         self.inner.hub.publish(data);
@@ -811,6 +918,24 @@ impl InMemoryController {
             .expect("memory controller poisoned")
             .inputs
             .clone()
+    }
+
+    pub fn set_mapped_actions(
+        &self,
+        id: &ClientId,
+        mappings: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<(), ControlError> {
+        let mappings = mappings
+            .into_iter()
+            .map(EqMappingName::new)
+            .collect::<Result<HashSet<_>, _>>()?;
+        self.inner
+            .state
+            .lock()
+            .expect("memory controller poisoned")
+            .mapped_actions
+            .insert(id.clone(), mappings);
+        Ok(())
     }
 
     pub fn disappear_on_next_activation(&self, id: ClientId) {
@@ -1086,6 +1211,207 @@ impl Controller for InMemoryController {
             Ok(CommandOutcome::EqActionDelivered { action })
         })
     }
+
+    fn list_eq_keymap_actions(
+        &self,
+        targets: EqActionTargets,
+        after: Option<EqMappingName>,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            targets.validate()?;
+            let state = inner.state.lock().expect("memory controller poisoned");
+            let clients = memory_clients_for_listing(&state, &targets);
+            let mut window_numbers = clients
+                .iter()
+                .map(|client| client.window_number)
+                .collect::<Vec<_>>();
+            window_numbers.sort_unstable();
+            let mut shared = clients
+                .first()
+                .and_then(|client| state.mapped_actions.get(&client.id).cloned())
+                .unwrap_or_default();
+            for client in clients.iter().skip(1) {
+                let mappings = state
+                    .mapped_actions
+                    .get(&client.id)
+                    .cloned()
+                    .unwrap_or_default();
+                shared.retain(|mapping| mappings.contains(mapping));
+            }
+            if clients.is_empty() {
+                shared.clear();
+            }
+            let mut mappings = shared.into_iter().collect::<Vec<_>>();
+            mappings.sort();
+            if let Some(after) = &after {
+                mappings.retain(|mapping| mapping > after);
+            }
+            let next_after = (mappings.len() > EQ_KEYMAP_PAGE_SIZE)
+                .then(|| mappings[EQ_KEYMAP_PAGE_SIZE - 1].clone());
+            mappings.truncate(EQ_KEYMAP_PAGE_SIZE);
+            Ok(CommandOutcome::EqKeymapActionsListed {
+                mappings,
+                window_numbers,
+                next_after,
+            })
+        })
+    }
+
+    fn send_eq_action_batch(
+        &self,
+        targets: EqActionTargets,
+        action: EqAction,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            targets.validate()?;
+            action.validate()?;
+            let mut state = inner.state.lock().expect("memory controller poisoned");
+            let client_ids = memory_clients_for_delivery(&state, &targets)?
+                .into_iter()
+                .map(|client| client.id.clone())
+                .collect::<Vec<_>>();
+            for client_id in &client_ids {
+                let client = state
+                    .clients
+                    .iter()
+                    .find(|client| &client.id == client_id)
+                    .expect("selected memory client disappeared while locked");
+                if !client.input_ready {
+                    return Err(ControlError::new(
+                        ErrorCode::InputUnavailable,
+                        format!(
+                            "targeted input is unavailable because Stonemite box {} is not ready",
+                            client.window_number
+                        ),
+                    ));
+                }
+                if !memory_action_is_mapped(&state, client_id, &action) {
+                    return Err(ControlError::new(
+                        ErrorCode::EqActionUnbound,
+                        format!(
+                            "the selected EQ action is not mapped for Stonemite box {}",
+                            client.window_number
+                        ),
+                    ));
+                }
+            }
+            if !state.broadcast.available {
+                return Err(ControlError::new(
+                    ErrorCode::InputUnavailable,
+                    "targeted input is unavailable because trusik is disabled",
+                ));
+            }
+            if let Some(client_id) = client_ids
+                .iter()
+                .find(|client_id| state.disappear_on_input.contains(*client_id))
+                .cloned()
+            {
+                state.disappear_on_input.remove(&client_id);
+                if let Some(index) = state
+                    .clients
+                    .iter()
+                    .position(|client| client.id == client_id)
+                {
+                    let id = state.clients.remove(index).id;
+                    state.mapped_actions.remove(&id);
+                    state.retired_ids.insert(id);
+                    inner.hub.publish(memory_data(&state));
+                }
+                return Err(ControlError::new(
+                    ErrorCode::TargetDisappeared,
+                    "a target disappeared before batch input delivery",
+                ));
+            }
+            if let Some(message) = state.input_failure.take() {
+                return Err(ControlError::new(ErrorCode::InputOperationFailed, message));
+            }
+            let mut window_numbers = Vec::with_capacity(client_ids.len());
+            for client_id in client_ids {
+                let window_number = state
+                    .clients
+                    .iter()
+                    .find(|client| client.id == client_id)
+                    .map(|client| client.window_number)
+                    .expect("selected memory client disappeared while locked");
+                window_numbers.push(window_number);
+                state.inputs.push(RecordedInput::EqAction {
+                    client_id,
+                    action: action.clone(),
+                });
+            }
+            window_numbers.sort_unstable();
+            Ok(CommandOutcome::EqActionBatchDelivered {
+                action,
+                window_numbers,
+            })
+        })
+    }
+}
+
+fn memory_default_mappings() -> HashSet<EqMappingName> {
+    let mut mappings = HashSet::new();
+    for name in ["USE", "INVITE_FOLLOW"] {
+        mappings.insert(EqMappingName(name.to_owned()));
+    }
+    for button in 1..=MAX_HOTBAR_BUTTONS {
+        mappings.insert(EqMappingName(format!("HOT1_{button}")));
+    }
+    for gem in 1..=MAX_SPELL_GEMS {
+        mappings.insert(EqMappingName(format!("CAST{gem}")));
+    }
+    mappings
+}
+
+fn memory_action_is_mapped(state: &MemoryState, client_id: &ClientId, action: &EqAction) -> bool {
+    state
+        .mapped_actions
+        .get(client_id)
+        .is_some_and(|mappings| mappings.contains(&action.mapping_name()))
+}
+
+fn memory_clients_for_listing<'a>(
+    state: &'a MemoryState,
+    targets: &EqActionTargets,
+) -> Vec<&'a ClientState> {
+    state
+        .clients
+        .iter()
+        .filter(|client| match targets {
+            EqActionTargets::AllLoaded => true,
+            EqActionTargets::WindowNumbers(numbers) => numbers.contains(&client.window_number),
+        })
+        .collect()
+}
+
+fn memory_clients_for_delivery<'a>(
+    state: &'a MemoryState,
+    targets: &EqActionTargets,
+) -> Result<Vec<&'a ClientState>, ControlError> {
+    let clients = memory_clients_for_listing(state, targets);
+    match targets {
+        EqActionTargets::AllLoaded if clients.is_empty() => Err(ControlError::new(
+            ErrorCode::ClientNotFound,
+            "no loaded clients match the all-boxes target",
+        )),
+        EqActionTargets::WindowNumbers(numbers) if clients.len() != numbers.len() => {
+            let missing = numbers
+                .iter()
+                .find(|number| {
+                    !clients
+                        .iter()
+                        .any(|client| client.window_number == **number)
+                })
+                .copied()
+                .unwrap_or_default();
+            Err(ControlError::new(
+                ErrorCode::ClientNotFound,
+                format!("Stonemite box {missing} is not loaded"),
+            ))
+        }
+        _ => Ok(clients),
+    }
 }
 
 fn prepare_memory_input(
@@ -1119,6 +1445,7 @@ fn prepare_memory_input(
     }
     if state.disappear_on_input.remove(client_id) {
         let id = state.clients.remove(index).id;
+        state.mapped_actions.remove(&id);
         state.retired_ids.insert(id);
         let data = memory_data(state);
         inner.hub.publish(data);

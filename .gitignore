@@ -6,5 +6,6 @@
 /ikkinz/co.laikasoft.ikkinz.sdPlugin/logs/
 /ikkinz/src/render/assets.generated.ts
 tools/*/target/
+.impeccable/
 .claude/
 PLAN.md

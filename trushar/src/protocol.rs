@@ -1,7 +1,7 @@
 use crate::control::{
     validate_key_strokes, validate_text_input, ActivationStatus, ClientId, ClientTarget,
-    CommandOutcome, ControlError, EqAction, InputKind, KeyCode, KeyStroke, StateSnapshot,
-    DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_PAUSE_MS,
+    CommandOutcome, ControlError, EqAction, EqActionTargets, EqMappingName, InputKind, KeyCode,
+    KeyStroke, StateSnapshot, DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_PAUSE_MS,
 };
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +51,19 @@ pub enum ClientMessage {
         client_id: String,
         action: WireEqAction,
     },
+    ListEqKeymapActions {
+        version: u16,
+        request_id: String,
+        targets: WireEqActionTargets,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<String>,
+    },
+    SendEqActionBatch {
+        version: u16,
+        request_id: String,
+        targets: WireEqActionTargets,
+        action: WireEqAction,
+    },
 }
 
 impl ClientMessage {
@@ -62,7 +75,9 @@ impl ClientMessage {
             | Self::SetBroadcast { version, .. }
             | Self::SendText { version, .. }
             | Self::SendKeys { version, .. }
-            | Self::SendEqAction { version, .. } => *version,
+            | Self::SendEqAction { version, .. }
+            | Self::ListEqKeymapActions { version, .. }
+            | Self::SendEqActionBatch { version, .. } => *version,
         }
     }
 
@@ -74,7 +89,9 @@ impl ClientMessage {
             | Self::SetBroadcast { request_id, .. }
             | Self::SendText { request_id, .. }
             | Self::SendKeys { request_id, .. }
-            | Self::SendEqAction { request_id, .. } => request_id,
+            | Self::SendEqAction { request_id, .. }
+            | Self::ListEqKeymapActions { request_id, .. }
+            | Self::SendEqActionBatch { request_id, .. } => request_id,
         }
     }
 
@@ -121,6 +138,18 @@ impl ClientMessage {
                 client_id, action, ..
             } => {
                 ClientId::new(client_id.clone())?;
+                EqAction::try_from(action.clone())?;
+            }
+            Self::ListEqKeymapActions { targets, after, .. } => {
+                EqActionTargets::try_from(targets.clone())?;
+                if let Some(after) = after {
+                    EqMappingName::new(after.clone())?;
+                }
+            }
+            Self::SendEqActionBatch {
+                targets, action, ..
+            } => {
+                EqActionTargets::try_from(targets.clone())?;
                 EqAction::try_from(action.clone())?;
             }
             _ => {}
@@ -198,6 +227,7 @@ pub enum WireEqAction {
     InviteFollow,
     Hotbar { bar: u8, button: u8 },
     SpellGem { gem: u8 },
+    Keymap { mapping: String },
 }
 
 impl TryFrom<WireEqAction> for EqAction {
@@ -209,6 +239,7 @@ impl TryFrom<WireEqAction> for EqAction {
             WireEqAction::InviteFollow => Ok(Self::InviteFollow),
             WireEqAction::Hotbar { bar, button } => Self::hotbar(bar, button),
             WireEqAction::SpellGem { gem } => Self::spell_gem(gem),
+            WireEqAction::Keymap { mapping } => Self::keymap(mapping),
         }
     }
 }
@@ -220,6 +251,40 @@ impl From<EqAction> for WireEqAction {
             EqAction::InviteFollow => Self::InviteFollow,
             EqAction::Hotbar { bar, button } => Self::Hotbar { bar, button },
             EqAction::SpellGem { gem } => Self::SpellGem { gem },
+            EqAction::Keymap { mapping } => Self::Keymap {
+                mapping: mapping.as_str().to_owned(),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WireEqActionTargets {
+    AllLoaded,
+    WindowNumbers { window_numbers: Vec<usize> },
+}
+
+impl TryFrom<WireEqActionTargets> for EqActionTargets {
+    type Error = ControlError;
+
+    fn try_from(value: WireEqActionTargets) -> Result<Self, Self::Error> {
+        match value {
+            WireEqActionTargets::AllLoaded => Ok(Self::AllLoaded),
+            WireEqActionTargets::WindowNumbers { window_numbers } => {
+                Self::window_numbers(window_numbers)
+            }
+        }
+    }
+}
+
+impl From<EqActionTargets> for WireEqActionTargets {
+    fn from(value: EqActionTargets) -> Self {
+        match value {
+            EqActionTargets::AllLoaded => Self::AllLoaded,
+            EqActionTargets::WindowNumbers(window_numbers) => {
+                Self::WindowNumbers { window_numbers }
+            }
         }
     }
 }
@@ -368,6 +433,16 @@ pub enum Success {
     EqActionDelivered {
         action: WireEqAction,
     },
+    EqKeymapActionsListed {
+        mappings: Vec<String>,
+        window_numbers: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        next_after: Option<String>,
+    },
+    EqActionBatchDelivered {
+        action: WireEqAction,
+        window_numbers: Vec<usize>,
+    },
 }
 
 impl From<CommandOutcome> for Success {
@@ -394,6 +469,25 @@ impl From<CommandOutcome> for Success {
             },
             CommandOutcome::EqActionDelivered { action } => Self::EqActionDelivered {
                 action: action.into(),
+            },
+            CommandOutcome::EqKeymapActionsListed {
+                mappings,
+                window_numbers,
+                next_after,
+            } => Self::EqKeymapActionsListed {
+                mappings: mappings
+                    .into_iter()
+                    .map(|mapping| mapping.as_str().to_owned())
+                    .collect(),
+                window_numbers,
+                next_after: next_after.map(|mapping| mapping.as_str().to_owned()),
+            },
+            CommandOutcome::EqActionBatchDelivered {
+                action,
+                window_numbers,
+            } => Self::EqActionBatchDelivered {
+                action: action.into(),
+                window_numbers,
             },
         }
     }
@@ -466,6 +560,7 @@ impl From<&StateSnapshot> for WireState {
                     hotbars: value.capabilities.eq_actions.hotbars,
                     hotbar_buttons: value.capabilities.eq_actions.hotbar_buttons,
                     spell_gems: value.capabilities.eq_actions.spell_gems,
+                    keymap_actions: value.capabilities.eq_actions.keymap_actions,
                 },
             },
         }
@@ -521,6 +616,8 @@ pub struct WireEqActionCapabilities {
     pub hotbar_buttons: u8,
     #[serde(default)]
     pub spell_gems: u8,
+    #[serde(default)]
+    pub keymap_actions: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -721,6 +818,22 @@ mod tests {
                     button: 12,
                 },
             },
+            ClientMessage::ListEqKeymapActions {
+                version: 1,
+                request_id: "ten".into(),
+                targets: WireEqActionTargets::WindowNumbers {
+                    window_numbers: vec![1, 3],
+                },
+                after: Some("DUCK".into()),
+            },
+            ClientMessage::SendEqActionBatch {
+                version: 1,
+                request_id: "eleven".into(),
+                targets: WireEqActionTargets::AllLoaded,
+                action: WireEqAction::Keymap {
+                    mapping: "SIT_STAND".into(),
+                },
+            },
         ];
         for message in messages {
             round_trip(&message);
@@ -793,6 +906,25 @@ mod tests {
                 },
                 &snapshot,
             ),
+            ServerMessage::success(
+                "mapped".into(),
+                Success::EqKeymapActionsListed {
+                    mappings: vec!["DUCK".into(), "SIT_STAND".into()],
+                    window_numbers: vec![1, 2],
+                    next_after: Some("SIT_STAND".into()),
+                },
+                &snapshot,
+            ),
+            ServerMessage::success(
+                "batch".into(),
+                Success::EqActionBatchDelivered {
+                    action: WireEqAction::Keymap {
+                        mapping: "DUCK".into(),
+                    },
+                    window_numbers: vec![1, 2],
+                },
+                &snapshot,
+            ),
             ServerMessage::error(
                 Some("five".into()),
                 ControlError::new(ErrorCode::ClientNotFound, "not found"),
@@ -824,6 +956,7 @@ mod tests {
         .unwrap();
         assert!(!capabilities.swap_window_numbers);
         assert_eq!(capabilities.eq_actions, WireEqActionCapabilities::default());
+        assert!(!capabilities.eq_actions.keymap_actions);
     }
 
     #[test]
@@ -875,9 +1008,22 @@ mod tests {
             r#"{"type":"hotbar","bar":0,"button":1}"#,
             r#"{"type":"hotbar","bar":1,"button":13}"#,
             r#"{"type":"spell_gem","gem":15}"#,
+            r#"{"type":"keymap","mapping":"../DUCK"}"#,
         ] {
             let request = format!(
                 r#"{{"type":"send_eq_action","version":1,"request_id":"x","client_id":"client-1","action":{invalid_action}}}"#
+            );
+            let error = decode_client_message(&request).unwrap_err();
+            assert_eq!(error.error.code, ErrorCode::InvalidArgument);
+        }
+
+        for invalid_targets in [
+            r#"{"type":"window_numbers","window_numbers":[]}"#,
+            r#"{"type":"window_numbers","window_numbers":[1,1]}"#,
+            r#"{"type":"window_numbers","window_numbers":[7]}"#,
+        ] {
+            let request = format!(
+                r#"{{"type":"send_eq_action_batch","version":1,"request_id":"x","targets":{invalid_targets},"action":{{"type":"keymap","mapping":"DUCK"}}}}"#
             );
             let error = decode_client_message(&request).unwrap_err();
             assert_eq!(error.error.code, ErrorCode::InvalidArgument);

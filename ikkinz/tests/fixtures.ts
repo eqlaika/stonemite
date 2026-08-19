@@ -31,6 +31,7 @@ export function stateFixture(
         hotbars: 11,
         hotbar_buttons: 12,
         spell_gems: 14,
+        keymap_actions: true,
       },
     },
     ...overrides,

@@ -9,6 +9,13 @@ export interface DashboardActionDefinition {
 
 const UUID_PREFIX = "co.laikasoft.ikkinz";
 
+export const HOTKEY_ACTION_DEFINITION = {
+  name: "Hotkey",
+  tooltip:
+    "Send one configured EverQuest keymap action to all loaded boxes or selected Stonemite box numbers.",
+  uuid: `${UUID_PREFIX}.hotkey`,
+} as const;
+
 export const DASHBOARD_ACTION_DEFINITIONS = [
   ...([1, 2, 3, 4, 5, 6] as const).map((slot): DashboardActionDefinition => ({
     key: `character-${slot}`,

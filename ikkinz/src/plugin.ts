@@ -4,6 +4,7 @@ import {
   type PluginSettings,
 } from "./actions/dashboard-key";
 import { connectionForSettings } from "./actions/dashboard-controller";
+import { HotkeyAction } from "./actions/hotkey";
 import { DashboardStore, type ConnectionStatus } from "./state/store";
 import { TrusharClient } from "./trushar/client";
 
@@ -25,6 +26,7 @@ const client = new TrusharClient({
 for (const action of createDashboardKeyActions(store, client)) {
   streamDeck.actions.registerAction(action);
 }
+streamDeck.actions.registerAction(new HotkeyAction(store, client));
 streamDeck.system.onSystemDidWakeUp(() => client.reconnect());
 streamDeck.settings.onDidReceiveGlobalSettings<PluginSettings>((event) => {
   applySettings(event.settings);

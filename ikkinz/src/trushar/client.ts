@@ -6,6 +6,7 @@ import {
   parseServerMessage,
   type ClientMessage,
   type EqAction,
+  type EqActionTargets,
   type KeyStroke,
   type ServerMessage,
   type Success,
@@ -376,6 +377,90 @@ export class TrusharClient {
     );
   }
 
+  async listEqKeymapActions(targets: EqActionTargets): Promise<
+    Extract<Success, { type: "eq_keymap_actions_listed" }> & {
+      mappings: string[];
+    }
+  > {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const mappings = new Set<string>();
+      const cursors = new Set<string>();
+      let after: string | undefined;
+      let targetSignature: string | undefined;
+      let windowNumbers: number[] = [];
+      let rosterChanged = false;
+      for (let page = 0; page < 256; page += 1) {
+        const message = await this.#request(
+          {
+            type: "list_eq_keymap_actions",
+            version: PROTOCOL_VERSION,
+            request_id: this.#nextRequestId("eq-keymaps"),
+            targets,
+            ...(after ? { after } : {}),
+          },
+          "eq_keymap_actions_listed",
+        );
+        const result = message.result;
+        if (result.type !== "eq_keymap_actions_listed") {
+          throw new ProtocolError(
+            "Stonemite returned the wrong keymap list result.",
+          );
+        }
+        const pageSignature = keymapTargetSignature(
+          message.state,
+          result.window_numbers,
+        );
+        if (
+          targetSignature !== undefined &&
+          pageSignature !== targetSignature
+        ) {
+          rosterChanged = true;
+          break;
+        }
+        targetSignature = pageSignature;
+        for (const mapping of result.mappings) mappings.add(mapping);
+        windowNumbers = result.window_numbers;
+        if (!result.next_after) {
+          return {
+            type: "eq_keymap_actions_listed",
+            mappings: [...mappings],
+            window_numbers: windowNumbers,
+          };
+        }
+        if (cursors.has(result.next_after)) {
+          throw new ProtocolError(
+            "Stonemite repeated an EQ keymap page cursor.",
+          );
+        }
+        cursors.add(result.next_after);
+        after = result.next_after;
+      }
+      if (!rosterChanged) {
+        throw new ProtocolError("Stonemite returned too many EQ keymap pages.");
+      }
+    }
+    throw new CommandError(
+      "target_changed",
+      "The selected EQ roster changed while key mappings were loading. Refresh mappings and try again.",
+    );
+  }
+
+  async sendEqActionBatch(
+    targets: EqActionTargets,
+    action: EqAction,
+  ): Promise<Extract<ServerMessage, { type: "result" }>> {
+    return this.#request(
+      {
+        type: "send_eq_action_batch",
+        version: PROTOCOL_VERSION,
+        request_id: this.#nextRequestId("eq-action-batch"),
+        targets,
+        action,
+      },
+      "eq_action_batch_delivered",
+    );
+  }
+
   #connect(generation: number, reconnecting: boolean): void {
     const credentials = this.#credentials;
     if (!credentials || generation !== this.#generation) return;
@@ -694,6 +779,28 @@ export function normalizeAddress(input: string): string {
       "Include the Stonemite host and port.",
     );
   return url.host.toLowerCase();
+}
+
+function keymapTargetSignature(
+  state: TrusharState,
+  windowNumbers: number[],
+): string {
+  return JSON.stringify(
+    [...windowNumbers]
+      .sort((a, b) => a - b)
+      .map((windowNumber) => {
+        const client = state.clients.find(
+          (candidate) => candidate.window_number === windowNumber,
+        );
+        return [
+          windowNumber,
+          client?.id ?? null,
+          client?.character ?? null,
+          client?.server ?? null,
+          client?.class_code ?? null,
+        ];
+      }),
+  );
 }
 
 function endpoint(address: string, path: string): string {

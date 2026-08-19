@@ -37,9 +37,9 @@ Stonemite derives character identity from the running EQ clients and controls an
 
 ## Capabilities and constraints
 
-- Protocol v1 provides complete pushed state, exact client activation, active-to-selected window-number swaps, explicit broadcast state, exact-client text/key delivery, keymap-aware EQ actions, request correlation, and six-digit LAN pairing.
-- Ikkinz v0 is the core deck only: position-independent boot/handoff, six separately placeable character slots, window-number swaps, broadcast, group, follow, assist, all-boxes Use, a Stonemite setup key with connection status, automatic loopback, LAN pairing, and honest error states.
-- Assist concurrently sends `/assist <active character>` to every input-ready background client. Use and Group resolve each character/persona's configured EQ actions. Generic hotbar and spell-gem delivery is available to integrations, while fixed Burn, Camp, heal, and spell tiles remain outside v0 until their timing, target, and failure policies are defined.
+- Protocol v1 provides complete pushed state, exact client activation, active-to-selected window-number swaps, explicit broadcast state, exact-client text/key delivery, keymap-aware EQ actions, shared mapping discovery, all-target preflight, request correlation, and six-digit LAN pairing.
+- Ikkinz v0 is the core deck only: position-independent boot/handoff, six separately placeable character slots, window-number swaps, broadcast, group, follow, assist, all-boxes Use, configurable mapped Hotkey tiles, a Stonemite setup key with connection status, automatic loopback, LAN pairing, and honest error states.
+- Assist concurrently sends `/assist <active character>` to every input-ready background client. Use and Group resolve each character/persona's configured EQ actions. A Hotkey tile can name, icon, and color one mapped EQ action and target all loaded boxes or stable box numbers; opinionated fixed Burn, Camp, heal, and spell behaviors remain outside v0.
 - An input result proves delivery to the intended process, not an observed spell, target, buff, or combat result. The interface must never claim otherwise.
 - Client IDs are opaque and valid only for the current Stonemite run. Reconnect state is authoritative.
 - Character, server, and class can be temporarily unknown. Clients can be absent, extra, unactivatable, or not ready for targeted input.

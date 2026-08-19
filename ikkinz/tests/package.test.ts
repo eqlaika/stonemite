@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { strFromU8, unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import { DASHBOARD_ACTION_DEFINITIONS } from "../src/actions/key-definitions";
+import {
+  DASHBOARD_ACTION_DEFINITIONS,
+  HOTKEY_ACTION_DEFINITION,
+} from "../src/actions/key-definitions";
 import { CLASS_IMAGES } from "../src/render/assets.generated";
 
 const EXPECTED_CLASSES = [
@@ -107,27 +110,72 @@ describe("release inputs", () => {
     expect(manifest.Nodejs?.Version).toBe("24");
     expect(manifest.Nodejs?.Debug).toBeUndefined();
     expect(manifest.PropertyInspectorPath).toBeUndefined();
-    expect(
+    const actualActions =
       manifest.Actions?.map(({ Name, Tooltip, UUID }) => ({
         name: Name,
         tooltip: Tooltip,
         uuid: UUID,
-      })),
-    ).toEqual(
-      DASHBOARD_ACTION_DEFINITIONS.map(({ name, tooltip, uuid }) => ({
+      })).sort((a, b) => String(a.uuid).localeCompare(String(b.uuid))) ?? [];
+    const expectedActions = [
+      ...DASHBOARD_ACTION_DEFINITIONS.map(({ name, tooltip, uuid }) => ({
         name,
         tooltip,
         uuid,
       })),
-    );
+      HOTKEY_ACTION_DEFINITION,
+    ].sort((a, b) => a.uuid.localeCompare(b.uuid));
+    expect(actualActions).toEqual(expectedActions);
     for (const action of manifest.Actions ?? []) {
       expect(action.Icon).toBe("imgs/actions/stonemite/icon");
       expect(action.PropertyInspectorPath).toBe(
         action.UUID === "co.laikasoft.ikkinz.logo"
           ? "ui/pairing.html"
-          : undefined,
+          : action.UUID === "co.laikasoft.ikkinz.hotkey"
+            ? "ui/hotkey.html"
+            : undefined,
       );
     }
+  });
+
+  it("ships the mapped-hotkey inspector and pinned icon previews", async () => {
+    const [html, script, previews] = await Promise.all([
+      readFile(
+        new URL(
+          "../co.laikasoft.ikkinz.sdPlugin/ui/hotkey.html",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+      readFile(
+        new URL(
+          "../co.laikasoft.ikkinz.sdPlugin/ui/hotkey.js",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+      readFile(
+        new URL(
+          "../co.laikasoft.ikkinz.sdPlugin/ui/lucide-animated-icons.generated.js",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ]);
+    expect(html).toContain("Only actions with a key mapping");
+    expect(html).toContain("no key mapping");
+    expect(html).toContain("lucide-animated-icons.generated.js");
+    expect(html).toContain("No Lucide Animated icons match this search.");
+    expect(html).not.toContain('id="connection"');
+    expect(html).toContain('id="tile-color"');
+    expect(html).toContain('data-color="#59d8d0"');
+    expect(script).toContain("await client.getSettings()");
+    expect(script).toContain("color: draft.color");
+    expect(script).not.toContain("showConnection");
+    expect(script).toContain("mappingValidated");
+    expect(script).not.toContain("custom image");
+    expect(previews).toContain("Lucide Animated (MIT)");
+    expect(previews).toContain('"flame"');
+    expect(previews).not.toContain('"footprints"');
   });
 
   it("bundles complete editable 5 by 3 profiles", async () => {

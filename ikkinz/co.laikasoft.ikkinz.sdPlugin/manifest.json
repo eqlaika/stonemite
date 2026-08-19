@@ -176,6 +176,18 @@
       "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
     },
     {
+      "Name": "Hotkey",
+      "UUID": "co.laikasoft.ikkinz.hotkey",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Send one configured EverQuest keymap action to all loaded boxes or selected Stonemite box numbers.",
+      "PropertyInspectorPath": "ui/hotkey.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
       "Name": "Stonemite setup",
       "UUID": "co.laikasoft.ikkinz.logo",
       "Icon": "imgs/actions/stonemite/icon",

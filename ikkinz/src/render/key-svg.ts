@@ -1,5 +1,10 @@
 import { APP_IMAGE, CLASS_IMAGES } from "./assets.generated";
-import { renderLucideActionIcon, type ActionIcon } from "./action-icons";
+import {
+  renderConfigurableLucideIcon,
+  renderLucideActionIcon,
+  type ActionIcon,
+  type LucideAnimatedIcon,
+} from "./action-icons";
 import { BADGE_COLORS, SLOT_COLORS, type KeyCell } from "../state/layout";
 
 const W = 72;
@@ -83,6 +88,75 @@ export function renderCell(cell: KeyCell, motionFrame = 0): string {
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${W}" viewBox="0 0 ${W} ${W}" role="img"><style>${styles()}</style>${body}</svg>`;
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+export interface HotkeyTile {
+  configured: boolean;
+  label: string;
+  icon: LucideAnimatedIcon;
+  color?: string;
+  targets: string;
+  status?: string;
+  available: boolean;
+  active: boolean;
+}
+
+export function renderHotkeyTile(tile: HotkeyTile, motionFrame = 0): string {
+  const chosenColor = normalizeHotkeyColor(tile.color);
+  const accent = tile.available ? chosenColor : COLORS.disabled;
+  const active = tile.active && tile.available;
+  const activeForeground = contrastingHotkeyForeground(chosenColor);
+  const surface = active
+    ? `<rect width="72" height="72" rx="7" fill="${accent}"/>`
+    : base();
+  const foreground = active
+    ? activeForeground
+    : tile.configured
+      ? accent
+      : COLORS.amber;
+  const icon = tile.configured ? tile.icon : "keyboard";
+  const label = tile.configured ? tile.label : "Configure";
+  const targetCopy = tile.status ?? tile.targets;
+  const target = tile.configured
+    ? `<text x="56" y="22" class="${active ? "active-text" : "muted"} center"${active ? ` style="fill:${activeForeground}"` : ""} font-size="15"${fittedTextAttributes(targetCopy, 3, 24)}>${escapeXml(targetCopy)}</text>`
+    : "";
+  const body = `${surface}${renderConfigurableLucideIcon(
+    icon,
+    foreground,
+    motionFrame,
+    active,
+    tile.configured ? "translate(8 7) scale(1.35)" : undefined,
+  )}${target}<text x="36" y="65" class="${active ? "active-text" : "text"} center"${active ? ` style="fill:${activeForeground}"` : ""} font-size="15"${fittedTextAttributes(label, 7, 62)}>${escapeXml(label)}</text>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${W}" viewBox="0 0 ${W} ${W}" role="img"><style>${styles()}</style>${body}</svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+export function contrastingHotkeyForeground(color: string): string {
+  const background = normalizeHotkeyColor(color);
+  const luminance = relativeLuminance(background);
+  const whiteContrast = 1.05 / (luminance + 0.05);
+  const darkContrast = (luminance + 0.05) / 0.05;
+  return whiteContrast >= darkContrast ? "#ffffff" : "#000000";
+}
+
+function normalizeHotkeyColor(value: string | undefined): string {
+  return value && /^#[0-9a-f]{6}$/iu.test(value)
+    ? value.toLowerCase()
+    : COLORS.cyan;
+}
+
+function relativeLuminance(color: string): number {
+  const channels = [1, 3, 5].map((offset) => {
+    const channel = Number.parseInt(color.slice(offset, offset + 2), 16) / 255;
+    return channel <= 0.04045
+      ? channel / 12.92
+      : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  return (
+    0.2126 * (channels[0] ?? 0) +
+    0.7152 * (channels[1] ?? 0) +
+    0.0722 * (channels[2] ?? 0)
+  );
 }
 
 export function escapeXml(value: string): string {

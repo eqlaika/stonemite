@@ -10,6 +10,8 @@
 - Added an Ikkinz Assist key that concurrently sends `/assist <main>` to ready background clients
 - Added an Ikkinz Use key that invokes each input-ready character's configured Use Center Screen action
 - Added generic keymap-aware Trushar actions for all 11×12 EQ hotbar buttons and all 14 spell gems
+- Added a configurable Ikkinz Hotkey tile with a custom name, per-tile color with contrast-aware running content, the complete pinned 466-icon Lucide Animated catalog, and all-loaded or stable box-number targets
+- Added shared keymap discovery and all-target preflight so a configured hotkey starts on no boxes unless every requested box is loaded, input-ready, and mapped
 - Resolve semantic actions per character/persona from `Character_Server_Class.ini`, with legacy character and shared `eqclient.ini` support
 - Made Ikkinz character slots and controls independently placeable, kept an editable 5×3 default profile, added a Stonemite setup key, and left two profile positions blank
 - Simplified Ikkinz tiles with 15px minimum text, no top rails, a stable Bcast label, distinct action colors, and filled running/armed states

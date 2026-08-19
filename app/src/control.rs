@@ -2,15 +2,15 @@
 
 use futures_util::future::BoxFuture;
 use std::cell::UnsafeCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use trushar::control::{
     BroadcastState, ClientId, ClientTarget, CommandOutcome, ControlError, Controller, EqAction,
-    ErrorCode, InputKind, KeyStroke, SnapshotMapper, SourceClient, StateHub, StateSnapshot,
-    DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_PAUSE_MS,
+    EqActionTargets, EqMappingName, ErrorCode, InputKind, KeyStroke, SnapshotMapper, SourceClient,
+    StateHub, StateSnapshot, DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_PAUSE_MS, EQ_KEYMAP_PAGE_SIZE,
 };
 use trushar::server::{ServerConfig, ServerHandle};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -56,6 +56,16 @@ enum UiCommand {
         action: EqAction,
         reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
     },
+    ListEqKeymapActions {
+        targets: EqActionTargets,
+        after: Option<EqMappingName>,
+        reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
+    },
+    SendEqActionBatch {
+        targets: EqActionTargets,
+        action: EqAction,
+        reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
+    },
 }
 
 struct ResolvedStroke {
@@ -78,6 +88,11 @@ enum ActiveInputKind {
     EqAction(EqAction),
 }
 
+enum InputCompletion {
+    Single(oneshot::Sender<Result<CommandOutcome, ControlError>>),
+    Batch(u64),
+}
+
 struct ActiveInput {
     pid: u32,
     kind: ActiveInputKind,
@@ -85,6 +100,14 @@ struct ActiveInput {
     index: usize,
     phase: InputPhase,
     next_step: Instant,
+    completion: InputCompletion,
+}
+
+struct PendingBatch {
+    action: EqAction,
+    window_numbers: Vec<usize>,
+    remaining: HashSet<u32>,
+    error: Option<ControlError>,
     reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
 }
 
@@ -95,6 +118,8 @@ struct UiState {
     hub: Arc<StateHub>,
     tray_hwnd: HWND,
     active_inputs: HashMap<u32, ActiveInput>,
+    input_batches: HashMap<u64, PendingBatch>,
+    next_batch_id: u64,
     keymaps: HashMap<PathBuf, crate::eq_keymap::EqKeymapResolver>,
     default_eq_dir: PathBuf,
     pairing: Option<trushar::server::PairingHandle>,
@@ -239,6 +264,32 @@ impl Controller for ProductionController {
             reply,
         })
     }
+
+    fn list_eq_keymap_actions(
+        &self,
+        targets: EqActionTargets,
+        after: Option<EqMappingName>,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>> {
+        self.enqueue(COMMAND_TIMEOUT, move |reply| {
+            UiCommand::ListEqKeymapActions {
+                targets,
+                after,
+                reply,
+            }
+        })
+    }
+
+    fn send_eq_action_batch(
+        &self,
+        targets: EqActionTargets,
+        action: EqAction,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>> {
+        self.enqueue(INPUT_TIMEOUT, move |reply| UiCommand::SendEqActionBatch {
+            targets,
+            action,
+            reply,
+        })
+    }
 }
 
 /// Initialize the bounded dispatcher and optionally start the dedicated server thread.
@@ -257,6 +308,8 @@ pub fn start(
         hub: hub.clone(),
         tray_hwnd: hwnd,
         active_inputs: HashMap::new(),
+        input_batches: HashMap::new(),
+        next_batch_id: 0,
         keymaps: HashMap::new(),
         default_eq_dir: eq_dir,
         pairing: None,
@@ -338,6 +391,7 @@ pub fn stop() {
         for input in state.active_inputs.drain().map(|(_, input)| input) {
             crate::broadcast::finish_targeted_input(input.pid);
         }
+        state.input_batches.clear();
         if had_active_inputs {
             unsafe {
                 let _ = KillTimer(state.tray_hwnd, TIMER_CONTROL_INPUT);
@@ -385,6 +439,18 @@ pub fn drain_commands() {
                 action,
                 reply,
             } => start_eq_action(client_id, action, reply),
+            UiCommand::ListEqKeymapActions {
+                targets,
+                after,
+                reply,
+            } => {
+                let _ = reply.send(list_eq_keymap_actions_on_ui(targets, after));
+            }
+            UiCommand::SendEqActionBatch {
+                targets,
+                action,
+                reply,
+            } => start_eq_action_batch(targets, action, reply),
         }
     }
 }
@@ -579,6 +645,284 @@ fn start_eq_action(
     }
 }
 
+fn list_eq_keymap_actions_on_ui(
+    targets: EqActionTargets,
+    after: Option<EqMappingName>,
+) -> Result<CommandOutcome, ControlError> {
+    targets.validate()?;
+    let Some(state) = ui().as_mut() else {
+        return Err(ControlError::new(
+            ErrorCode::InternalError,
+            "control dispatcher is stopped",
+        ));
+    };
+    let sources = sources_for_targets(state, &targets, false)?;
+    let mut window_numbers = sources
+        .iter()
+        .map(|source| source.window_number)
+        .collect::<Vec<_>>();
+    window_numbers.sort_unstable();
+
+    let mut shared: Option<BTreeSet<EqMappingName>> = None;
+    for source in &sources {
+        let mapped = mapped_actions_for_source(state, source)?;
+        shared = Some(match shared {
+            Some(mut shared) => {
+                shared.retain(|mapping| mapped.contains(mapping));
+                shared
+            }
+            None => mapped,
+        });
+    }
+    let mut mappings = shared.unwrap_or_default().into_iter().collect::<Vec<_>>();
+    if let Some(after) = &after {
+        mappings.retain(|mapping| mapping > after);
+    }
+    let next_after =
+        (mappings.len() > EQ_KEYMAP_PAGE_SIZE).then(|| mappings[EQ_KEYMAP_PAGE_SIZE - 1].clone());
+    mappings.truncate(EQ_KEYMAP_PAGE_SIZE);
+    Ok(CommandOutcome::EqKeymapActionsListed {
+        mappings,
+        window_numbers,
+        next_after,
+    })
+}
+
+struct PreparedBatchInput {
+    pid: u32,
+    window_number: usize,
+    stroke: ResolvedStroke,
+}
+
+fn start_eq_action_batch(
+    targets: EqActionTargets,
+    action: EqAction,
+    reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
+) {
+    if reply.is_closed() {
+        return;
+    }
+    let result = prepare_eq_action_batch(&targets, &action);
+    let prepared = match result {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let _ = reply.send(Err(error));
+            return;
+        }
+    };
+    let Some(state) = ui().as_mut() else {
+        let _ = reply.send(Err(ControlError::new(
+            ErrorCode::InternalError,
+            "control dispatcher is stopped",
+        )));
+        return;
+    };
+
+    let mut acquired = Vec::with_capacity(prepared.len());
+    for input in &prepared {
+        if let Err(error) = crate::broadcast::begin_targeted_input(input.pid) {
+            for pid in acquired {
+                crate::broadcast::finish_targeted_input(pid);
+            }
+            let _ = reply.send(Err(map_targeted_input_error(error)));
+            return;
+        }
+        acquired.push(input.pid);
+    }
+    if state.active_inputs.is_empty() {
+        let timer = unsafe { SetTimer(state.tray_hwnd, TIMER_CONTROL_INPUT, INPUT_TICK_MS, None) };
+        if timer == 0 {
+            for pid in acquired {
+                crate::broadcast::finish_targeted_input(pid);
+            }
+            let _ = reply.send(Err(ControlError::new(
+                ErrorCode::InputOperationFailed,
+                "failed to start the targeted input timer",
+            )));
+            return;
+        }
+    }
+
+    state.next_batch_id = state.next_batch_id.saturating_add(1);
+    let batch_id = state.next_batch_id;
+    let remaining = prepared.iter().map(|input| input.pid).collect();
+    let mut window_numbers = prepared
+        .iter()
+        .map(|input| input.window_number)
+        .collect::<Vec<_>>();
+    window_numbers.sort_unstable();
+    state.input_batches.insert(
+        batch_id,
+        PendingBatch {
+            action: action.clone(),
+            window_numbers,
+            remaining,
+            error: None,
+            reply,
+        },
+    );
+    let next_step = Instant::now() + INPUT_ACTIVATION_DELAY;
+    for input in prepared {
+        state.active_inputs.insert(
+            input.pid,
+            ActiveInput {
+                pid: input.pid,
+                kind: ActiveInputKind::EqAction(action.clone()),
+                strokes: vec![input.stroke],
+                index: 0,
+                phase: InputPhase::Press,
+                next_step,
+                completion: InputCompletion::Batch(batch_id),
+            },
+        );
+    }
+}
+
+fn prepare_eq_action_batch(
+    targets: &EqActionTargets,
+    action: &EqAction,
+) -> Result<Vec<PreparedBatchInput>, ControlError> {
+    targets.validate()?;
+    action.validate()?;
+    if !crate::broadcast::is_available() {
+        return Err(ControlError::new(
+            ErrorCode::InputUnavailable,
+            "targeted input is unavailable because trusik is disabled",
+        ));
+    }
+    let Some(state) = ui().as_mut() else {
+        return Err(ControlError::new(
+            ErrorCode::InternalError,
+            "control dispatcher is stopped",
+        ));
+    };
+    let sources = sources_for_targets(state, targets, true)?;
+    let mut prepared = Vec::with_capacity(sources.len());
+    for source in sources {
+        let pid = source.private_key as u32;
+        if !crate::broadcast::is_target_ready(pid) {
+            return Err(ControlError::new(
+                ErrorCode::InputUnavailable,
+                format!(
+                    "targeted input is unavailable because Stonemite box {} is not ready",
+                    source.window_number
+                ),
+            ));
+        }
+        if state.active_inputs.contains_key(&pid) {
+            return Err(ControlError::new(
+                ErrorCode::InputOperationFailed,
+                format!(
+                    "Stonemite box {} already has an input sequence in progress",
+                    source.window_number
+                ),
+            ));
+        }
+        let binding = resolve_action_for_source(state, &source, action).map_err(|error| {
+            if error.code == ErrorCode::EqActionUnbound {
+                ControlError::new(
+                    ErrorCode::EqActionUnbound,
+                    format!(
+                        "the selected EQ action is not mapped for Stonemite box {}",
+                        source.window_number
+                    ),
+                )
+            } else {
+                error
+            }
+        })?;
+        prepared.push(PreparedBatchInput {
+            pid,
+            window_number: source.window_number,
+            stroke: ResolvedStroke {
+                scans: binding.scans,
+                hold: Duration::from_millis(u64::from(DEFAULT_KEY_HOLD_MS)),
+                pause: Duration::ZERO,
+            },
+        });
+    }
+    Ok(prepared)
+}
+
+fn sources_for_targets(
+    state: &UiState,
+    targets: &EqActionTargets,
+    require_all: bool,
+) -> Result<Vec<SourceClient>, ControlError> {
+    let mut sources = state
+        .latest_sources
+        .iter()
+        .filter(|source| match targets {
+            EqActionTargets::AllLoaded => true,
+            EqActionTargets::WindowNumbers(numbers) => numbers.contains(&source.window_number),
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    sources.sort_by_key(|source| source.window_number);
+    if !require_all {
+        return Ok(sources);
+    }
+    match targets {
+        EqActionTargets::AllLoaded if sources.is_empty() => Err(ControlError::new(
+            ErrorCode::ClientNotFound,
+            "no loaded clients match the all-boxes target",
+        )),
+        EqActionTargets::WindowNumbers(numbers) if sources.len() != numbers.len() => {
+            let missing = numbers
+                .iter()
+                .find(|number| {
+                    !sources
+                        .iter()
+                        .any(|source| source.window_number == **number)
+                })
+                .copied()
+                .unwrap_or_default();
+            Err(ControlError::new(
+                ErrorCode::ClientNotFound,
+                format!("Stonemite box {missing} is not loaded"),
+            ))
+        }
+        _ => Ok(sources),
+    }
+}
+
+fn mapped_actions_for_source(
+    state: &mut UiState,
+    source: &SourceClient,
+) -> Result<BTreeSet<EqMappingName>, ControlError> {
+    let eq_dir = crate::eq_windows::process_eq_directory(source.private_key as u32)
+        .unwrap_or_else(|| state.default_eq_dir.clone());
+    state
+        .keymaps
+        .entry(eq_dir.clone())
+        .or_insert_with(|| crate::eq_keymap::EqKeymapResolver::new(eq_dir))
+        .mapped_actions(source_identity(source))
+        .map_err(map_eq_action_error)
+}
+
+fn resolve_action_for_source(
+    state: &mut UiState,
+    source: &SourceClient,
+    action: &EqAction,
+) -> Result<crate::eq_keymap::ResolvedBinding, ControlError> {
+    let eq_dir = crate::eq_windows::process_eq_directory(source.private_key as u32)
+        .unwrap_or_else(|| state.default_eq_dir.clone());
+    state
+        .keymaps
+        .entry(eq_dir.clone())
+        .or_insert_with(|| crate::eq_keymap::EqKeymapResolver::new(eq_dir))
+        .resolve(action, source_identity(source))
+        .map_err(map_eq_action_error)
+}
+
+fn source_identity(source: &SourceClient) -> crate::eq_keymap::ClientIdentity<'_> {
+    crate::eq_keymap::ClientIdentity {
+        character: source.character.as_deref(),
+        server: source.server.as_deref(),
+        class_code: source.class_code.as_deref(),
+    }
+}
+
 fn map_eq_action_error(error: crate::eq_keymap::ResolveError) -> ControlError {
     match error {
         crate::eq_keymap::ResolveError::Unbound => ControlError::new(
@@ -652,7 +996,7 @@ fn start_resolved_input(
             // trusik observes the active flag and gives a background EQ window an
             // activation notification before DirectInput consumes the first key.
             next_step: Instant::now() + INPUT_ACTIVATION_DELAY,
-            reply,
+            completion: InputCompletion::Single(reply),
         },
     );
     Ok(())
@@ -973,8 +1317,8 @@ pub fn advance_input() {
 }
 
 fn advance_one_input(state: &mut UiState, mut input: ActiveInput) {
-    if input.reply.is_closed() {
-        finish_input(input, None);
+    if input_completion_is_closed(state, &input.completion) {
+        finish_input(state, input, None);
         return;
     }
     if !state
@@ -983,6 +1327,7 @@ fn advance_one_input(state: &mut UiState, mut input: ActiveInput) {
         .any(|source| source.private_key as u32 == input.pid)
     {
         finish_input(
+            state,
             input,
             Some(Err(ControlError::new(
                 ErrorCode::TargetDisappeared,
@@ -1007,7 +1352,7 @@ fn advance_one_input(state: &mut UiState, mut input: ActiveInput) {
                 action: action.clone(),
             },
         });
-        finish_input(input, Some(result));
+        finish_input(state, input, Some(result));
         return;
     }
 
@@ -1017,6 +1362,7 @@ fn advance_one_input(state: &mut UiState, mut input: ActiveInput) {
     for scan in phase_scans(&input.strokes[input.index], phase) {
         if let Err(message) = crate::broadcast::set_targeted_key(input.pid, scan, pressed) {
             finish_input(
+                state,
                 input,
                 Some(Err(ControlError::new(
                     ErrorCode::InputOperationFailed,
@@ -1051,10 +1397,59 @@ fn advance_one_input(state: &mut UiState, mut input: ActiveInput) {
     state.active_inputs.insert(input.pid, input);
 }
 
-fn finish_input(input: ActiveInput, result: Option<Result<CommandOutcome, ControlError>>) {
+fn input_completion_is_closed(state: &UiState, completion: &InputCompletion) -> bool {
+    match completion {
+        InputCompletion::Single(reply) => reply.is_closed(),
+        InputCompletion::Batch(batch_id) => state
+            .input_batches
+            .get(batch_id)
+            .is_none_or(|batch| batch.reply.is_closed()),
+    }
+}
+
+fn finish_input(
+    state: &mut UiState,
+    input: ActiveInput,
+    result: Option<Result<CommandOutcome, ControlError>>,
+) {
     crate::broadcast::finish_targeted_input(input.pid);
-    if let Some(result) = result {
-        let _ = input.reply.send(result);
+    match input.completion {
+        InputCompletion::Single(reply) => {
+            if let Some(result) = result {
+                let _ = reply.send(result);
+            }
+        }
+        InputCompletion::Batch(batch_id) => {
+            let complete = if let Some(batch) = state.input_batches.get_mut(&batch_id) {
+                batch.remaining.remove(&input.pid);
+                if let Some(Err(mut error)) = result {
+                    error.message = format!(
+                        "{}; one or more targets may have received the action",
+                        error.message
+                    );
+                    batch.error.get_or_insert(error);
+                }
+                batch.remaining.is_empty()
+            } else {
+                false
+            };
+            if complete {
+                let batch = state
+                    .input_batches
+                    .remove(&batch_id)
+                    .expect("completed input batch disappeared");
+                if !batch.reply.is_closed() {
+                    let result = match batch.error {
+                        Some(error) => Err(error),
+                        None => Ok(CommandOutcome::EqActionBatchDelivered {
+                            action: batch.action,
+                            window_numbers: batch.window_numbers,
+                        }),
+                    };
+                    let _ = batch.reply.send(result);
+                }
+            }
+        }
     }
 }
 

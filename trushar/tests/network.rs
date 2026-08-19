@@ -9,8 +9,8 @@ use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use tokio_tungstenite::{client_async, WebSocketStream};
 use trushar::control::{BroadcastState, InMemoryController, RecordedInput};
 use trushar::protocol::{
-    ClientMessage, PairingRequest, ServerMessage, Success, Target, WireEqAction, WireInputKind,
-    WireKeyStroke,
+    ClientMessage, PairingRequest, ServerMessage, Success, Target, WireEqAction,
+    WireEqActionTargets, WireInputKind, WireKeyStroke,
 };
 use trushar::server::{ServerConfig, ServerHandle, ENDPOINT_PATH, PAIRING_ENDPOINT_PATH};
 
@@ -103,6 +103,8 @@ async fn real_network_listener_upgrade_commands_fanout_reconnect_and_shutdown() 
     });
     let first = control.add_client(1, Some("Laika"), Some("Xegony"), Some("SHK"), true, true);
     let second = control.add_client(2, None, None, None, false, true);
+    control.set_mapped_actions(&first, ["DUCK"]).unwrap();
+    control.set_mapped_actions(&second, ["DUCK"]).unwrap();
     let server = ServerHandle::start(
         ServerConfig::loopback("127.0.0.1:0".parse().unwrap()),
         Arc::new(control.clone()),
@@ -257,14 +259,66 @@ async fn real_network_listener_upgrade_commands_fanout_reconnect_and_shutdown() 
             ..
         }
     ));
+    send(
+        &mut one,
+        ClientMessage::ListEqKeymapActions {
+            version: 1,
+            request_id: "mapped-1".into(),
+            targets: WireEqActionTargets::WindowNumbers {
+                window_numbers: vec![1, 2],
+            },
+            after: None,
+        },
+    )
+    .await;
     assert!(matches!(
-        control.recorded_inputs().as_slice(),
-        [
-            RecordedInput::Text { client_id, .. },
-            RecordedInput::Keys { .. },
-            RecordedInput::EqAction { action: trushar::control::EqAction::SpellGem { gem: 14 }, .. },
-        ] if client_id == &second
+        receive_result(&mut one, "mapped-1").await,
+        ServerMessage::Result {
+            result: Success::EqKeymapActionsListed {
+                mappings,
+                window_numbers,
+                next_after: None,
+            },
+            ..
+        } if mappings == ["DUCK"] && window_numbers == [1, 2]
     ));
+    send(
+        &mut one,
+        ClientMessage::SendEqActionBatch {
+            version: 1,
+            request_id: "batch-1".into(),
+            targets: WireEqActionTargets::AllLoaded,
+            action: WireEqAction::Keymap {
+                mapping: "DUCK".into(),
+            },
+        },
+    )
+    .await;
+    assert!(matches!(
+        receive_result(&mut one, "batch-1").await,
+        ServerMessage::Result {
+            result: Success::EqActionBatchDelivered { window_numbers, .. },
+            ..
+        } if window_numbers == [1, 2]
+    ));
+    let inputs = control.recorded_inputs();
+    assert_eq!(inputs.len(), 5);
+    assert!(matches!(&inputs[0], RecordedInput::Text { client_id, .. } if client_id == &second));
+    assert!(matches!(&inputs[1], RecordedInput::Keys { .. }));
+    assert!(matches!(
+        &inputs[2],
+        RecordedInput::EqAction {
+            action: trushar::control::EqAction::SpellGem { gem: 14 },
+            ..
+        }
+    ));
+    assert!(inputs[3..].iter().all(|input| matches!(
+        input,
+        RecordedInput::EqAction {
+            action: trushar::control::EqAction::Keymap { mapping },
+            ..
+        } if mapping.as_str() == "DUCK"
+    )));
 
     let mut two = connect(address, None, None).await.unwrap();
     assert!(matches!(

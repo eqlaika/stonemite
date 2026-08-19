@@ -235,11 +235,30 @@ describe("local and LAN connections", () => {
                       type: "eq_action_delivered",
                       action: request.action,
                     }
-                  : {
-                      type: "input_delivered",
-                      input: request.type === "send_text" ? "text" : "keys",
-                      strokes: 1,
-                    },
+                  : request.type === "list_eq_keymap_actions"
+                    ? request.after
+                      ? {
+                          type: "eq_keymap_actions_listed",
+                          mappings: ["SIT_STAND"],
+                          window_numbers: [1, 2],
+                        }
+                      : {
+                          type: "eq_keymap_actions_listed",
+                          mappings: ["DUCK"],
+                          window_numbers: [1, 2],
+                          next_after: "DUCK",
+                        }
+                    : request.type === "send_eq_action_batch"
+                      ? {
+                          type: "eq_action_batch_delivered",
+                          action: request.action,
+                          window_numbers: [1, 2],
+                        }
+                      : {
+                          type: "input_delivered",
+                          input: request.type === "send_text" ? "text" : "keys",
+                          strokes: 1,
+                        },
             state: stateFixture(),
           }),
         );
@@ -267,8 +286,17 @@ describe("local and LAN connections", () => {
       button: 12,
     });
     await client.sendEqAction("serein-id", { type: "spell_gem", gem: 14 });
+    const listed = await client.listEqKeymapActions({
+      type: "window_numbers",
+      window_numbers: [1, 2],
+    });
+    expect(listed.mappings).toEqual(["DUCK", "SIT_STAND"]);
+    await client.sendEqActionBatch(
+      { type: "all_loaded" },
+      { type: "keymap", mapping: "DUCK" },
+    );
 
-    expect(requests).toHaveLength(5);
+    expect(requests).toHaveLength(8);
     expect(requests[0]).toMatchObject({
       type: "swap_window_numbers",
       version: 1,
@@ -299,6 +327,129 @@ describe("local and LAN connections", () => {
       client_id: "serein-id",
       action: { type: "spell_gem", gem: 14 },
     });
+    expect(requests[5]).toMatchObject({
+      type: "list_eq_keymap_actions",
+      targets: { type: "window_numbers", window_numbers: [1, 2] },
+    });
+    expect(requests[6]).toMatchObject({
+      type: "list_eq_keymap_actions",
+      after: "DUCK",
+    });
+    expect(requests[7]).toMatchObject({
+      type: "send_eq_action_batch",
+      targets: { type: "all_loaded" },
+      action: { type: "keymap", mapping: "DUCK" },
+    });
+  });
+
+  it("collects more than 1,024 mapped actions across stable pages", async () => {
+    const server = await startServer();
+    server.wss.on("connection", (socket) => {
+      socket.send(
+        JSON.stringify({ type: "state", version: 1, state: stateFixture() }),
+      );
+      socket.on("message", (raw) => {
+        const request = JSON.parse(raw.toString()) as {
+          request_id: string;
+          after?: string;
+        };
+        const start = request.after
+          ? Number(request.after.slice("ACTION_".length)) + 1
+          : 0;
+        const mappings = Array.from(
+          { length: Math.min(64, 1_025 - start) },
+          (_, offset) => `ACTION_${String(start + offset).padStart(4, "0")}`,
+        );
+        const last = mappings.at(-1);
+        socket.send(
+          JSON.stringify({
+            type: "result",
+            version: 1,
+            request_id: request.request_id,
+            result: {
+              type: "eq_keymap_actions_listed",
+              mappings,
+              window_numbers: [1],
+              ...(start + mappings.length < 1_025 && last
+                ? { next_after: last }
+                : {}),
+            },
+            state: stateFixture(),
+          }),
+        );
+      });
+    });
+    const client = new TrusharClient({
+      onState: () => undefined,
+      onStatus: () => undefined,
+    });
+    cleanups.push(() => client.disconnect());
+    client.configure({
+      address: `127.0.0.1:${server.port}`,
+      authToken: "token",
+    });
+    await vi.waitFor(() => expect(server.wss.clients.size).toBe(1));
+
+    const listed = await client.listEqKeymapActions({ type: "all_loaded" });
+    expect(listed.mappings).toHaveLength(1_025);
+    expect(listed.mappings.at(-1)).toBe("ACTION_1024");
+  });
+
+  it("restarts mapped-action pagination when the target roster changes", async () => {
+    const server = await startServer();
+    let requestCount = 0;
+    server.wss.on("connection", (socket) => {
+      socket.send(
+        JSON.stringify({ type: "state", version: 1, state: stateFixture() }),
+      );
+      socket.on("message", (raw) => {
+        const request = JSON.parse(raw.toString()) as {
+          request_id: string;
+          after?: string;
+        };
+        requestCount += 1;
+        const changed = requestCount === 2;
+        const stableState = stateFixture();
+        const changedState = stateFixture({
+          clients: [{ ...stableState.clients[0]!, id: "replacement-client" }],
+          active_client_id: "replacement-client",
+        });
+        socket.send(
+          JSON.stringify({
+            type: "result",
+            version: 1,
+            request_id: request.request_id,
+            result: request.after
+              ? {
+                  type: "eq_keymap_actions_listed",
+                  mappings: ["SIT_STAND"],
+                  window_numbers: [1],
+                }
+              : {
+                  type: "eq_keymap_actions_listed",
+                  mappings: ["DUCK"],
+                  window_numbers: [1],
+                  next_after: "DUCK",
+                },
+            state: changed ? changedState : stableState,
+          }),
+        );
+      });
+    });
+    const client = new TrusharClient({
+      onState: () => undefined,
+      onStatus: () => undefined,
+    });
+    cleanups.push(() => client.disconnect());
+    client.configure({
+      address: `127.0.0.1:${server.port}`,
+      authToken: "token",
+    });
+    await vi.waitFor(() => expect(server.wss.clients.size).toBe(1));
+
+    const listed = await client.listEqKeymapActions({ type: "all_loaded" });
+    expect(listed.mappings).toEqual(["DUCK", "SIT_STAND"]);
+    expect(requestCount).toBe(4);
   });
 
   it("surfaces structured command errors", async () => {

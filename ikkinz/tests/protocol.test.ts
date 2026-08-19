@@ -59,6 +59,7 @@ describe("trushar parser", () => {
       hotbars: 0,
       hotbar_buttons: 0,
       spell_gems: 0,
+      keymap_actions: false,
     });
     expect(parsed.clients.map((client) => client.id)).toEqual([
       "client-1",
@@ -122,6 +123,67 @@ describe("trushar parser", () => {
         type: "eq_action_delivered",
         action: { type: "hotbar", bar: 11, button: 12 },
       },
+    });
+    expect(
+      parseServerMessage(
+        JSON.stringify({
+          type: "result",
+          version: 1,
+          request_id: "mapped",
+          result: {
+            type: "eq_keymap_actions_listed",
+            mappings: ["DUCK", "SIT_STAND"],
+            window_numbers: [1, 2],
+            next_after: "SIT_STAND",
+          },
+          state,
+        }),
+      ),
+    ).toMatchObject({
+      type: "result",
+      result: {
+        type: "eq_keymap_actions_listed",
+        mappings: ["DUCK", "SIT_STAND"],
+      },
+    });
+    expect(
+      parseServerMessage(
+        JSON.stringify({
+          type: "result",
+          version: 1,
+          request_id: "batch",
+          result: {
+            type: "eq_action_batch_delivered",
+            action: { type: "keymap", mapping: "DUCK" },
+            window_numbers: [1, 2],
+          },
+          state,
+        }),
+      ),
+    ).toMatchObject({
+      type: "result",
+      result: {
+        type: "eq_action_batch_delivered",
+        action: { type: "keymap", mapping: "DUCK" },
+      },
+    });
+    expect(
+      parseServerMessage(
+        JSON.stringify({
+          type: "result",
+          version: 1,
+          request_id: "all-seven",
+          result: {
+            type: "eq_action_batch_delivered",
+            action: { type: "keymap", mapping: "DUCK" },
+            window_numbers: [1, 2, 3, 4, 5, 6, 7],
+          },
+          state,
+        }),
+      ),
+    ).toMatchObject({
+      type: "result",
+      result: { window_numbers: [1, 2, 3, 4, 5, 6, 7] },
     });
     expect(
       parseServerMessage(
@@ -206,6 +268,20 @@ describe("trushar parser", () => {
       }),
     ],
     [
+      "malformed mapped-action list",
+      JSON.stringify({
+        type: "result",
+        version: 1,
+        request_id: "x",
+        result: {
+          type: "eq_keymap_actions_listed",
+          mappings: ["../DUCK"],
+          window_numbers: [1],
+        },
+        state: stateFixture(),
+      }),
+    ],
+    [
       "malformed EQ action capabilities",
       JSON.stringify({
         type: "state",
@@ -219,6 +295,7 @@ describe("trushar parser", () => {
               hotbars: -1,
               hotbar_buttons: 12,
               spell_gems: 14,
+              keymap_actions: true,
             },
           },
         }),

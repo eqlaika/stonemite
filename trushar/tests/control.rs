@@ -1,7 +1,7 @@
 use trushar::control::{
     ActivationStatus, BroadcastState, ClientTarget, CommandOutcome, Controller, EqAction,
-    ErrorCode, InMemoryController, InputKind, KeyCode, KeyStroke, RecordedInput, SnapshotMapper,
-    SourceClient,
+    EqActionTargets, ErrorCode, InMemoryController, InputKind, KeyCode, KeyStroke, RecordedInput,
+    SnapshotMapper, SourceClient,
 };
 
 fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
@@ -401,6 +401,114 @@ fn targeted_text_and_key_sequences_use_exact_ids_and_record_delivery() {
     assert!(capabilities.send_text && capabilities.send_keys);
     assert!(capabilities.eq_actions.use_center_screen);
     assert!(capabilities.eq_actions.invite_follow);
+    assert!(capabilities.eq_actions.keymap_actions);
+}
+
+#[test]
+fn mapped_actions_are_intersected_and_batch_delivery_preflights_every_box() {
+    let control = InMemoryController::new(available(false));
+    let first = control.add_client(1, Some("Laika"), Some("Xegony"), Some("WAR"), true, true);
+    let second = control.add_client(2, Some("Serein"), Some("Xegony"), Some("BRD"), false, true);
+    control
+        .set_mapped_actions(&first, ["DUCK", "SIT_STAND"])
+        .unwrap();
+    control
+        .set_mapped_actions(&second, ["DUCK", "AUTORUN"])
+        .unwrap();
+
+    let targets = EqActionTargets::window_numbers(vec![1, 2, 3]).unwrap();
+    let listed = block_on(control.list_eq_keymap_actions(targets, None)).unwrap();
+    assert_eq!(
+        listed,
+        CommandOutcome::EqKeymapActionsListed {
+            mappings: vec![trushar::control::EqMappingName::new("DUCK").unwrap()],
+            window_numbers: vec![1, 2],
+            next_after: None,
+        }
+    );
+
+    let action = EqAction::keymap("duck").unwrap();
+    let delivered = block_on(control.send_eq_action_batch(
+        EqActionTargets::window_numbers(vec![2, 1]).unwrap(),
+        action.clone(),
+    ))
+    .unwrap();
+    assert_eq!(
+        delivered,
+        CommandOutcome::EqActionBatchDelivered {
+            action: action.clone(),
+            window_numbers: vec![1, 2],
+        }
+    );
+    assert_eq!(control.recorded_inputs().len(), 2);
+
+    control.set_input_ready(&second, false);
+    let before = control.recorded_inputs();
+    let error = block_on(control.send_eq_action_batch(
+        EqActionTargets::window_numbers(vec![1, 2]).unwrap(),
+        action.clone(),
+    ))
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InputUnavailable);
+    assert_eq!(control.recorded_inputs(), before);
+
+    control.set_input_ready(&second, true);
+    control.set_mapped_actions(&second, ["AUTORUN"]).unwrap();
+    let error = block_on(
+        control.send_eq_action_batch(EqActionTargets::window_numbers(vec![1, 2]).unwrap(), action),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::EqActionUnbound);
+    assert_eq!(control.recorded_inputs(), before);
+}
+
+#[test]
+fn mapped_action_discovery_pages_large_profiles() {
+    let control = InMemoryController::new(available(false));
+    let client = control.add_client(1, None, None, None, true, true);
+    control
+        .set_mapped_actions(&client, (0..66).map(|index| format!("ACTION_{index:03}")))
+        .unwrap();
+
+    let first = block_on(control.list_eq_keymap_actions(EqActionTargets::AllLoaded, None)).unwrap();
+    let after = match first {
+        CommandOutcome::EqKeymapActionsListed {
+            mappings,
+            next_after: Some(after),
+            ..
+        } => {
+            assert_eq!(mappings.len(), 64);
+            assert_eq!(mappings.first().unwrap().as_str(), "ACTION_000");
+            assert_eq!(mappings.last().unwrap().as_str(), "ACTION_063");
+            after
+        }
+        result => panic!("unexpected first mapping page: {result:?}"),
+    };
+    let second =
+        block_on(control.list_eq_keymap_actions(EqActionTargets::AllLoaded, Some(after))).unwrap();
+    assert!(matches!(
+        second,
+        CommandOutcome::EqKeymapActionsListed {
+            mappings,
+            next_after: None,
+            ..
+        } if mappings.iter().map(|mapping| mapping.as_str()).collect::<Vec<_>>() == ["ACTION_064", "ACTION_065"]
+    ));
+}
+
+#[test]
+fn generic_eq_mapping_and_target_names_are_bounded() {
+    assert_eq!(
+        EqAction::keymap("sit_stand")
+            .unwrap()
+            .mapping_name()
+            .as_str(),
+        "SIT_STAND"
+    );
+    assert!(EqAction::keymap("../sit").is_err());
+    assert!(EqActionTargets::window_numbers(Vec::new()).is_err());
+    assert!(EqActionTargets::window_numbers(vec![1, 1]).is_err());
+    assert!(EqActionTargets::window_numbers(vec![7]).is_err());
 }
 
 #[test]
@@ -417,6 +525,7 @@ fn targeted_input_reports_unavailable_invalid_failed_and_disappeared() {
     assert_eq!(unready.code, ErrorCode::InputUnavailable);
     let capabilities = control.snapshot().capabilities;
     assert!(!capabilities.send_text && !capabilities.send_keys);
+    assert!(capabilities.eq_actions.keymap_actions);
 
     let invalid =
         block_on(control.send_text(client.clone(), "bad\ntext".into(), false)).unwrap_err();
