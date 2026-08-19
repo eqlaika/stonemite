@@ -1,0 +1,8 @@
+node_modules/
+dist/
+co.laikasoft.stonemite.sdPlugin/bin/
+src/render/assets.generated.ts
+src/render/lucide-animated.generated.ts
+co.laikasoft.stonemite.sdPlugin/ui/sdpi-components.js
+co.laikasoft.stonemite.sdPlugin/ui/lucide-animated-icons.generated.js
+package-lock.json

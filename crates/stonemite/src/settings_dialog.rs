@@ -471,7 +471,7 @@ impl SettingsApp {
                         let remaining = expires_at.saturating_duration_since(Instant::now());
                         ui.group(|ui| {
                             ui.label(format!(
-                                "In Ikkinz, connect to {} and enter:",
+                                "In Stream Deck, connect to {} and enter:",
                                 integration_address(&self.trushar_bind)
                             ));
                             ui.label(

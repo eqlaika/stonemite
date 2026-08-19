@@ -3,19 +3,19 @@
 ## v0.5.0
 
 - Added experimental remote integration to support Stream Deck actions.
-- Enabled loopback integrations by default and made Ikkinz connect automatically without authentication when Stream Deck Desktop runs on the Stonemite PC
+- Enabled loopback integrations by default and made the Stream Deck plugin connect automatically without authentication when Stream Deck Desktop runs on the Stonemite PC
 - Limited address/code authentication to cross-PC LAN access and moved its full pairing UI into the Stonemite setup key
-- Added an Ikkinz Group key that invites ready boxes from the active client and invokes each character's configured Invite/Follow action after one second
-- Added an Ikkinz Follow key that concurrently sends `/follow <leader>` to ready background clients
-- Added an Ikkinz Assist key that concurrently sends `/assist <main>` to ready background clients
-- Added an Ikkinz Use key that invokes each input-ready character's configured Use Center Screen action
+- Added a Stream Deck Group key that invites ready boxes from the active client and invokes each character's configured Invite/Follow action after one second
+- Added a Stream Deck Follow key that concurrently sends `/follow <leader>` to ready background clients
+- Added a Stream Deck Assist key that concurrently sends `/assist <main>` to ready background clients
+- Added a Stream Deck Use key that invokes each input-ready character's configured Use Center Screen action
 - Added generic keymap-aware Trushar actions for all 11×12 EQ hotbar buttons and all 14 spell gems
-- Added a configurable Ikkinz Hotkey tile with a custom name, per-tile color with contrast-aware running content, the complete pinned 466-icon Lucide Animated catalog, and all-loaded or stable box-number targets
+- Added a configurable Stream Deck Hotkey tile with a custom name, per-tile color with contrast-aware running content, the complete pinned 466-icon Lucide Animated catalog, and all-loaded or stable box-number targets
 - Added shared keymap discovery and all-target preflight so a configured hotkey starts on no boxes unless every requested box is loaded, input-ready, and mapped
 - Resolve semantic actions per character/persona from `Character_Server_Class.ini`, with legacy character and shared `eqclient.ini` support
-- Made Ikkinz character slots and controls independently placeable, kept an editable 5×3 default profile, added a Stonemite setup key, and left two profile positions blank
-- Simplified Ikkinz tiles with 15px minimum text, no top rails, a stable Bcast label, distinct action colors, and filled running/armed states
-- Replaced the Ikkinz MITE key with a two-step Swap key for exchanging the active and selected characters' window numbers
+- Made Stream Deck character slots and controls independently placeable, added a Stonemite setup key, and removed preset profiles for now
+- Simplified Stream Deck tiles with 15px minimum text, no top rails, a stable Bcast label, distinct action colors, and filled running/armed states
+- Replaced the old MITE key with a two-step Swap key for exchanging the active and selected characters' window numbers
 - Allowed targeted input sequences to run concurrently across independent EQ clients
 - Fixed targeted modifier chords reaching background clients as an unmodified key by sequencing modifier press and release around the primary key
 - Removed anonymous usage telemetry

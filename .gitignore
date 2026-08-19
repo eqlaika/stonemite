@@ -1,10 +1,10 @@
 /target
 /dist
-/ikkinz/node_modules/
-/ikkinz/dist/
-/ikkinz/co.laikasoft.ikkinz.sdPlugin/bin/
-/ikkinz/co.laikasoft.ikkinz.sdPlugin/logs/
-/ikkinz/src/render/assets.generated.ts
+/streamdeck/node_modules/
+/streamdeck/dist/
+/streamdeck/co.laikasoft.stonemite.sdPlugin/bin/
+/streamdeck/co.laikasoft.stonemite.sdPlugin/logs/
+/streamdeck/src/render/assets.generated.ts
 tools/*/target/
 .impeccable/
 .claude/

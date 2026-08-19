@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Configure hotkey</title>
+    <link rel="stylesheet" href="hotkey.css" />
+    <script src="sdpi-components.js"></script>
+    <script src="lucide-animated-icons.generated.js"></script>
+    <script src="hotkey.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <form id="hotkey-form" novalidate>
+        <fieldset>
+          <legend>Target boxes</legend>
+          <label class="radio-row">
+            <input type="radio" name="target-mode" value="all" checked />
+            <span>
+              <strong>All loaded boxes</strong>
+              <small>The current loaded roster when the key is pressed.</small>
+            </span>
+          </label>
+          <label class="radio-row">
+            <input type="radio" name="target-mode" value="selected" />
+            <span>
+              <strong>Selected boxes</strong>
+              <small>Stable Stonemite window numbers.</small>
+            </span>
+          </label>
+          <div class="box-grid" id="box-grid" hidden></div>
+          <p class="error" id="target-error" role="alert" hidden></p>
+        </fieldset>
+
+        <section class="field-section" aria-labelledby="action-label">
+          <div class="field-heading">
+            <label id="action-label" for="mapping-search">EQ action</label>
+            <button class="compact" id="refresh-mappings" type="button">
+              Refresh mappings
+            </button>
+          </div>
+          <input
+            id="mapping-search"
+            type="search"
+            placeholder="Search mapped actions"
+            autocomplete="off"
+            spellcheck="false"
+            aria-controls="mapping"
+          />
+          <select
+            id="mapping"
+            size="6"
+            aria-describedby="mapping-help mapping-status"
+          ></select>
+          <p class="help" id="mapping-help">
+            Only actions with a key mapping on every targeted loaded box are
+            shown. If the action you want isn’t shown, it has no key mapping
+            Stonemite can use on at least one target box. Assign it in
+            EverQuest, then refresh mappings.
+          </p>
+          <p
+            class="mapping-status"
+            id="mapping-status"
+            role="status"
+            aria-live="polite"
+          ></p>
+          <p class="error" id="mapping-error" role="alert" hidden></p>
+        </section>
+
+        <section class="field-section" aria-labelledby="label-heading">
+          <label id="label-heading" for="tile-label">Tile name</label>
+          <input
+            id="tile-label"
+            type="text"
+            maxlength="14"
+            placeholder="BURN"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby="label-help"
+          />
+          <p class="help" id="label-help">
+            Up to 14 characters. Leave blank to use the action name.
+          </p>
+        </section>
+
+        <section class="field-section" aria-labelledby="color-heading">
+          <label id="color-heading" for="tile-color">Tile color</label>
+          <div
+            class="color-swatches"
+            id="color-swatches"
+            role="listbox"
+            aria-label="Stonemite tile colors"
+          >
+            <button
+              class="color-swatch"
+              type="button"
+              role="option"
+              data-color="#59d8d0"
+              style="--swatch: #59d8d0"
+              aria-label="Cyan"
+            ></button>
+            <button
+              class="color-swatch"
+              type="button"
+              role="option"
+              data-color="#4a86d4"
+              style="--swatch: #4a86d4"
+              aria-label="Blue"
+            ></button>
+            <button
+              class="color-swatch"
+              type="button"
+              role="option"
+              data-color="#6ab060"
+              style="--swatch: #6ab060"
+              aria-label="Green"
+            ></button>
+            <button
+              class="color-swatch"
+              type="button"
+              role="option"
+              data-color="#e0b848"
+              style="--swatch: #e0b848"
+              aria-label="Amber"
+            ></button>
+            <button
+              class="color-swatch"
+              type="button"
+              role="option"
+              data-color="#a07cc8"
+              style="--swatch: #a07cc8"
+              aria-label="Orchid"
+            ></button>
+            <button
+              class="color-swatch"
+              type="button"
+              role="option"
+              data-color="#d85858"
+              style="--swatch: #d85858"
+              aria-label="Rose"
+            ></button>
+          </div>
+          <label class="color-picker" for="tile-color">
+            <input id="tile-color" type="color" value="#59d8d0" />
+            <span>Custom color</span>
+            <output id="color-value" for="tile-color">#59D8D0</output>
+          </label>
+          <p class="help" id="color-help">
+            Sets the idle icon and running background. Running text switches
+            between white and dark automatically.
+          </p>
+        </section>
+
+        <section
+          class="field-section icon-section"
+          aria-labelledby="icon-heading"
+        >
+          <div class="icon-selection">
+            <span
+              class="selected-icon"
+              id="selected-icon"
+              aria-hidden="true"
+            ></span>
+            <span>
+              <label id="icon-heading" for="icon-search">Tile icon</label>
+              <small id="selected-icon-name">Keyboard</small>
+            </span>
+          </div>
+          <input
+            id="icon-search"
+            type="search"
+            placeholder="Search icons"
+            autocomplete="off"
+            spellcheck="false"
+            aria-controls="icon-grid"
+          />
+          <div
+            class="icon-grid"
+            id="icon-grid"
+            role="listbox"
+            aria-label="Tile icons"
+          ></div>
+          <p class="icon-empty" id="icon-empty" role="status" hidden>
+            No icons match this search.
+          </p>
+          <button class="full" id="more-icons" type="button" hidden>
+            Show more icons
+          </button>
+          <p class="help">Choose an icon for this tile.</p>
+        </section>
+
+        <p class="error form-error" id="form-error" role="alert" hidden></p>
+        <p
+          class="save-status"
+          id="save-status"
+          role="status"
+          aria-live="polite"
+        >
+          Changes save automatically.
+        </p>
+      </form>
+    </main>
+  </body>
+</html>

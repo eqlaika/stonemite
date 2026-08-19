@@ -454,7 +454,7 @@ async fn authentication_origin_and_secret_nonreflection_are_enforced() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn six_digit_pairing_exchanges_a_single_use_code_for_the_long_token() {
-    let token = "long-random-token-stored-by-ikkinz";
+    let token = "long-random-token-stored-by-streamdeck";
     let server = ServerHandle::start(
         ServerConfig {
             bind: "127.0.0.1:0".parse().unwrap(),

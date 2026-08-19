@@ -1,5 +1,5 @@
 ---
-name: Stonemite / Ikkinz
+name: Stonemite / Stream Deck
 description: A direct, glanceable instrument panel for exact EverQuest client control.
 colors:
   key-deep: "#171a1f"
@@ -127,7 +127,7 @@ components:
     width: "72px"
 ---
 
-# Design System: Stonemite / Ikkinz
+# Design System: Stonemite / Stream Deck
 
 ## Overview
 
@@ -135,7 +135,7 @@ components:
 
 The exact-client instrument panel is a dark, compact utility system that turns Stonemite's observed client state into direct, glanceable controls. It feels like trustworthy system instrumentation rather than fantasy-game chrome: identity is vivid, state is explicit, and decoration never outruns what the software knows.
 
-Across the Stonemite overlay, Ikkinz keys, and the property inspector, the system uses the same slot colors, number badges, class identity, system UI typography, and restrained tonal depth. It does not present delivered input as an observed in-game result, and it does not invent targets, buffs, combat outcomes, or other game state.
+Across the Stonemite overlay, Stream Deck keys, and the property inspector, the system uses the same slot colors, number badges, class identity, system UI typography, and restrained tonal depth. It does not present delivered input as an observed in-game result, and it does not invent targets, buffs, combat outcomes, or other game state.
 
 **Key Characteristics:**
 
@@ -200,7 +200,7 @@ Charcoal surfaces keep the interface quiet while cyan, green, amber, and coral r
 
 ## Layout
 
-Ikkinz key art is authored at exactly 72 × 72 pixels. Character slots 1–6, Group, Follow, Assist, Use, Bcast, Swap, configurable Hotkey, and Stonemite setup are separate, position-independent actions. The shipped editable five-column by three-row profile arranges character identity across the first two rows, places the core controls around them, puts Setup at bottom left, and leaves two positions blank. Hotkey stays in the action list until configured rather than occupying a default position. The profile is a useful default rather than a behavior map: users may move or duplicate any action.
+Stream Deck key art is authored at exactly 72 × 72 pixels. Character slots 1–6, Group, Follow, Assist, Use, Bcast, Swap, configurable Hotkey, and Stonemite setup are separate, position-independent actions. No preset profile currently ships; users place and duplicate the actions they want, while Hotkey remains in the action list until configured.
 
 Dark key surfaces have no colored top rails. Character keys use a 13px-radius badge centered at (17, 18), a 29 × 29 class image at the top right when known, a bottom-centered name, and a 3px readiness dot at the lower right. The active character replaces its slot gradient with an active-white surface, keeps a 3px slot-color outline, switches its labels to dark ink, and states “ACTIVE” explicitly. Missing clients and unavailable controls remain in place rather than collapsing the grid.
 
@@ -241,7 +241,7 @@ Corners are compact and consistent: Stream Deck artwork and property-inspector i
 
 ### Key Tiles
 
-- **Base grammar:** Every tile is a 72px square with the key radius. Non-character tiles use the restrained key gradient with no colored top rail and deck copy no smaller than 15px; long labels fit horizontally instead of shrinking. Reserved profile positions remain empty rather than requiring placeholder actions.
+- **Base grammar:** Every tile is a 72px square with the key radius. Non-character tiles use the restrained key gradient with no colored top rail and deck copy no smaller than 15px; long labels fit horizontally instead of shrinking.
 - **Identity:** Character tiles combine the fixed slot surface, darker number badge, class icon or explicit code fallback, character name, readiness dot, and optional unavailable veil. The active tile becomes active-white with dark labels, a slot-color outline, and an explicit “ACTIVE” marker.
 - **Bcast:** Off uses the dark base, broadcast-off icon, and one “Bcast” label; unavailable switches to broadcast-unavailable and says “UNAVAILABLE.” On replaces the entire surface with solid broadcast red while keeping the white lightning mark and the same “Bcast” label.
 - **Group / Follow / Assist / Use:** Actions use vendored Lucide Animated geometry—Users Round, Route, Target, and Mouse Pointer Click—above one large “Group,” “Follow,” “Assist,” or “Use” label. Group is blue, Follow is green, Assist is gold, and Use is orchid. Idle tiles keep a dark surface with the action color on the icon; while an action is running, the entire tile fills with its action color and the icon and fixed action word invert to dark ink. Ready-box counts and lower qualifiers remain omitted for hardware-scale legibility.
@@ -262,7 +262,7 @@ Corners are compact and consistent: Stream Deck artwork and property-inspector i
 ### Do:
 
 - Do reuse the shipped Stonemite app and class artwork; use the class-code fallback only when identity artwork is unavailable.
-- Do preserve the 72px key grammar, fixed slot/badge pairings, and exact-client labels wherever Ikkinz renders deck state.
+- Do preserve the 72px key grammar, fixed slot/badge pairings, and exact-client labels wherever the plugin renders deck state.
 - Do show unavailable, unknown, reconnecting, pending, success, and error states with explicit words and redundant visual cues.
 - Do reserve animation for bounded boot, progress, and feedback transitions, with a reduced-motion path.
 
@@ -272,4 +272,4 @@ Corners are compact and consistent: Stream Deck artwork and property-inspector i
 - Don't use solid broadcast red for any state except confirmed broadcast on.
 - Don't introduce a separate fantasy-game palette, invented icons, or decorative assets when Stonemite identity already exists.
 - Don't rely on color alone, hide failures in logs, or replace actionable error copy with a generic warning mark.
-- Don't make an action's behavior depend on its physical row or column; the 5 × 3 profile is only the shipped default.
+- Don't make an action's behavior depend on its physical row or column; no preset profile dictates the user's arrangement.
