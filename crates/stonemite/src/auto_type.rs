@@ -5,6 +5,7 @@
 //! injects these into DirectInput's keyboard buffer.
 
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicU32, Ordering};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows::Win32::System::Memory::{
     CreateFileMappingW, MapViewOfFile, FILE_MAP_WRITE, PAGE_READWRITE,
@@ -21,16 +22,22 @@ use crate::overlay::debug_log;
 struct SharedKeyState {
     magic: u32,
     version: u32,
-    active: u32,
+    /// Bitset shared by independent keyboard delivery owners.
+    keyboard_active: AtomicU32,
+    /// Independent Mouse Clutch activation; auto-type never writes it.
+    mouse_active: AtomicU32,
     suppress: u32,
     seq: u32,
     keys: [u8; 255],
     proxy_ready: u8,
+    controller_heartbeat_ms: AtomicU32,
 }
 
 const MAGIC: u32 = 0x53544D54; // "STMT"
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
+const PROXY_READY: u8 = 0xA5;
 const SHM_SIZE: usize = std::mem::size_of::<SharedKeyState>();
+const KEYBOARD_AUTO_TYPE: u32 = 1 << 2;
 
 /// How long to hold each key down.
 const KEY_DOWN_MS: u64 = 50;
@@ -130,16 +137,25 @@ fn wait_for_di_ready(pid: u32) -> bool {
 fn type_password(pid: u32, password: &str, shm: Shm) -> Result<(), String> {
     let Shm { handle, ptr } = shm;
     unsafe {
-        // Activate the shm so trusik reads it.
-        std::ptr::write_volatile(&mut (*ptr).active, 1);
-        // Don't suppress physical keys for this window.
-        std::ptr::write_volatile(&mut (*ptr).suppress, 0);
-
         let magic = std::ptr::read_volatile(&(*ptr).magic);
         let version = std::ptr::read_volatile(&(*ptr).version);
         let proxy_ready = std::ptr::read_volatile(&(*ptr).proxy_ready);
+        let mouse_active = (*ptr).mouse_active.load(Ordering::Acquire);
+        let suppress = std::ptr::read_volatile(&(*ptr).suppress);
+        if magic != MAGIC || version != VERSION || proxy_ready != PROXY_READY {
+            close_shm(Shm { handle, ptr });
+            return Err(format!(
+                "incompatible trusik input mapping: magic={magic:#010x} version={version} proxy_ready={proxy_ready:#04x}"
+            ));
+        }
+
+        // Auto-login owns only keyboard activation and never changes the
+        // independent Mouse Clutch field (new mappings initialize it to zero).
+        (*ptr)
+            .keyboard_active
+            .fetch_or(KEYBOARD_AUTO_TYPE, Ordering::AcqRel);
         debug_log(&format!(
-            "auto_type: shm ready pid={pid} magic={magic:#010x} version={version} proxy_ready={proxy_ready:#04x} active=1 suppress=0"
+            "auto_type: shm ready pid={pid} magic={magic:#010x} version={version} proxy_ready={proxy_ready:#04x} keyboard_auto_type=on mouse_active={mouse_active} suppress={suppress}"
         ));
     }
 
@@ -186,7 +202,15 @@ fn type_password(pid: u32, password: &str, shm: Shm) -> Result<(), String> {
 
 fn cleanup_shm(shm: Shm) {
     unsafe {
-        std::ptr::write_volatile(&mut (*shm.ptr).active, 0);
+        (*shm.ptr)
+            .keyboard_active
+            .fetch_and(!KEYBOARD_AUTO_TYPE, Ordering::AcqRel);
+    }
+    close_shm(shm);
+}
+
+fn close_shm(shm: Shm) {
+    unsafe {
         let _ = windows::Win32::System::Memory::UnmapViewOfFile(
             windows::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
                 Value: shm.ptr as *mut c_void,
@@ -226,17 +250,24 @@ fn open_or_create_shm(pid: u32) -> Result<(HANDLE, *mut SharedKeyState), String>
             return Err("MapViewOfFile returned null".into());
         }
 
-        // Initialize only if we created a new mapping (magic won't be set yet).
-        let magic = std::ptr::read_volatile(&(*ptr).magic);
-        if magic != MAGIC {
-            debug_log(&format!(
-                "auto_type: initializing new shm (old magic={magic:#010x})"
-            ));
+        if existed {
+            // Preserve a live compatible mapping. Never zero shared state owned
+            // by the broadcast controller or reinterpret an older ABI.
+            let magic = std::ptr::read_volatile(&(*ptr).magic);
+            let version = std::ptr::read_volatile(&(*ptr).version);
+            if magic != MAGIC || version != VERSION {
+                let _ = windows::Win32::System::Memory::UnmapViewOfFile(view);
+                let _ = CloseHandle(handle);
+                return Err(format!(
+                    "existing input mapping is incompatible: magic={magic:#010x} version={version}"
+                ));
+            }
+            debug_log("auto_type: reusing compatible shm from broadcast engine");
+        } else {
+            debug_log("auto_type: initializing new shm");
             std::ptr::write_bytes(ptr, 0, 1);
             std::ptr::write_volatile(&mut (*ptr).magic, MAGIC);
             std::ptr::write_volatile(&mut (*ptr).version, VERSION);
-        } else {
-            debug_log("auto_type: shm already initialized by broadcast engine");
         }
 
         Ok((handle, ptr))
@@ -329,6 +360,54 @@ unsafe fn bump_seq(ptr: *mut SharedKeyState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_memory_layout_matches_version_two_abi() {
+        assert_eq!(VERSION, 2);
+        assert_eq!(SHM_SIZE, 284);
+        assert_eq!(std::mem::align_of::<SharedKeyState>(), 4);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, magic), 0);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, version), 4);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, keyboard_active), 8);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, mouse_active), 12);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, suppress), 16);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, seq), 20);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, keys), 24);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, proxy_ready), 279);
+        assert_eq!(
+            std::mem::offset_of!(SharedKeyState, controller_heartbeat_ms),
+            280
+        );
+    }
+
+    #[test]
+    fn auto_login_activation_keeps_mouse_off() {
+        let shared = SharedKeyState {
+            magic: MAGIC,
+            version: VERSION,
+            keyboard_active: AtomicU32::new(0),
+            mouse_active: AtomicU32::new(0),
+            suppress: 0,
+            seq: 0,
+            keys: [0; 255],
+            proxy_ready: PROXY_READY,
+            controller_heartbeat_ms: AtomicU32::new(0),
+        };
+
+        // Simulate an independently active keyboard-broadcast source.
+        shared.keyboard_active.store(1, Ordering::Release);
+        shared
+            .keyboard_active
+            .fetch_or(KEYBOARD_AUTO_TYPE, Ordering::AcqRel);
+        assert_eq!(shared.keyboard_active.load(Ordering::Acquire), 5);
+        assert_eq!(shared.mouse_active.load(Ordering::Acquire), 0);
+
+        shared
+            .keyboard_active
+            .fetch_and(!KEYBOARD_AUTO_TYPE, Ordering::AcqRel);
+        assert_eq!(shared.keyboard_active.load(Ordering::Acquire), 1);
+        assert_eq!(shared.mouse_active.load(Ordering::Acquire), 0);
+    }
 
     #[test]
     fn shared_memory_scan_codes_exclude_reserved_boundaries() {

@@ -391,7 +391,9 @@ unsafe extern "system" fn hooked_get_async_key_state(vk: i32) -> i16 {
             return -32767; // 0x8001
         }
     }
-    if let Some(real) = REAL_ASYNC.get() {
+    if crate::key_shm::should_suppress() {
+        0
+    } else if let Some(real) = REAL_ASYNC.get() {
         real(vk)
     } else {
         0
@@ -408,7 +410,9 @@ unsafe extern "system" fn hooked_get_key_state(vk: i32) -> i16 {
             return -32767; // 0x8001
         }
     }
-    if let Some(real) = REAL_KEYSTATE.get() {
+    if crate::key_shm::should_suppress() {
+        0
+    } else if let Some(real) = REAL_KEYSTATE.get() {
         real(vk)
     } else {
         0
@@ -416,7 +420,12 @@ unsafe extern "system" fn hooked_get_key_state(vk: i32) -> i16 {
 }
 
 unsafe extern "system" fn hooked_get_keyboard_state(buf: *mut u8) -> BOOL {
-    let ok = if let Some(real) = REAL_KBSTATE.get() {
+    let ok = if crate::key_shm::should_suppress() {
+        if !buf.is_null() {
+            std::ptr::write_bytes(buf, 0, 256);
+        }
+        BOOL(1)
+    } else if let Some(real) = REAL_KBSTATE.get() {
         real(buf)
     } else {
         BOOL(0)
@@ -613,6 +622,18 @@ pub unsafe fn install_keyboard_hooks() {
 type NtUserGfwFn = unsafe extern "system" fn() -> isize;
 static REAL_NT_GFW: OnceLock<NtUserGfwFn> = OnceLock::new();
 
+/// Return the unspoofed system foreground window for proxy-internal gating.
+/// Calling User32 directly is unsafe after the process-wide inline detour.
+pub unsafe fn real_foreground_window() -> isize {
+    if let Some(real) = REAL_NT_GFW.get() {
+        real()
+    } else if let Some(real) = REAL_GETFOREGROUNDWINDOW.get() {
+        real()
+    } else {
+        0
+    }
+}
+
 unsafe fn install_inline_gfw_hook() {
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
@@ -652,7 +673,7 @@ unsafe fn install_inline_gfw_hook() {
     };
 
     // Detour: mov rax, <hook_addr>; jmp rax  (12 bytes)
-    let hook_addr = inline_hooked_gfw as usize as u64;
+    let hook_addr = inline_hooked_gfw as *const () as usize as u64;
 
     let mut old_protect = PAGE_PROTECTION_FLAGS(0);
     if VirtualProtect(

@@ -212,6 +212,8 @@ struct SettingsApp {
     capturing_hotkey: bool,
     broadcast_hotkey: String,
     capturing_broadcast_hotkey: bool,
+    mouse_clutch_key: String,
+    capturing_mouse_clutch_key: bool,
     swap_hotkeys: [String; 6],
     capturing_swap_hotkey: Option<usize>,
     filter_mode_index: usize,
@@ -226,6 +228,7 @@ struct SettingsApp {
     toast_duration_tenths: u32,
     auto_update_check: bool,
     update_check_interval_days: u32,
+    trusik_enabled: bool,
     trushar_enabled: bool,
     initial_trushar_enabled: bool,
     trushar_lan_enabled: bool,
@@ -287,6 +290,8 @@ impl SettingsApp {
             capturing_hotkey: false,
             broadcast_hotkey: cfg.broadcast_hotkey.clone(),
             capturing_broadcast_hotkey: false,
+            mouse_clutch_key: cfg.mouse_clutch_key.clone(),
+            capturing_mouse_clutch_key: false,
             swap_hotkeys,
             capturing_swap_hotkey: None,
             filter_mode_index,
@@ -304,6 +309,7 @@ impl SettingsApp {
                 .unwrap_or(20),
             auto_update_check: cfg.auto_update_check,
             update_check_interval_days: cfg.update_check_interval_days,
+            trusik_enabled: cfg.trusik,
             trushar_enabled: cfg.trushar.enabled,
             initial_trushar_enabled: cfg.trushar.enabled,
             trushar_lan_enabled,
@@ -706,22 +712,74 @@ impl SettingsApp {
     }
 
     fn broadcasting_tab(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.add_space(4.0);
 
-        section(ui, "Broadcast toggle hotkey", |ui| {
-            ui.label("Toggle key broadcasting on/off");
-            ui.horizontal(|ui| {
-                if let Some(combo) = hotkey_capture_button(
-                    ui,
-                    &self.broadcast_hotkey,
-                    &mut self.capturing_broadcast_hotkey,
-                ) {
-                    self.broadcast_hotkey = combo;
-                }
+            section(ui, "Broadcast toggle hotkey", |ui| {
+                ui.label("Toggle key broadcasting on/off");
+                ui.horizontal(|ui| {
+                    if let Some(combo) = hotkey_capture_button(
+                        ui,
+                        &self.broadcast_hotkey,
+                        &mut self.capturing_broadcast_hotkey,
+                    ) {
+                        self.broadcast_hotkey = combo;
+                    }
+                });
             });
-        });
 
-        {
+            section(ui, "Mouse Clutch", |ui| {
+                if !self.trusik_enabled {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(150, 90, 0),
+                        "Unavailable: enable the DirectInput proxy (trusik) and restart Stonemite and EQ.",
+                    );
+                }
+                ui.label(
+                    "Hold one key to send the complete physical mouse to ready background EQ clients.",
+                );
+                ui.label("Keyboard-emulating foot pedals are supported, including F13–F24.");
+                if self.capturing_broadcast_hotkey {
+                    self.capturing_mouse_clutch_key = false;
+                }
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(self.trusik_enabled, |ui| {
+                        if let Some(key) = single_key_capture_button(
+                            ui,
+                            &self.mouse_clutch_key,
+                            &mut self.capturing_mouse_clutch_key,
+                        ) {
+                            self.mouse_clutch_key = key;
+                        }
+                    });
+                    if ui
+                        .add_enabled(
+                            !self.mouse_clutch_key.is_empty(),
+                            egui::Button::new("Clear"),
+                        )
+                        .clicked()
+                    {
+                        self.mouse_clutch_key.clear();
+                        self.capturing_mouse_clutch_key = false;
+                    }
+                });
+                if self.capturing_mouse_clutch_key {
+                    self.capturing_broadcast_hotkey = false;
+                }
+                if let Err(error) = crate::config::validate_mouse_clutch_binding(
+                    &self.mouse_clutch_key,
+                    &self.hide_hotkey,
+                    &self.broadcast_hotkey,
+                    &self.swap_hotkeys,
+                ) {
+                    ui.colored_label(egui::Color32::from_rgb(180, 35, 35), error);
+                }
+                ui.colored_label(
+                    ui.visuals().weak_text_color(),
+                    "Defaults to F13; Clear leaves it unbound. Requires matching EQ window geometry and DPI.",
+                );
+            });
+
             section(ui, "Key filter", |ui| {
                 ui.label("Choose which keys are broadcast to background windows");
                 ui.horizontal(|ui| {
@@ -741,7 +799,7 @@ impl SettingsApp {
                         .desired_rows(3),
                 );
             });
-        }
+        });
     }
 
     fn about_tab(&mut self, ui: &mut egui::Ui) {
@@ -891,6 +949,21 @@ impl SettingsApp {
     }
 
     fn save_config(&self) -> bool {
+        if let Err(error) = crate::config::validate_mouse_clutch_binding(
+            &self.mouse_clutch_key,
+            &self.hide_hotkey,
+            &self.broadcast_hotkey,
+            &self.swap_hotkeys,
+        ) {
+            let _ = rfd::MessageDialog::new()
+                .set_title("Invalid Mouse Clutch binding")
+                .set_description(error)
+                .set_level(rfd::MessageLevel::Error)
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
+            return false;
+        }
+
         let existing = Config::load();
         let filter_keys: Vec<String> = self
             .filter_keys_text
@@ -913,6 +986,7 @@ impl SettingsApp {
             swap_hotkeys: self.swap_hotkeys.to_vec(),
             settings_position: self.last_position,
             broadcast_hotkey: self.broadcast_hotkey.clone(),
+            mouse_clutch_key: self.mouse_clutch_key.clone(),
             broadcast_filter_mode: FILTER_MODE_OPTIONS[self.filter_mode_index].1.to_string(),
             broadcast_filter_keys: filter_keys,
             auto_update_check: self.auto_update_check,
@@ -978,6 +1052,18 @@ fn egui_key_to_config_name(key: &egui::Key) -> Option<&'static str> {
         F10 => Some("F10"),
         F11 => Some("F11"),
         F12 => Some("F12"),
+        F13 => Some("F13"),
+        F14 => Some("F14"),
+        F15 => Some("F15"),
+        F16 => Some("F16"),
+        F17 => Some("F17"),
+        F18 => Some("F18"),
+        F19 => Some("F19"),
+        F20 => Some("F20"),
+        F21 => Some("F21"),
+        F22 => Some("F22"),
+        F23 => Some("F23"),
+        F24 => Some("F24"),
         Insert => Some("Insert"),
         Delete => Some("Delete"),
         Home => Some("Home"),
@@ -1035,6 +1121,65 @@ fn egui_key_to_config_name(key: &egui::Key) -> Option<&'static str> {
         Period => Some("Period"),
         Slash => Some("Slash"),
         _ => None,
+    }
+}
+
+/// Capture one unmodified key for Mouse Clutch. Escape cancels capture.
+fn single_key_capture_button(
+    ui: &mut egui::Ui,
+    current_value: &str,
+    capturing: &mut bool,
+) -> Option<String> {
+    if *capturing {
+        let response = ui.add(egui::Button::new(
+            egui::RichText::new("Press one key (no modifiers)...").italics(),
+        ));
+        let pressed = ui.input(|input| {
+            input.events.iter().find_map(|event| {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = event
+                {
+                    if *key == egui::Key::Escape {
+                        return Some(None);
+                    }
+                    if modifiers.ctrl || modifiers.alt || modifiers.shift {
+                        return None;
+                    }
+                    egui_key_to_config_name(key).map(|name| Some(name.to_owned()))
+                } else {
+                    None
+                }
+            })
+        });
+        match pressed {
+            Some(Some(key)) => {
+                *capturing = false;
+                Some(key)
+            }
+            Some(None) => {
+                *capturing = false;
+                None
+            }
+            None => {
+                response.request_focus();
+                None
+            }
+        }
+    } else {
+        let label = if current_value.is_empty() {
+            "Unbound"
+        } else {
+            current_value
+        };
+        if ui.button(label).clicked() {
+            *capturing = true;
+        }
+        ui.colored_label(ui.visuals().weak_text_color(), "Click to change");
+        None
     }
 }
 
@@ -1319,5 +1464,11 @@ mod tests {
         assert_eq!(integration_port("192.168.1.20:12345"), 12_345);
         assert_eq!(format_pairing_code(4_271), "004 271");
         assert_eq!(format_pairing_code(999_999), "999 999");
+    }
+
+    #[test]
+    fn mouse_clutch_capture_supports_extended_function_keys() {
+        assert_eq!(egui_key_to_config_name(&egui::Key::F13), Some("F13"));
+        assert_eq!(egui_key_to_config_name(&egui::Key::F24), Some("F24"));
     }
 }

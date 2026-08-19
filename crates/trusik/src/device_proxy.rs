@@ -20,6 +20,15 @@ pub fn eq_hwnd() -> isize {
 /// Spawned once to poll shm and signal the keyboard event.
 static SHM_THREAD_STARTED: std::sync::Once = std::sync::Once::new();
 
+fn should_post_activation(
+    active: bool,
+    activation_asserted: bool,
+    mouse_active: bool,
+    was_mouse_active: bool,
+) -> bool {
+    active && (!activation_asserted || (mouse_active && !was_mouse_active))
+}
+
 /// Thread that watches shared-memory state and posts WM_ACTIVATEAPP(TRUE) to
 /// the EQ window when auto-login begins.  EQ's main loop only calls
 /// keyboard_process when an internal "active" flag ([obj+5E4h]) is set — that
@@ -34,42 +43,57 @@ fn wm_activate_thread() {
         fn GetForegroundWindow() -> isize;
     }
 
-    let mut was_active = false;
+    const DEACTIVATE_STABLE_FRAMES: u8 = 3;
+    let mut activation_asserted = false;
+    let mut was_mouse_active = false;
+    let mut inactive_frames = 0u8;
 
     loop {
         std::thread::sleep(std::time::Duration::from_millis(16));
 
         let active = unsafe { crate::key_shm::is_active() };
+        let mouse_active = unsafe { crate::key_shm::is_mouse_active() };
         let hwnd = EQ_HWND.load(Ordering::Acquire);
 
-        if active && !was_active && hwnd != 0 {
-            // Shm just went active — tell EQ this window is foreground.
+        if should_post_activation(active, activation_asserted, mouse_active, was_mouse_active)
+            && hwnd != 0
+        {
+            // Reassert activation on an overall transition and independently on
+            // each Mouse Clutch rising edge. Keyboard Broadcast may already be
+            // holding the process active while the real mouse needs reacquire.
             unsafe {
                 PostMessageW(hwnd, WM_ACTIVATEAPP, 1, 0);
             }
+            activation_asserted = true;
             crate::log::write(&format!(
-                "wm_activate: posted WM_ACTIVATEAPP(1) hwnd=0x{hwnd:X}"
+                "wm_activate: posted WM_ACTIVATEAPP(1) hwnd=0x{hwnd:X} mouse_active={mouse_active}"
             ));
-        } else if !active && was_active && hwnd != 0 {
-            // Shm went inactive — reset EQ's internal "active" flag so
-            // keyboard_process stops running.  Without this, the background
-            // keyboard (NONEXCLUSIVE mode) keeps feeding physical keystrokes
-            // to EQ, and an Escape pressed in another window would kick EQ
-            // back from char select to server select.
-            //
-            // Only post if the window is NOT actually foreground, so we don't
-            // clobber real activation state.
-            let fg = unsafe { GetForegroundWindow() };
-            if fg != hwnd {
-                unsafe {
-                    PostMessageW(hwnd, WM_ACTIVATEAPP, 0, 0);
+        }
+
+        if active {
+            inactive_frames = 0;
+        } else if activation_asserted {
+            inactive_frames = inactive_frames.saturating_add(1);
+            if inactive_frames >= DEACTIVATE_STABLE_FRAMES {
+                // Recheck after the stable interval. A rapid clutch re-press
+                // must not receive a stale WM_ACTIVATEAPP(FALSE).
+                let still_inactive = unsafe { !crate::key_shm::is_active() };
+                let fg = unsafe { GetForegroundWindow() };
+                if still_inactive && hwnd != 0 && fg != hwnd {
+                    unsafe {
+                        PostMessageW(hwnd, WM_ACTIVATEAPP, 0, 0);
+                    }
+                    crate::log::write(&format!(
+                        "wm_activate: posted WM_ACTIVATEAPP(0) hwnd=0x{hwnd:X}"
+                    ));
                 }
-                crate::log::write(&format!(
-                    "wm_activate: posted WM_ACTIVATEAPP(0) hwnd=0x{hwnd:X}"
-                ));
+                if still_inactive {
+                    activation_asserted = false;
+                }
+                inactive_frames = 0;
             }
         }
-        was_active = active;
+        was_mouse_active = mouse_active;
     }
 }
 
@@ -177,17 +201,24 @@ static DEV_VTBL: IDirectInputDevice8Vtbl = IDirectInputDevice8Vtbl {
     get_image_info: dev_get_image_info,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceKind {
+    Keyboard,
+    Mouse,
+    Other,
+}
+
 /// Our proxy for IDirectInputDevice8. COM layout: vtable pointer first.
 #[repr(C)]
 pub struct DeviceProxy {
     vtbl: *const IDirectInputDevice8Vtbl,
     real: *mut c_void,
     ref_count: AtomicU32,
-    is_keyboard: bool,
+    kind: DeviceKind,
 }
 
 impl DeviceProxy {
-    pub fn new(real: *mut c_void, is_keyboard: bool) -> Self {
+    pub fn new(real: *mut c_void, kind: DeviceKind) -> Self {
         // AddRef on the real device.
         unsafe {
             let real_vtbl = *(real as *const *const *const c_void);
@@ -200,7 +231,7 @@ impl DeviceProxy {
             vtbl: &DEV_VTBL,
             real,
             ref_count: AtomicU32::new(1),
-            is_keyboard,
+            kind,
         }
     }
 }
@@ -293,7 +324,7 @@ unsafe extern "system" fn dev_set_property(
 unsafe extern "system" fn dev_acquire(this: *mut DeviceProxy) -> HRESULT {
     let method: unsafe extern "system" fn(*mut c_void) -> HRESULT = real_method((*this).real, 7);
     let hr = method((*this).real);
-    if hr.is_err() && (*this).is_keyboard && crate::key_shm::is_active() {
+    if hr.is_err() && (*this).kind == DeviceKind::Keyboard && crate::key_shm::is_keyboard_active() {
         return HRESULT(0); // DI_OK
     }
     hr
@@ -302,6 +333,19 @@ unsafe extern "system" fn dev_acquire(this: *mut DeviceProxy) -> HRESULT {
 unsafe extern "system" fn dev_unacquire(this: *mut DeviceProxy) -> HRESULT {
     let method: unsafe extern "system" fn(*mut c_void) -> HRESULT = real_method((*this).real, 8);
     method((*this).real)
+}
+
+/// Keyboard activation still requires the process-wide foreground spoof. While
+/// that spoof is active, explicitly discard system-mouse data in a real
+/// background EQ process unless Mouse Clutch selected it. Foreground EQ and
+/// other DirectInput devices remain natural pass-through.
+unsafe fn should_block_background_mouse() -> bool {
+    if !crate::key_shm::is_compatible() || crate::key_shm::is_mouse_active() {
+        return false;
+    }
+    let hwnd = EQ_HWND.load(Ordering::Acquire);
+    let foreground = crate::iat_hook::real_foreground_window();
+    hwnd == 0 || foreground != hwnd
 }
 
 /// Counter to throttle GetDeviceState logging.
@@ -316,7 +360,14 @@ unsafe extern "system" fn dev_get_device_state(
         real_method((*this).real, 9);
     let hr = method((*this).real, cbdata, lpvdata);
 
-    if (*this).is_keyboard {
+    if (*this).kind == DeviceKind::Mouse {
+        if hr.is_ok() && should_block_background_mouse() {
+            std::ptr::write_bytes(lpvdata as *mut u8, 0, cbdata as usize);
+        }
+        return hr;
+    }
+
+    if (*this).kind == DeviceKind::Keyboard {
         // Log first few calls to confirm EQ is polling.
         let count = GDS_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
         if count < 5 {
@@ -367,8 +418,15 @@ unsafe extern "system" fn dev_get_device_data(
     let method: unsafe extern "system" fn(*mut c_void, u32, *mut c_void, *mut u32, u32) -> HRESULT =
         real_method((*this).real, 10);
 
-    if !(*this).is_keyboard {
-        return method((*this).real, cbobjectdata, rgdod, pdwinout, flags);
+    if (*this).kind != DeviceKind::Keyboard {
+        let hr = method((*this).real, cbobjectdata, rgdod, pdwinout, flags);
+        if (*this).kind == DeviceKind::Mouse
+            && should_block_background_mouse()
+            && !pdwinout.is_null()
+        {
+            *pdwinout = 0;
+        }
+        return hr;
     }
 
     // Log when active=true to confirm DI is polled during typing.
@@ -468,7 +526,7 @@ unsafe extern "system" fn dev_set_event_notification(
         real_method((*this).real, 12);
     let hr = method((*this).real, hevent);
 
-    if (*this).is_keyboard && hevent != 0 {
+    if (*this).kind == DeviceKind::Keyboard && hevent != 0 {
         crate::log::write(&format!(
             "SetEventNotification: keyboard event handle=0x{hevent:X}"
         ));
@@ -509,7 +567,10 @@ unsafe extern "system" fn dev_set_cooperative_level(
         real_method((*this).real, 13);
 
     let mut actual_flags = flags;
-    if (*this).is_keyboard {
+    if matches!((*this).kind, DeviceKind::Keyboard | DeviceKind::Mouse) {
+        EQ_HWND.store(hwnd, Ordering::Release);
+    }
+    if (*this).kind == DeviceKind::Keyboard {
         const DISCL_EXCLUSIVE: u32 = 0x01;
         const DISCL_FOREGROUND: u32 = 0x04;
         const DISCL_NONEXCLUSIVE: u32 = 0x02;
@@ -734,4 +795,18 @@ unsafe extern "system" fn dev_get_image_info(
     let method: unsafe extern "system" fn(*mut c_void, *mut c_void) -> HRESULT =
         real_method((*this).real, 31);
     method((*this).real, pdidevimageinfo)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_post_activation;
+
+    #[test]
+    fn mouse_rising_edge_reasserts_activation_during_keyboard_delivery() {
+        assert!(should_post_activation(true, false, false, false));
+        assert!(should_post_activation(true, true, true, false));
+        assert!(!should_post_activation(true, true, true, true));
+        assert!(!should_post_activation(true, true, false, true));
+        assert!(!should_post_activation(false, true, true, false));
+    }
 }

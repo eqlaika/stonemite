@@ -123,6 +123,9 @@ pub struct Config {
     /// Hotkey for toggling key broadcasting. Default: "Pause".
     #[serde(default = "default_broadcast_hotkey")]
     pub broadcast_hotkey: String,
+    /// Single hold-to-broadcast mouse key. Default: "F13". Empty means unbound.
+    #[serde(default = "default_mouse_clutch_key")]
+    pub mouse_clutch_key: String,
     /// Filter mode: "blacklist" or "whitelist". Default: "blacklist".
     #[serde(default = "default_broadcast_filter_mode")]
     pub broadcast_filter_mode: String,
@@ -176,6 +179,10 @@ fn default_broadcast_hotkey() -> String {
     "Pause".to_string()
 }
 
+fn default_mouse_clutch_key() -> String {
+    "F13".to_string()
+}
+
 fn default_broadcast_filter_mode() -> String {
     "blacklist".to_string()
 }
@@ -221,6 +228,7 @@ impl Default for Config {
             swap_hotkeys: default_swap_hotkeys(),
             settings_position: None,
             broadcast_hotkey: default_broadcast_hotkey(),
+            mouse_clutch_key: default_mouse_clutch_key(),
             broadcast_filter_mode: default_broadcast_filter_mode(),
             broadcast_filter_keys: Vec::new(),
             toast_enabled: default_toast_enabled(),
@@ -296,6 +304,16 @@ impl Config {
         parse_hotkey_combo(&self.broadcast_hotkey)
     }
 
+    /// Validate and parse the optional single Mouse Clutch key.
+    pub fn mouse_clutch_vk(&self) -> Result<Option<u32>, String> {
+        validate_mouse_clutch_binding(
+            &self.mouse_clutch_key,
+            &self.hide_hotkey,
+            &self.broadcast_hotkey,
+            &self.swap_hotkeys,
+        )
+    }
+
     /// Read `LastServerName` from the main `eqlsPlayerData.ini` in the EQ directory.
     pub fn read_server_from_ini(&self) -> Option<String> {
         let path = self.eq_directory().join("eqlsPlayerData.ini");
@@ -346,6 +364,18 @@ pub fn parse_vk_name(name: &str) -> Option<u32> {
         "F10" => Some(0x79),
         "F11" => Some(0x7A),
         "F12" => Some(0x7B),
+        "F13" => Some(0x7C),
+        "F14" => Some(0x7D),
+        "F15" => Some(0x7E),
+        "F16" => Some(0x7F),
+        "F17" => Some(0x80),
+        "F18" => Some(0x81),
+        "F19" => Some(0x82),
+        "F20" => Some(0x83),
+        "F21" => Some(0x84),
+        "F22" => Some(0x85),
+        "F23" => Some(0x86),
+        "F24" => Some(0x87),
         // Navigation
         "INSERT" => Some(0x2D),
         "DELETE" => Some(0x2E),
@@ -411,6 +441,46 @@ pub fn parse_vk_name(name: &str) -> Option<u32> {
         "SLASH" => Some(0xBF),
         _ => None,
     }
+}
+
+/// Validate Mouse Clutch's single-key syntax and reject collisions with every
+/// existing Stonemite hotkey. Modifier differences still collide because the
+/// low-level clutch hook sees and swallows the underlying key.
+pub fn validate_mouse_clutch_binding(
+    binding: &str,
+    hide_hotkey: &str,
+    broadcast_hotkey: &str,
+    swap_hotkeys: &[String],
+) -> Result<Option<u32>, String> {
+    let binding = binding.trim();
+    if binding.is_empty() {
+        return Ok(None);
+    }
+    if binding.contains('+') {
+        return Err("Mouse Clutch uses one key without modifiers".to_owned());
+    }
+    let Some(vk) = parse_vk_name(binding) else {
+        return Err(format!("Mouse Clutch key '{binding}' is not supported"));
+    };
+
+    let mut existing = Vec::with_capacity(2 + swap_hotkeys.len());
+    existing.push(("Hide overlay", hide_hotkey));
+    existing.push(("Broadcast toggle", broadcast_hotkey));
+    for (index, hotkey) in swap_hotkeys.iter().enumerate() {
+        if parse_hotkey_combo(hotkey).is_some_and(|(_, existing_vk)| existing_vk == vk) {
+            return Err(format!(
+                "Mouse Clutch conflicts with the Window {} hotkey ({hotkey})",
+                index + 1
+            ));
+        }
+    }
+    for (label, hotkey) in existing {
+        if parse_hotkey_combo(hotkey).is_some_and(|(_, existing_vk)| existing_vk == vk) {
+            return Err(format!("Mouse Clutch conflicts with {label} ({hotkey})"));
+        }
+    }
+
+    Ok(Some(vk))
 }
 
 /// Parse a hotkey combo string like "Ctrl+Shift+F9" into (MOD flags, VK code).
@@ -509,6 +579,8 @@ mod tests {
     fn legacy_config_enables_loopback_integrations_by_default() {
         let config: Config = toml::from_str("eq_dir = 'C:\\EverQuest'").unwrap();
 
+        assert_eq!(config.mouse_clutch_key, "F13");
+        assert_eq!(config.mouse_clutch_vk(), Ok(Some(0x7c)));
         assert!(config.trushar.enabled);
         assert_eq!(config.trushar.bind, "127.0.0.1:19720");
         assert_eq!(config.trushar.auth_token, None);
@@ -544,5 +616,35 @@ mod tests {
         let debug = format!("{config:?}");
         assert!(debug.contains("[redacted]"));
         assert!(!debug.contains("do-not-print-this"));
+    }
+
+    #[test]
+    fn mouse_clutch_parses_extended_function_keys() {
+        assert_eq!(parse_vk_name("F13"), Some(0x7c));
+        assert_eq!(parse_vk_name("f24"), Some(0x87));
+
+        let config = Config {
+            mouse_clutch_key: "F24".into(),
+            ..Config::default()
+        };
+        assert_eq!(config.mouse_clutch_vk(), Ok(Some(0x87)));
+
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let reparsed: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.mouse_clutch_key, "F24");
+    }
+
+    #[test]
+    fn mouse_clutch_rejects_modifiers_invalid_keys_and_hotkey_collisions() {
+        let swaps = default_swap_hotkeys();
+        assert!(validate_mouse_clutch_binding("Ctrl+F13", "F9", "Pause", &swaps).is_err());
+        assert!(validate_mouse_clutch_binding("NoSuchKey", "F9", "Pause", &swaps).is_err());
+        assert!(validate_mouse_clutch_binding("F9", "F9", "Pause", &swaps).is_err());
+        assert!(validate_mouse_clutch_binding("Pause", "F9", "Pause", &swaps).is_err());
+        assert!(validate_mouse_clutch_binding("F1", "F9", "Pause", &swaps).is_err());
+        assert_eq!(
+            validate_mouse_clutch_binding("F13", "F9", "Pause", &swaps),
+            Ok(Some(0x7c))
+        );
     }
 }

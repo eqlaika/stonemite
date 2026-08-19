@@ -14,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyIcon, DestroyWindow, FindWindowW, GetCursorPos, GetMessageW,
     GetWindowThreadProcessId, KillTimer, PostMessageW, PostQuitMessage, RegisterClassW,
     SetForegroundWindow, SetTimer, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, LR_DEFAULTCOLOR,
-    MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN,
+    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN,
     TPM_LEFTALIGN, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_TIMER, WM_USER,
     WNDCLASSW, WS_EX_TOOLWINDOW,
 };
@@ -105,8 +105,12 @@ const MAX_SWAP_HOTKEYS: usize = 6;
 
 /// Timer ID for polling EQ windows.
 const TIMER_POLL_EQ: usize = 1;
+/// Timer ID for Mouse Clutch lifecycle/focus/drain checks.
+const TIMER_MOUSE_CLUTCH: usize = 2;
 /// Poll interval in milliseconds (2 seconds).
 const POLL_INTERVAL_MS: u32 = 2000;
+/// Keep lifecycle checks below the measured 28–30 ms background mouse poll.
+const MOUSE_CLUTCH_TICK_MS: u32 = 15;
 
 /// Custom message posted when a background update check finds a new version.
 const WM_UPDATE_AVAILABLE: u32 = WM_USER + 2;
@@ -243,8 +247,9 @@ unsafe extern "system" fn wnd_proc(
 ) -> LRESULT {
     match msg {
         WM_CREATE => {
-            // Start polling timer for EQ window detection.
+            // Start polling timers for EQ discovery and clutch lifecycle.
             let _ = SetTimer(hwnd, TIMER_POLL_EQ, POLL_INTERVAL_MS, None);
+            let _ = SetTimer(hwnd, TIMER_MOUSE_CLUTCH, MOUSE_CLUTCH_TICK_MS, None);
             // Check for updates in the background if due.
             maybe_auto_update_check(hwnd);
             // Register global hotkey for hiding overlay.
@@ -255,6 +260,10 @@ unsafe extern "system" fn wnd_proc(
         WM_TIMER => {
             if wparam.0 == TIMER_POLL_EQ {
                 overlay::poll();
+            } else if wparam.0 == TIMER_MOUSE_CLUTCH {
+                if broadcast::tick() {
+                    overlay::refresh_broadcast_label();
+                }
             } else if wparam.0 == control::TIMER_CONTROL_INPUT {
                 control::advance_input();
             }
@@ -341,11 +350,12 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         x if x == settings_dialog::WM_SETTINGS_CHANGED => {
-            // Re-register hotkeys with new config.
+            // Begin bounded Mouse Clutch release before applying any new hook
+            // binding, then re-register the independent global hotkeys.
+            broadcast::on_settings_changed();
             unregister_hotkeys(hwnd);
             let cfg = config::Config::load();
             register_hotkeys(hwnd, &cfg);
-            broadcast::on_settings_changed();
             // Reload overlay config (pip_edge, etc.), update the watched Logs
             // directory, and rebuild layout.
             overlay::publish_log_sources();
@@ -373,6 +383,7 @@ unsafe extern "system" fn wnd_proc(
         WM_DESTROY => {
             unregister_hotkeys(hwnd);
             let _ = KillTimer(hwnd, TIMER_POLL_EQ);
+            let _ = KillTimer(hwnd, TIMER_MOUSE_CLUTCH);
             PostQuitMessage(0);
             LRESULT(0)
         }
@@ -411,7 +422,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         windows::core::PCWSTR(edit_wide.as_ptr()),
     );
 
-    // Broadcasting toggle (only shown if trusik is enabled).
+    // Broadcasting controls and status (only shown if trusik is enabled).
     if cfg.trusik {
         let bc_label = if broadcast::is_active() {
             format!("Broadcasting: on\t{}\0", cfg.broadcast_hotkey)
@@ -430,6 +441,43 @@ unsafe fn show_context_menu(hwnd: HWND) {
             ID_BROADCAST_TOGGLE as usize,
             windows::core::PCWSTR(bc_wide.as_ptr()),
         );
+
+        let clutch_status = broadcast::mouse_clutch_status();
+        let clutch_error = broadcast::mouse_clutch_error();
+        if clutch_error.is_none()
+            && (!cfg.mouse_clutch_key.is_empty()
+                || clutch_status != broadcast::MouseClutchStatus::Inactive)
+        {
+            let label = match clutch_status {
+                broadcast::MouseClutchStatus::Inactive => {
+                    format!("Mouse Clutch: ready\t{}\0", cfg.mouse_clutch_key)
+                }
+                broadcast::MouseClutchStatus::Active => "Mouse Clutch: active\0".to_owned(),
+                broadcast::MouseClutchStatus::Releasing => "Mouse Clutch: releasing\0".to_owned(),
+            };
+            let wide: Vec<u16> = label.encode_utf16().collect();
+            let checked = if clutch_status == broadcast::MouseClutchStatus::Inactive {
+                MF_UNCHECKED
+            } else {
+                MF_CHECKED
+            };
+            let _ = AppendMenuW(
+                menu,
+                MF_STRING | MF_GRAYED | checked,
+                0,
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+        }
+        if let Some(error) = clutch_error {
+            let label = format!("Mouse Clutch unavailable: {error}\0");
+            let wide: Vec<u16> = label.encode_utf16().collect();
+            let _ = AppendMenuW(
+                menu,
+                MF_STRING | MF_GRAYED,
+                0,
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+        }
     }
 
     if cfg.accounts.is_empty() {

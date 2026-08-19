@@ -18,6 +18,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SendInput, SetCapture, SetFocus, TrackMouseEvent, INPUT, INPUT_0,
     INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, TME_LEAVE, TRACKMOUSEEVENT,
@@ -556,6 +557,53 @@ fn is_our_window(hwnd: HWND, s: &OverlayState) -> bool {
         .any(|pw| pw.hwnd == hwnd || pw.label_hwnd == hwnd)
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct MouseGeometry {
+    origin_x: i32,
+    origin_y: i32,
+    width: i32,
+    height: i32,
+    dpi: u32,
+}
+
+unsafe fn mouse_geometry(hwnd: HWND) -> Option<MouseGeometry> {
+    let mut client = RECT::default();
+    GetClientRect(hwnd, &mut client).ok()?;
+    let mut origin = POINT::default();
+    if !ClientToScreen(hwnd, &mut origin).as_bool() {
+        return None;
+    }
+    Some(MouseGeometry {
+        origin_x: origin.x,
+        origin_y: origin.y,
+        width: client.right - client.left,
+        height: client.bottom - client.top,
+        dpi: GetDpiForWindow(hwnd),
+    })
+}
+
+fn sync_mouse_eligibility(s: &OverlayState) {
+    let eligible = unsafe {
+        s.active_pid
+            .and_then(|source_pid| {
+                let source = s
+                    .eq_windows
+                    .iter()
+                    .find(|window| window.pid == source_pid)?;
+                let source_geometry = mouse_geometry(source.hwnd)?;
+                Some(
+                    s.eq_windows
+                        .iter()
+                        .filter(|window| mouse_geometry(window.hwnd) == Some(source_geometry))
+                        .map(|window| window.pid)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .unwrap_or_default()
+    };
+    crate::broadcast::update_mouse_eligible_pids(&eligible);
+}
+
 fn is_eq_or_ours(hwnd: HWND, s: &OverlayState) -> bool {
     if is_our_window(hwnd, s) {
         return true;
@@ -1063,6 +1111,7 @@ unsafe fn poll_inner_guarded() {
                 apply_auto_order(s);
             }
             crate::broadcast::set_active_pid(pid);
+            sync_mouse_eligibility(s);
             changed
         });
         // Poll trusik shared memory for character names.
@@ -1072,9 +1121,10 @@ unsafe fn poll_inner_guarded() {
         // Publish identity changes to the event-driven log worker. No log
         // filesystem I/O occurs on the UI polling path.
         publish_log_sources_inner(s);
-        // Update broadcast targets.
+        // Update broadcast targets and the strict identical-geometry Mouse Clutch set.
         let pids: Vec<u32> = s.eq_windows.iter().map(|w| w.pid).collect();
         crate::broadcast::update_targets(&pids, s.active_pid);
+        sync_mouse_eligibility(s);
         // Re-derive DPI from the EQ window; if it changed (e.g. monitor
         // reconnect moved EQ to a different-DPI display), rebuild everything.
         // Also rebuild if any HWND changed (e.g. EQ recreated its window
@@ -1162,6 +1212,7 @@ unsafe fn poll_inner_guarded() {
             apply_auto_order(s);
         }
         crate::broadcast::set_active_pid(fg);
+        sync_mouse_eligibility(s);
     }
 
     s.pip_order.truncate(MAX_PIPS);
@@ -1180,9 +1231,10 @@ unsafe fn poll_inner_guarded() {
     // filesystem I/O occurs on the UI polling path.
     publish_log_sources_inner(s);
 
-    // Update broadcast targets.
+    // Update broadcast targets and the strict identical-geometry Mouse Clutch set.
     let pids: Vec<u32> = s.eq_windows.iter().map(|w| w.pid).collect();
     crate::broadcast::update_targets(&pids, s.active_pid);
+    sync_mouse_eligibility(s);
 
     if config::Config::load().auto_order {
         apply_auto_order(s);
@@ -1611,6 +1663,21 @@ unsafe fn rebuild_thumbnails_guarded(s: &mut OverlayState) {
 // Active label
 // ---------------------------------------------------------------------------
 
+fn input_indicator_text() -> Option<&'static str> {
+    use crate::broadcast::MouseClutchStatus;
+    match (
+        crate::broadcast::is_active(),
+        crate::broadcast::mouse_clutch_status(),
+    ) {
+        (false, MouseClutchStatus::Inactive) => None,
+        (true, MouseClutchStatus::Inactive) => Some("Broadcasting"),
+        (false, MouseClutchStatus::Active) => Some("Mouse Clutch"),
+        (false, MouseClutchStatus::Releasing) => Some("Mouse Clutch · Releasing"),
+        (true, MouseClutchStatus::Active) => Some("Broadcasting · Mouse Clutch"),
+        (true, MouseClutchStatus::Releasing) => Some("Broadcasting · Mouse Clutch releasing"),
+    }
+}
+
 unsafe fn update_active_label(s: &mut OverlayState) {
     let active = s
         .active_pid
@@ -1709,9 +1776,8 @@ unsafe fn update_active_label(s: &mut OverlayState) {
 
     let _ = InvalidateRect(s.active_label_hwnd, None, true);
 
-    // Position broadcast banner next to the active label.
-    if crate::broadcast::is_active() {
-        let bc_text = "\u{26A1} Broadcasting";
+    // Position the explicit keyboard/mouse input indicator next to the active label.
+    if let Some(bc_text) = input_indicator_text() {
         let bc_font = CreateFontW(
             dpi(lh - 12, d),
             0,
@@ -1812,7 +1878,7 @@ unsafe fn update_visibility(s: &mut OverlayState) {
         if !s.active_label_text.is_empty() {
             let _ = ShowWindow(s.active_label_hwnd, SW_SHOWNOACTIVATE);
         }
-        if crate::broadcast::is_active() {
+        if input_indicator_text().is_some() {
             let _ = ShowWindow(s.broadcast_label_hwnd, SW_SHOWNOACTIVATE);
         } else {
             let _ = ShowWindow(s.broadcast_label_hwnd, SW_HIDE);
@@ -1871,6 +1937,7 @@ unsafe extern "system" fn foreground_event_proc(
         // Keep broadcast suppression synchronized with WinEvent foreground
         // changes immediately instead of waiting for the next process poll.
         crate::broadcast::set_active_pid(fg_pid);
+        sync_mouse_eligibility(s);
     }
 
     update_visibility(s);
@@ -2326,6 +2393,7 @@ unsafe fn swap_to_guarded(
     }
 
     crate::broadcast::set_active_pid(new_active_pid);
+    sync_mouse_eligibility(s);
     if config::Config::load().auto_order {
         apply_auto_order(s);
     }
@@ -3287,9 +3355,19 @@ unsafe fn paint_broadcast_label(hwnd: HWND) {
     let _ = FillRect(hdc, &rc, key_brush);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(key_brush);
 
-    // Rounded red background.
+    // Keyboard Broadcast keeps its reserved red. Mouse-only activity uses teal;
+    // bounded release/drain uses amber. Text makes every state redundant.
+    let background = if crate::broadcast::is_active() {
+        0x002030CC
+    } else {
+        match crate::broadcast::mouse_clutch_status() {
+            crate::broadcast::MouseClutchStatus::Inactive => 0x002030CC,
+            crate::broadcast::MouseClutchStatus::Active => 0x00906A28,
+            crate::broadcast::MouseClutchStatus::Releasing => 0x002080C8,
+        }
+    };
     let radius = dpi(8, d);
-    let bg_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x002030CC));
+    let bg_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(background));
     let null_pen = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
     let old_pen = SelectObject(hdc, null_pen);
     let old_brush = SelectObject(hdc, bg_brush);
@@ -3326,7 +3404,7 @@ unsafe fn paint_broadcast_label(hwnd: HWND) {
     let old_font = SelectObject(hdc, font);
     let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
 
-    let text = "\u{26A1} Broadcasting";
+    let text = input_indicator_text().unwrap_or("Broadcasting");
     let mut wide: Vec<u16> = text.encode_utf16().collect();
     let pad = dpi(10, d);
 

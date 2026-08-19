@@ -6,15 +6,24 @@
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, LPARAM, LRESULT, WPARAM};
+use std::sync::atomic::{AtomicU32, Ordering};
+use windows::Win32::Foundation::{
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, LPARAM, LRESULT, WAIT_TIMEOUT, WPARAM,
+};
 use windows::Win32::System::Memory::{
     CreateFileMappingW, MapViewOfFile, FILE_MAP_WRITE, PAGE_READWRITE,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC};
+use windows::Win32::System::SystemInformation::GetTickCount64;
+use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, MapVirtualKeyW, MAPVK_VK_TO_VSC, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+    VK_XBUTTON1, VK_XBUTTON2,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, SetWindowsHookExW,
-    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, WH_KEYBOARD_LL, WM_KEYDOWN,
-    WM_SYSKEYDOWN,
+    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSLLHOOKSTRUCT, WH_KEYBOARD_LL,
+    WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
 use crate::config::Config;
@@ -24,37 +33,47 @@ use crate::config::Config;
 struct SharedKeyState {
     magic: u32,
     version: u32,
-    active: u32,
+    /// Bitset of keyboard owners (Broadcast and targeted input).
+    keyboard_active: AtomicU32,
+    /// Independent Mouse Clutch activation (zero or one).
+    mouse_active: AtomicU32,
     suppress: u32,
     seq: u32,
     /// DirectInput scan codes 0–254. Scan code 255 is reserved.
     keys: [u8; 255],
     /// Written by a compatible trusik proxy after it maps this region.
     proxy_ready: u8,
+    /// Low 32 bits of GetTickCount64, refreshed by the controller.
+    controller_heartbeat_ms: AtomicU32,
 }
 
 const MAGIC: u32 = 0x53544D54; // "STMT"
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const PROXY_READY: u8 = 0xA5;
 const SHM_SIZE: usize = std::mem::size_of::<SharedKeyState>();
+const KEYBOARD_BROADCAST: u32 = 1 << 0;
+const KEYBOARD_TARGETED: u32 = 1 << 1;
 
 /// Per-process shared memory handle.
 struct ProcessShm {
     #[allow(dead_code)] // Stored for identification/debugging.
     pid: u32,
     handle: HANDLE,
+    process_handle: Option<HANDLE>,
     ptr: *mut SharedKeyState,
     broadcast_keys: [bool; 256],
     targeted_keys: [bool; 256],
     targeted_active: bool,
+    mouse_selected: bool,
 }
 
 impl Drop for ProcessShm {
     fn drop(&mut self) {
         unsafe {
             if !self.ptr.is_null() {
-                // Deactivate before unmapping.
-                std::ptr::write_volatile(&mut (*self.ptr).active, 0);
+                // Deactivate both input paths before unmapping.
+                (*self.ptr).keyboard_active.store(0, Ordering::Release);
+                (*self.ptr).mouse_active.store(0, Ordering::Release);
                 let _ = windows::Win32::System::Memory::UnmapViewOfFile(
                     windows::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
                         Value: self.ptr as *mut c_void,
@@ -63,6 +82,9 @@ impl Drop for ProcessShm {
             }
             if !self.handle.0.is_null() {
                 let _ = CloseHandle(self.handle);
+            }
+            if let Some(process_handle) = self.process_handle {
+                let _ = CloseHandle(process_handle);
             }
         }
     }
@@ -74,15 +96,147 @@ enum FilterMode {
     Whitelist,
 }
 
+const MOUSE_LEFT: u8 = 1 << 0;
+const MOUSE_RIGHT: u8 = 1 << 1;
+const MOUSE_MIDDLE: u8 = 1 << 2;
+const MOUSE_X1: u8 = 1 << 3;
+const MOUSE_X2: u8 = 1 << 4;
+/// Three background polls at the measured 33–36 Hz, with a small margin.
+const MOUSE_DRAIN_MS: u64 = 90;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClutchPhase {
+    Inactive,
+    Active,
+    Releasing,
+    Draining,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MouseClutchStatus {
+    Inactive,
+    Active,
+    Releasing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClutchKeyEffect {
+    Pass,
+    Swallow,
+    Activate,
+}
+
+#[derive(Debug)]
+struct MouseClutch {
+    phase: ClutchPhase,
+    buttons: u8,
+    swallowed_vk: Option<u32>,
+    source_pid: Option<u32>,
+    drain_deadline_ms: u64,
+}
+
+impl MouseClutch {
+    fn new(buttons: u8) -> Self {
+        Self {
+            phase: ClutchPhase::Inactive,
+            buttons,
+            swallowed_vk: None,
+            source_pid: None,
+            drain_deadline_ms: 0,
+        }
+    }
+
+    fn status(&self) -> MouseClutchStatus {
+        match self.phase {
+            ClutchPhase::Inactive => MouseClutchStatus::Inactive,
+            ClutchPhase::Active => MouseClutchStatus::Active,
+            ClutchPhase::Releasing | ClutchPhase::Draining => MouseClutchStatus::Releasing,
+        }
+    }
+
+    fn on_key_down(&mut self, vk: u32, source_pid: u32, has_targets: bool) -> ClutchKeyEffect {
+        if self.swallowed_vk == Some(vk) {
+            return ClutchKeyEffect::Swallow;
+        }
+        self.swallowed_vk = Some(vk);
+        if self.buttons != 0 || !has_targets {
+            return ClutchKeyEffect::Swallow;
+        }
+        self.phase = ClutchPhase::Active;
+        self.source_pid = Some(source_pid);
+        self.drain_deadline_ms = 0;
+        ClutchKeyEffect::Activate
+    }
+
+    fn on_key_up(&mut self, vk: u32, now_ms: u64) -> ClutchKeyEffect {
+        if self.swallowed_vk != Some(vk) {
+            return ClutchKeyEffect::Pass;
+        }
+        self.swallowed_vk = None;
+        if self.phase == ClutchPhase::Active {
+            if self.buttons == 0 {
+                self.begin_drain(now_ms);
+            } else {
+                self.phase = ClutchPhase::Releasing;
+            }
+        }
+        ClutchKeyEffect::Swallow
+    }
+
+    fn set_button(&mut self, button: u8, pressed: bool, now_ms: u64) {
+        if pressed {
+            self.buttons |= button;
+        } else {
+            self.buttons &= !button;
+        }
+        if self.phase == ClutchPhase::Releasing && self.buttons == 0 {
+            self.begin_drain(now_ms);
+        }
+    }
+
+    fn cancel_bounded(&mut self, now_ms: u64) {
+        if matches!(self.phase, ClutchPhase::Active | ClutchPhase::Releasing) {
+            self.begin_drain(now_ms);
+        }
+    }
+
+    fn begin_drain(&mut self, now_ms: u64) {
+        self.phase = ClutchPhase::Draining;
+        self.drain_deadline_ms = now_ms.saturating_add(MOUSE_DRAIN_MS);
+    }
+
+    fn finish_drain_if_due(&mut self, now_ms: u64) -> bool {
+        if self.phase == ClutchPhase::Draining && now_ms >= self.drain_deadline_ms {
+            self.force_inactive();
+            return true;
+        }
+        false
+    }
+
+    fn force_inactive(&mut self) {
+        self.phase = ClutchPhase::Inactive;
+        self.source_pid = None;
+        self.drain_deadline_ms = 0;
+    }
+}
+
 /// All broadcast state, accessed only from the main (tray message loop) thread.
 /// The LL keyboard hook also runs on this thread (Windows dispatches LL hooks
 /// via the installing thread's message loop).
 struct BroadcastState {
     targets: HashMap<u32, ProcessShm>,
     active_pid: Option<u32>,
-    hook: HHOOK,
+    keyboard_hook: HHOOK,
+    mouse_hook: HHOOK,
     broadcasting: bool,
+    clutch_binding_vk: Option<u32>,
+    pending_clutch_binding: Option<Option<u32>>,
+    clutch_key_is_down: bool,
+    clutch: MouseClutch,
+    clutch_status_dirty: bool,
+    clutch_error: Option<String>,
     eq_pids: Vec<u32>,
+    mouse_eligible_pids: Vec<u32>,
     eq_was_foreground: bool,
     filter_mode: FilterMode,
     filter_scancodes: Vec<u8>,
@@ -101,16 +255,35 @@ fn state() -> &'static mut Option<BroadcastState> {
 pub fn init() {
     let cfg = Config::load();
     let (filter_mode, filter_scancodes) = load_filter(&cfg);
+    let (clutch_binding_vk, clutch_error) = match cfg.mouse_clutch_vk() {
+        Ok(binding) => (binding, None),
+        Err(error) => (None, Some(error)),
+    };
     *state() = Some(BroadcastState {
         targets: HashMap::new(),
         active_pid: None,
-        hook: HHOOK(std::ptr::null_mut()),
+        keyboard_hook: HHOOK(std::ptr::null_mut()),
+        mouse_hook: HHOOK(std::ptr::null_mut()),
         broadcasting: false,
+        clutch_binding_vk,
+        pending_clutch_binding: None,
+        clutch_key_is_down: clutch_binding_vk.is_some_and(key_is_down),
+        clutch: MouseClutch::new(sample_mouse_buttons()),
+        clutch_status_dirty: false,
+        clutch_error,
         eq_pids: Vec::new(),
+        mouse_eligible_pids: Vec::new(),
         eq_was_foreground: false,
         filter_mode,
         filter_scancodes,
     });
+    if let Some(s) = state().as_mut() {
+        if let Err(error) = reconcile_hooks(s) {
+            s.clutch_binding_vk = None;
+            s.clutch_error = Some(error);
+            let _ = reconcile_hooks(s);
+        }
+    }
 }
 
 /// Load filter configuration from a config.
@@ -146,9 +319,140 @@ fn passes_filter(s: &BroadcastState, scan: u8) -> bool {
     }
 }
 
+fn key_is_down(vk: u32) -> bool {
+    unsafe { GetAsyncKeyState(vk as i32) as u16 & 0x8000 != 0 }
+}
+
+fn sample_mouse_buttons() -> u8 {
+    unsafe {
+        let mut buttons = 0;
+        for (vk, button) in [
+            (VK_LBUTTON, MOUSE_LEFT),
+            (VK_RBUTTON, MOUSE_RIGHT),
+            (VK_MBUTTON, MOUSE_MIDDLE),
+            (VK_XBUTTON1, MOUSE_X1),
+            (VK_XBUTTON2, MOUSE_X2),
+        ] {
+            if GetAsyncKeyState(vk.0 as i32) as u16 & 0x8000 != 0 {
+                buttons |= button;
+            }
+        }
+        buttons
+    }
+}
+
+fn keyboard_hook_needed(s: &BroadcastState) -> bool {
+    s.broadcasting
+        || s.clutch_binding_vk.is_some()
+        || s.pending_clutch_binding.is_some()
+        || s.clutch.swallowed_vk.is_some()
+}
+
+fn mouse_hook_needed(s: &BroadcastState) -> bool {
+    s.clutch_binding_vk.is_some()
+        || s.pending_clutch_binding.is_some()
+        || s.clutch.phase != ClutchPhase::Inactive
+}
+
+fn reconcile_hooks(s: &mut BroadcastState) -> Result<(), String> {
+    unsafe {
+        if keyboard_hook_needed(s) && s.keyboard_hook.0.is_null() {
+            s.keyboard_hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(ll_keyboard_proc), None, 0)
+                .map_err(|error| format!("failed to install keyboard hook: {error}"))?;
+        }
+        if mouse_hook_needed(s) && s.mouse_hook.0.is_null() {
+            match SetWindowsHookExW(WH_MOUSE_LL, Some(ll_mouse_proc), None, 0) {
+                Ok(hook) => s.mouse_hook = hook,
+                Err(error) => {
+                    return Err(format!("failed to install mouse hook: {error}"));
+                }
+            }
+            s.clutch.buttons = sample_mouse_buttons();
+        }
+
+        let mut removal_error = None;
+        if !mouse_hook_needed(s) && !s.mouse_hook.0.is_null() {
+            match UnhookWindowsHookEx(s.mouse_hook) {
+                Ok(()) => s.mouse_hook = HHOOK(std::ptr::null_mut()),
+                Err(error) => {
+                    removal_error = Some(format!("failed to remove mouse hook: {error}"));
+                }
+            }
+        }
+        if !keyboard_hook_needed(s) && !s.keyboard_hook.0.is_null() {
+            match UnhookWindowsHookEx(s.keyboard_hook) {
+                Ok(()) => s.keyboard_hook = HHOOK(std::ptr::null_mut()),
+                Err(error) => {
+                    removal_error = Some(format!("failed to remove keyboard hook: {error}"));
+                }
+            }
+        }
+        removal_error.map_or(Ok(()), Err)
+    }
+}
+
+unsafe fn set_keyboard_source(target: &ProcessShm, source: u32, active: bool) {
+    if active {
+        (*target.ptr)
+            .keyboard_active
+            .fetch_or(source, Ordering::AcqRel);
+    } else {
+        (*target.ptr)
+            .keyboard_active
+            .fetch_and(!source, Ordering::AcqRel);
+    }
+}
+
+unsafe fn deactivate_mouse_targets(s: &mut BroadcastState) {
+    for target in s.targets.values_mut() {
+        if target.mouse_selected {
+            target.mouse_selected = false;
+            (*target.ptr).mouse_active.store(0, Ordering::Release);
+        }
+    }
+}
+
+unsafe fn activate_mouse_targets(s: &mut BroadcastState, source_pid: u32) -> bool {
+    let has_targets = s.mouse_eligible_pids.contains(&source_pid)
+        && s.targets.iter().any(|(&pid, target)| {
+            pid != source_pid && s.mouse_eligible_pids.contains(&pid) && target_is_ready(target)
+        });
+    if !has_targets {
+        return false;
+    }
+
+    // Activate the new snapshot before retiring any previous drain snapshot so
+    // a clutch re-press never creates a global inactive gap.
+    for (&pid, target) in s.targets.iter_mut() {
+        if pid != source_pid && s.mouse_eligible_pids.contains(&pid) && target_is_ready(target) {
+            target.mouse_selected = true;
+            (*target.ptr).mouse_active.store(1, Ordering::Release);
+        }
+    }
+    for (&pid, target) in s.targets.iter_mut() {
+        if target.mouse_selected
+            && (pid == source_pid
+                || !s.mouse_eligible_pids.contains(&pid)
+                || !target_is_ready(target))
+        {
+            target.mouse_selected = false;
+            (*target.ptr).mouse_active.store(0, Ordering::Release);
+        }
+    }
+    true
+}
+
 /// Cleanup the broadcast engine. Call before exit.
 pub fn cleanup() {
     let _ = set_active(false);
+    if let Some(s) = state().as_mut() {
+        unsafe { deactivate_mouse_targets(s) };
+        s.clutch.force_inactive();
+        s.clutch.swallowed_vk = None;
+        s.clutch_binding_vk = None;
+        s.pending_clutch_binding = None;
+        let _ = reconcile_hooks(s);
+    }
     *state() = None;
 }
 
@@ -169,12 +473,32 @@ pub fn is_active() -> bool {
     state().as_ref().is_some_and(|s| s.broadcasting)
 }
 
+pub fn mouse_clutch_status() -> MouseClutchStatus {
+    state()
+        .as_ref()
+        .map_or(MouseClutchStatus::Inactive, |s| s.clutch.status())
+}
+
+pub fn mouse_clutch_error() -> Option<String> {
+    state().as_ref().and_then(|s| s.clutch_error.clone())
+}
+
 /// Returns whether the target process has acknowledged a compatible trusik proxy.
 pub fn is_target_ready(pid: u32) -> bool {
     state()
         .as_ref()
         .and_then(|state| state.targets.get(&pid))
         .is_some_and(target_is_ready)
+}
+
+fn refresh_controller_heartbeat(s: &BroadcastState, now_ms: u64) {
+    for target in s.targets.values() {
+        unsafe {
+            (*target.ptr)
+                .controller_heartbeat_ms
+                .store(now_ms as u32, Ordering::Release);
+        }
+    }
 }
 
 fn target_is_ready(target: &ProcessShm) -> bool {
@@ -185,7 +509,13 @@ fn target_is_ready(target: &ProcessShm) -> bool {
     }
 }
 
-/// Enable or disable broadcasting.
+fn target_process_alive(target: &ProcessShm) -> bool {
+    target
+        .process_handle
+        .is_none_or(|handle| unsafe { WaitForSingleObject(handle, 0) == WAIT_TIMEOUT })
+}
+
+/// Enable or disable keyboard broadcasting.
 pub fn set_active(active: bool) -> Result<(), String> {
     let Some(s) = state().as_mut() else {
         return Err("broadcast engine is unavailable".to_owned());
@@ -193,20 +523,21 @@ pub fn set_active(active: bool) -> Result<(), String> {
     if s.broadcasting == active {
         return Ok(());
     }
+
+    s.broadcasting = active;
+    let hook_result = reconcile_hooks(s);
+    if active {
+        if let Err(error) = &hook_result {
+            let error = error.clone();
+            s.broadcasting = false;
+            let _ = reconcile_hooks(s);
+            return Err(error);
+        }
+    }
+
     unsafe {
-        if active && s.hook.0.is_null() {
-            let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(ll_keyboard_proc), None, 0);
-            match hook {
-                Ok(h) => s.hook = h,
-                Err(e) => {
-                    return Err(format!("failed to install keyboard hook: {e}"));
-                }
-            }
-        } else if !active && !s.hook.0.is_null() {
-            UnhookWindowsHookEx(s.hook)
-                .map_err(|error| format!("failed to remove keyboard hook: {error}"))?;
-            s.hook = HHOOK(std::ptr::null_mut());
-            // Clear the physical-broadcast source while preserving any
+        if !active {
+            // Clear only the physical-broadcast source while preserving any
             // target-specific input sequence in progress.
             for shm in s.targets.values_mut() {
                 for scan in 0..255 {
@@ -215,18 +546,11 @@ pub fn set_active(active: bool) -> Result<(), String> {
                 }
             }
         }
-        s.broadcasting = active;
-        // Write active flag to all shm regions.
         for shm in s.targets.values() {
-            let flag = if active || shm.targeted_active {
-                1u32
-            } else {
-                0u32
-            };
-            std::ptr::write_volatile(&mut (*shm.ptr).active, flag);
+            set_keyboard_source(shm, KEYBOARD_BROADCAST, active);
         }
     }
-    Ok(())
+    hook_result
 }
 
 /// Update the set of target processes. Called from overlay poll.
@@ -234,6 +558,16 @@ pub fn set_active(active: bool) -> Result<(), String> {
 pub fn update_targets(pids: &[u32], active_pid: Option<u32>) {
     let Some(s) = state().as_mut() else { return };
     unsafe {
+        let source_disappeared = s.clutch.source_pid.is_some_and(|pid| !pids.contains(&pid));
+        let selected_target_disappeared = s
+            .targets
+            .iter()
+            .any(|(pid, target)| target.mouse_selected && !pids.contains(pid));
+        if source_disappeared || selected_target_disappeared {
+            s.clutch.cancel_bounded(GetTickCount64());
+            s.clutch_status_dirty = true;
+        }
+
         // Update EQ PIDs for the LL hook foreground check.
         s.eq_pids.clear();
         s.eq_pids.extend_from_slice(pids);
@@ -248,7 +582,7 @@ pub fn update_targets(pids: &[u32], active_pid: Option<u32>) {
             }
             if let Some(shm) = create_shm(pid) {
                 if s.broadcasting {
-                    std::ptr::write_volatile(&mut (*shm.ptr).active, 1);
+                    set_keyboard_source(&shm, KEYBOARD_BROADCAST, true);
                 }
                 s.targets.insert(pid, shm);
             }
@@ -263,9 +597,29 @@ pub fn update_targets(pids: &[u32], active_pid: Option<u32>) {
     }
 }
 
+/// Update the same-origin/client-size/DPI compatibility set supplied by the
+/// overlay. A selected target leaving this set cancels the current clutch.
+pub fn update_mouse_eligible_pids(pids: &[u32]) {
+    let Some(s) = state().as_mut() else { return };
+    let selected_became_ineligible = s
+        .targets
+        .iter()
+        .any(|(pid, target)| target.mouse_selected && !pids.contains(pid));
+    s.mouse_eligible_pids.clear();
+    s.mouse_eligible_pids.extend_from_slice(pids);
+    if selected_became_ineligible {
+        s.clutch.cancel_bounded(unsafe { GetTickCount64() });
+        s.clutch_status_dirty = true;
+    }
+}
+
 /// Update which process is the active (foreground) one.
 pub fn set_active_pid(pid: u32) {
     let Some(s) = state().as_mut() else { return };
+    if s.clutch.source_pid.is_some_and(|source| source != pid) {
+        s.clutch.cancel_bounded(unsafe { GetTickCount64() });
+        s.clutch_status_dirty = true;
+    }
     s.active_pid = Some(pid);
     unsafe {
         for (&target_pid, shm) in s.targets.iter() {
@@ -275,13 +629,93 @@ pub fn set_active_pid(pid: u32) {
     }
 }
 
-/// Reload filter config (called on settings change).
+fn real_foreground_pid() -> Option<u32> {
+    unsafe {
+        let foreground = GetForegroundWindow();
+        let mut pid = 0;
+        GetWindowThreadProcessId(foreground, Some(&mut pid));
+        (pid != 0).then_some(pid)
+    }
+}
+
+fn apply_pending_clutch_binding(s: &mut BroadcastState) {
+    if s.clutch.phase != ClutchPhase::Inactive || s.clutch.swallowed_vk.is_some() {
+        return;
+    }
+    let Some(binding) = s.pending_clutch_binding.take() else {
+        return;
+    };
+    s.clutch_binding_vk = binding;
+    s.clutch_key_is_down = binding.is_some_and(key_is_down);
+    if let Err(error) = reconcile_hooks(s) {
+        s.clutch_binding_vk = None;
+        s.clutch_error = Some(error);
+        unsafe { deactivate_mouse_targets(s) };
+        s.clutch.force_inactive();
+        let _ = reconcile_hooks(s);
+    }
+}
+
+/// Advance focus/lifecycle validation and the bounded release drain. Returns
+/// true when an overlay/tray indicator should be refreshed.
+pub fn tick() -> bool {
+    let Some(s) = state().as_mut() else {
+        return false;
+    };
+    let now_ms = unsafe { GetTickCount64() };
+    refresh_controller_heartbeat(s, now_ms);
+    let before = s.clutch.status();
+
+    if s.clutch.phase != ClutchPhase::Inactive {
+        let source_is_foreground = s.clutch.source_pid.is_some()
+            && s.clutch.source_pid == real_foreground_pid()
+            && s.clutch
+                .source_pid
+                .is_some_and(|pid| s.eq_pids.contains(&pid));
+        let selected_targets_ready = s
+            .targets
+            .values()
+            .filter(|target| target.mouse_selected)
+            .all(|target| target_is_ready(target) && target_process_alive(target));
+        let has_selected_target = s.targets.values().any(|target| target.mouse_selected);
+        if !source_is_foreground || !selected_targets_ready || !has_selected_target {
+            s.clutch.cancel_bounded(now_ms);
+        }
+    }
+
+    if s.clutch.finish_drain_if_due(now_ms) {
+        unsafe { deactivate_mouse_targets(s) };
+    }
+    apply_pending_clutch_binding(s);
+
+    let dirty = s.clutch_status_dirty || before != s.clutch.status();
+    s.clutch_status_dirty = false;
+    dirty
+}
+
+/// Reload filter and clutch configuration. An engaged clutch drains before
+/// the new binding takes effect; the old swallowed key-up remains tracked.
 pub fn on_settings_changed() {
     let Some(s) = state().as_mut() else { return };
     let cfg = Config::load();
     let (mode, scancodes) = load_filter(&cfg);
     s.filter_mode = mode;
     s.filter_scancodes = scancodes;
+
+    let new_binding = match cfg.mouse_clutch_vk() {
+        Ok(binding) => {
+            s.clutch_error = None;
+            binding
+        }
+        Err(error) => {
+            s.clutch_error = Some(error);
+            None
+        }
+    };
+    s.pending_clutch_binding = Some(new_binding);
+    s.clutch.cancel_bounded(unsafe { GetTickCount64() });
+    s.clutch_status_dirty = true;
+    apply_pending_clutch_binding(s);
 }
 
 unsafe fn create_shm(pid: u32) -> Option<ProcessShm> {
@@ -297,6 +731,7 @@ unsafe fn create_shm(pid: u32) -> Option<ProcessShm> {
         windows::core::PCWSTR(wide.as_ptr()),
     )
     .ok()?;
+    let existed = GetLastError() == ERROR_ALREADY_EXISTS;
 
     let view = MapViewOfFile(handle, FILE_MAP_WRITE, 0, 0, SHM_SIZE);
     let ptr = view.Value as *mut SharedKeyState;
@@ -305,18 +740,40 @@ unsafe fn create_shm(pid: u32) -> Option<ProcessShm> {
         return None;
     }
 
-    // Initialize.
-    std::ptr::write_bytes(ptr, 0, 1);
-    std::ptr::write_volatile(&mut (*ptr).magic, MAGIC);
-    std::ptr::write_volatile(&mut (*ptr).version, VERSION);
+    if existed {
+        // Another live component owns this mapping. Reuse only the exact ABI;
+        // never zero or reinterpret its independently owned auto-type source.
+        let magic = std::ptr::read_volatile(&(*ptr).magic);
+        let version = std::ptr::read_volatile(&(*ptr).version);
+        if magic != MAGIC || version != VERSION {
+            let _ = windows::Win32::System::Memory::UnmapViewOfFile(view);
+            let _ = CloseHandle(handle);
+            return None;
+        }
+        // A new controller generation owns these sources and must not revive
+        // stale mouse/broadcast/targeted state from an unclean predecessor.
+        (*ptr)
+            .keyboard_active
+            .fetch_and(!(KEYBOARD_BROADCAST | KEYBOARD_TARGETED), Ordering::AcqRel);
+        (*ptr).mouse_active.store(0, Ordering::Release);
+    } else {
+        std::ptr::write_bytes(ptr, 0, 1);
+        std::ptr::write_volatile(&mut (*ptr).magic, MAGIC);
+        std::ptr::write_volatile(&mut (*ptr).version, VERSION);
+    }
+    (*ptr)
+        .controller_heartbeat_ms
+        .store(GetTickCount64() as u32, Ordering::Release);
 
     Some(ProcessShm {
         pid,
         handle,
+        process_handle: OpenProcess(PROCESS_SYNCHRONIZE, false, pid).ok(),
         ptr,
         broadcast_keys: [false; 256],
         targeted_keys: [false; 256],
         targeted_active: false,
+        mouse_selected: false,
     })
 }
 
@@ -350,9 +807,7 @@ pub fn begin_targeted_input(pid: u32) -> Result<(), TargetedInputError> {
         ));
     }
     shm.targeted_active = true;
-    unsafe {
-        std::ptr::write_volatile(&mut (*shm.ptr).active, 1);
-    }
+    unsafe { set_keyboard_source(shm, KEYBOARD_TARGETED, true) }
     Ok(())
 }
 
@@ -378,7 +833,6 @@ pub fn set_targeted_key(pid: u32, scan: u8, pressed: bool) -> Result<(), String>
 
 pub fn finish_targeted_input(pid: u32) {
     let Some(s) = state().as_mut() else { return };
-    let broadcasting = s.broadcasting;
     let Some(shm) = s.targets.get_mut(&pid) else {
         return;
     };
@@ -390,7 +844,7 @@ pub fn finish_targeted_input(pid: u32) {
             }
         }
         shm.targeted_active = false;
-        std::ptr::write_volatile(&mut (*shm.ptr).active, if broadcasting { 1 } else { 0 });
+        set_keyboard_source(shm, KEYBOARD_TARGETED, false);
     }
 }
 
@@ -418,21 +872,102 @@ fn direct_input_scan_code(scan_code: u32, extended: bool) -> Option<u8> {
     (1..=254).contains(&scan).then_some(scan)
 }
 
-/// Low-level keyboard hook callback.
-/// Converts physical scan codes to DIK offsets and writes to background targets.
+fn mouse_button_message(message: u32, mouse_data: u32) -> Option<(u8, bool)> {
+    match message {
+        WM_LBUTTONDOWN => Some((MOUSE_LEFT, true)),
+        WM_LBUTTONUP => Some((MOUSE_LEFT, false)),
+        WM_RBUTTONDOWN => Some((MOUSE_RIGHT, true)),
+        WM_RBUTTONUP => Some((MOUSE_RIGHT, false)),
+        WM_MBUTTONDOWN => Some((MOUSE_MIDDLE, true)),
+        WM_MBUTTONUP => Some((MOUSE_MIDDLE, false)),
+        WM_XBUTTONDOWN | WM_XBUTTONUP => {
+            let button = match (mouse_data >> 16) & 0xffff {
+                1 => MOUSE_X1,
+                2 => MOUSE_X2,
+                _ => return None,
+            };
+            Some((button, message == WM_XBUTTONDOWN))
+        }
+        _ => None,
+    }
+}
+
+/// Low-level mouse hook used only for physical button level/lifecycle tracking.
+/// It never suppresses, copies, logs, allocates, or synthesizes mouse input, and
+/// intentionally accepts Moonlight/Vibepollo events marked as injected.
+unsafe extern "system" fn ll_mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let Some(s) = state().as_mut() else {
+        return CallNextHookEx(HHOOK(std::ptr::null_mut()), code, wparam, lparam);
+    };
+    if code >= 0 {
+        let mouse = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+        if let Some((button, pressed)) = mouse_button_message(wparam.0 as u32, mouse.mouseData) {
+            let before = s.clutch.status();
+            s.clutch.set_button(button, pressed, GetTickCount64());
+            s.clutch_status_dirty |= before != s.clutch.status();
+        }
+    }
+    CallNextHookEx(s.mouse_hook, code, wparam, lparam)
+}
+
+/// Low-level keyboard hook callback. Mouse Clutch is handled before keyboard
+/// Broadcast so the bound key never reaches EQ or synthetic keyboard delivery.
 unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let Some(s) = state().as_mut() else {
         return CallNextHookEx(HHOOK(std::ptr::null_mut()), code, wparam, lparam);
     };
 
     if code >= 0 {
-        // Only broadcast when an EQ window is foreground.
-        let fg = GetForegroundWindow();
-        let mut fg_pid: u32 = 0;
-        GetWindowThreadProcessId(fg, Some(&mut fg_pid));
-        let eq_is_fg = fg_pid != 0 && s.eq_pids.contains(&fg_pid);
-        if !eq_is_fg {
-            // EQ lost focus — release all stuck keys in background targets.
+        let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+        let message = wparam.0 as u32;
+        let key_down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
+        let key_up = message == WM_KEYUP || message == WM_SYSKEYUP;
+
+        // Matching repeats/up events stay swallowed even after focus,
+        // settings, source, or target changes.
+        if key_down && s.clutch.swallowed_vk == Some(kb.vkCode) {
+            return LRESULT(1);
+        }
+        if key_up && s.clutch.swallowed_vk == Some(kb.vkCode) {
+            s.clutch_key_is_down = false;
+            let before = s.clutch.status();
+            let _ = s.clutch.on_key_up(kb.vkCode, GetTickCount64());
+            s.clutch_status_dirty |= before != s.clutch.status();
+            return LRESULT(1);
+        }
+
+        let foreground_pid = real_foreground_pid();
+        let eq_is_foreground = foreground_pid.is_some_and(|pid| s.eq_pids.contains(&pid));
+        if key_up && s.clutch_binding_vk == Some(kb.vkCode) {
+            s.clutch_key_is_down = false;
+        }
+        if key_down && s.pending_clutch_binding.is_none() && s.clutch_binding_vk == Some(kb.vkCode)
+        {
+            if s.clutch_key_is_down {
+                return CallNextHookEx(s.keyboard_hook, code, wparam, lparam);
+            }
+            s.clutch_key_is_down = true;
+            if eq_is_foreground {
+                let source_pid = foreground_pid.unwrap_or_default();
+                let has_targets = s.mouse_eligible_pids.contains(&source_pid)
+                    && s.targets.iter().any(|(&pid, target)| {
+                        pid != source_pid
+                            && s.mouse_eligible_pids.contains(&pid)
+                            && target_is_ready(target)
+                    });
+                let before = s.clutch.status();
+                if s.clutch.on_key_down(kb.vkCode, source_pid, has_targets)
+                    == ClutchKeyEffect::Activate
+                {
+                    let _ = activate_mouse_targets(s, source_pid);
+                }
+                s.clutch_status_dirty |= before != s.clutch.status();
+                return LRESULT(1);
+            }
+        }
+
+        if !eq_is_foreground {
+            // EQ lost focus — release all stuck keyboard-broadcast keys.
             if s.eq_was_foreground {
                 s.eq_was_foreground = false;
                 let active_pid = s.active_pid;
@@ -446,31 +981,27 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
                     }
                 }
             }
-            return CallNextHookEx(s.hook, code, wparam, lparam);
+            return CallNextHookEx(s.keyboard_hook, code, wparam, lparam);
         }
         s.eq_was_foreground = true;
 
-        let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-        let msg = wparam.0 as u32;
-
-        if let Some(scan) = direct_input_scan_code(kb.scanCode, kb.flags.contains(LLKHF_EXTENDED))
-            .filter(|&scan| passes_filter(s, scan))
-        {
-            let pressed = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
-            let value: u8 = if pressed { 0x80 } else { 0x00 };
-
-            let active_pid = s.active_pid;
-            for (&pid, shm) in s.targets.iter_mut() {
-                // Only broadcast to background windows (not the active one).
-                if Some(pid) == active_pid {
-                    continue;
+        if s.broadcasting {
+            if let Some(scan) =
+                direct_input_scan_code(kb.scanCode, kb.flags.contains(LLKHF_EXTENDED))
+                    .filter(|&scan| passes_filter(s, scan))
+            {
+                let pressed = key_down;
+                for (&pid, shm) in s.targets.iter_mut() {
+                    if Some(pid) == foreground_pid {
+                        continue;
+                    }
+                    shm.broadcast_keys[scan as usize] = pressed;
+                    write_combined_key(shm, scan as usize);
                 }
-                shm.broadcast_keys[scan as usize] = value != 0;
-                write_combined_key(shm, scan as usize);
             }
         }
     }
-    CallNextHookEx(s.hook, code, wparam, lparam)
+    CallNextHookEx(s.keyboard_hook, code, wparam, lparam)
 }
 
 #[cfg(test)]
@@ -495,8 +1026,21 @@ mod tests {
 
     #[test]
     fn broadcast_and_targeted_sources_cannot_release_each_other() {
-        assert_eq!(SHM_SIZE, 276);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, proxy_ready), 275);
+        assert_eq!(VERSION, 2);
+        assert_eq!(SHM_SIZE, 284);
+        assert_eq!(std::mem::align_of::<SharedKeyState>(), 4);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, magic), 0);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, version), 4);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, keyboard_active), 8);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, mouse_active), 12);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, suppress), 16);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, seq), 20);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, keys), 24);
+        assert_eq!(std::mem::offset_of!(SharedKeyState, proxy_ready), 279);
+        assert_eq!(
+            std::mem::offset_of!(SharedKeyState, controller_heartbeat_ms),
+            280
+        );
         assert_eq!(combined_key_value(false, false), 0x00);
         assert_eq!(combined_key_value(true, false), 0x80);
         assert_eq!(combined_key_value(false, true), 0x80);
@@ -510,9 +1054,17 @@ mod tests {
         *state() = Some(BroadcastState {
             targets: HashMap::new(),
             active_pid: None,
-            hook: HHOOK(std::ptr::null_mut()),
+            keyboard_hook: HHOOK(std::ptr::null_mut()),
+            mouse_hook: HHOOK(std::ptr::null_mut()),
             broadcasting: false,
+            clutch_binding_vk: None,
+            pending_clutch_binding: None,
+            clutch_key_is_down: false,
+            clutch: MouseClutch::new(0),
+            clutch_status_dirty: false,
+            clutch_error: None,
             eq_pids: Vec::new(),
+            mouse_eligible_pids: vec![target_pid, other_pid],
             eq_was_foreground: false,
             filter_mode: FilterMode::Blacklist,
             filter_scancodes: Vec::new(),
@@ -547,10 +1099,12 @@ mod tests {
         let target = &broadcast_state.targets[&target_pid];
         let other = &broadcast_state.targets[&other_pid];
         unsafe {
-            assert_eq!(std::ptr::read_volatile(&(*target.ptr).active), 1);
+            assert_eq!((*target.ptr).keyboard_active.load(Ordering::Acquire), 2);
+            assert_eq!((*target.ptr).mouse_active.load(Ordering::Acquire), 0);
             assert_eq!(std::ptr::read_volatile(&(*target.ptr).keys[0x1e]), 0x80);
             assert_eq!(std::ptr::read_volatile(&(*target.ptr).keys[0x1f]), 0x00);
-            assert_eq!(std::ptr::read_volatile(&(*other.ptr).active), 1);
+            assert_eq!((*other.ptr).keyboard_active.load(Ordering::Acquire), 2);
+            assert_eq!((*other.ptr).mouse_active.load(Ordering::Acquire), 0);
             assert_eq!(std::ptr::read_volatile(&(*other.ptr).keys[0x1e]), 0x00);
             assert_eq!(std::ptr::read_volatile(&(*other.ptr).keys[0x1f]), 0x80);
         }
@@ -561,13 +1115,130 @@ mod tests {
         let target = &broadcast_state.targets[&target_pid];
         let other = &broadcast_state.targets[&other_pid];
         unsafe {
-            assert_eq!(std::ptr::read_volatile(&(*target.ptr).active), 0);
+            assert_eq!((*target.ptr).keyboard_active.load(Ordering::Acquire), 0);
+            assert_eq!((*target.ptr).mouse_active.load(Ordering::Acquire), 0);
             assert_eq!(std::ptr::read_volatile(&(*target.ptr).keys[0x1e]), 0x00);
-            assert_eq!(std::ptr::read_volatile(&(*other.ptr).active), 1);
+            assert_eq!((*other.ptr).keyboard_active.load(Ordering::Acquire), 2);
+            assert_eq!((*other.ptr).mouse_active.load(Ordering::Acquire), 0);
             assert_eq!(std::ptr::read_volatile(&(*other.ptr).keys[0x1f]), 0x80);
         }
         set_targeted_key(other_pid, 0x1f, false).unwrap();
         finish_targeted_input(other_pid);
         *state() = None;
+    }
+
+    #[test]
+    fn keyboard_and_mouse_shared_activation_are_independent() {
+        let shared = SharedKeyState {
+            magic: MAGIC,
+            version: VERSION,
+            keyboard_active: AtomicU32::new(0),
+            mouse_active: AtomicU32::new(0),
+            suppress: 1,
+            seq: 0,
+            keys: [0; 255],
+            proxy_ready: PROXY_READY,
+            controller_heartbeat_ms: AtomicU32::new(0),
+        };
+        shared.keyboard_active.store(1, Ordering::Release);
+        assert_eq!(shared.mouse_active.load(Ordering::Acquire), 0);
+        shared.keyboard_active.store(0, Ordering::Release);
+        shared.mouse_active.store(1, Ordering::Release);
+        assert_eq!(shared.keyboard_active.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn clutch_ignores_repeated_down_and_drains_after_plain_release() {
+        let mut clutch = MouseClutch::new(0);
+        assert_eq!(
+            clutch.on_key_down(0x7c, 10, true),
+            ClutchKeyEffect::Activate
+        );
+        assert_eq!(clutch.phase, ClutchPhase::Active);
+        assert_eq!(clutch.on_key_down(0x7c, 10, true), ClutchKeyEffect::Swallow);
+        assert_eq!(clutch.phase, ClutchPhase::Active);
+
+        assert_eq!(clutch.on_key_up(0x7c, 100), ClutchKeyEffect::Swallow);
+        assert_eq!(clutch.phase, ClutchPhase::Draining);
+        assert!(!clutch.finish_drain_if_due(100 + MOUSE_DRAIN_MS - 1));
+        assert!(clutch.finish_drain_if_due(100 + MOUSE_DRAIN_MS));
+        assert_eq!(clutch.phase, ClutchPhase::Inactive);
+    }
+
+    #[test]
+    fn preheld_mouse_button_rejects_press_and_swallows_matching_up() {
+        let mut clutch = MouseClutch::new(MOUSE_LEFT);
+        assert_eq!(clutch.on_key_down(0x7c, 10, true), ClutchKeyEffect::Swallow);
+        assert_eq!(clutch.phase, ClutchPhase::Inactive);
+        assert_eq!(clutch.on_key_up(0x7c, 50), ClutchKeyEffect::Swallow);
+        assert_eq!(clutch.phase, ClutchPhase::Inactive);
+    }
+
+    #[test]
+    fn release_while_dragging_waits_for_button_up_then_drains() {
+        let mut clutch = MouseClutch::new(0);
+        assert_eq!(
+            clutch.on_key_down(0x7c, 10, true),
+            ClutchKeyEffect::Activate
+        );
+        clutch.set_button(MOUSE_LEFT, true, 10);
+        assert_eq!(clutch.on_key_up(0x7c, 20), ClutchKeyEffect::Swallow);
+        assert_eq!(clutch.phase, ClutchPhase::Releasing);
+        assert!(!clutch.finish_drain_if_due(10_000));
+
+        clutch.set_button(MOUSE_LEFT, false, 30);
+        assert_eq!(clutch.phase, ClutchPhase::Draining);
+        assert!(!clutch.finish_drain_if_due(30 + MOUSE_DRAIN_MS - 1));
+        assert!(clutch.finish_drain_if_due(30 + MOUSE_DRAIN_MS));
+    }
+
+    #[test]
+    fn new_mouse_press_during_drain_cannot_extend_activation() {
+        let mut clutch = MouseClutch::new(0);
+        assert_eq!(
+            clutch.on_key_down(0x7c, 10, true),
+            ClutchKeyEffect::Activate
+        );
+        assert_eq!(clutch.on_key_up(0x7c, 20), ClutchKeyEffect::Swallow);
+        assert_eq!(clutch.phase, ClutchPhase::Draining);
+
+        clutch.set_button(MOUSE_LEFT, true, 30);
+        assert_eq!(clutch.phase, ClutchPhase::Draining);
+        assert!(clutch.finish_drain_if_due(20 + MOUSE_DRAIN_MS));
+    }
+
+    #[test]
+    fn clutch_repress_during_drain_resumes_without_deactivation() {
+        let mut clutch = MouseClutch::new(0);
+        assert_eq!(
+            clutch.on_key_down(0x7c, 10, true),
+            ClutchKeyEffect::Activate
+        );
+        assert_eq!(clutch.on_key_up(0x7c, 20), ClutchKeyEffect::Swallow);
+        assert_eq!(clutch.phase, ClutchPhase::Draining);
+        assert_eq!(
+            clutch.on_key_down(0x7c, 10, true),
+            ClutchKeyEffect::Activate
+        );
+        assert_eq!(clutch.phase, ClutchPhase::Active);
+        assert!(!clutch.finish_drain_if_due(20 + MOUSE_DRAIN_MS));
+    }
+
+    #[test]
+    fn focus_source_or_target_loss_cancels_bounded_and_late_up_is_swallowed() {
+        for _reason in ["focus", "source", "target"] {
+            let mut clutch = MouseClutch::new(0);
+            assert_eq!(
+                clutch.on_key_down(0x7c, 10, true),
+                ClutchKeyEffect::Activate
+            );
+            clutch.set_button(MOUSE_RIGHT, true, 5);
+            clutch.cancel_bounded(40);
+            assert_eq!(clutch.phase, ClutchPhase::Draining);
+            assert_eq!(clutch.on_key_up(0x7c, 50), ClutchKeyEffect::Swallow);
+            assert_eq!(clutch.swallowed_vk, None);
+            assert!(clutch.finish_drain_if_due(40 + MOUSE_DRAIN_MS));
+            assert_eq!(clutch.phase, ClutchPhase::Inactive);
+        }
     }
 }

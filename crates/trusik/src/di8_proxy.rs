@@ -1,4 +1,4 @@
-use crate::device_proxy::DeviceProxy;
+use crate::device_proxy::{DeviceKind, DeviceProxy};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 use windows::core::{GUID, HRESULT};
@@ -10,6 +10,24 @@ const GUID_SYS_KEYBOARD: GUID = GUID {
     data3: 0x11CF,
     data4: [0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00],
 };
+
+/// GUID_SysMouse from dinput.h.
+const GUID_SYS_MOUSE: GUID = GUID {
+    data1: 0x6F1D2B60,
+    data2: 0xD5A0,
+    data3: 0x11CF,
+    data4: [0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00],
+};
+
+fn classify_device(guid: GUID) -> DeviceKind {
+    if guid == GUID_SYS_KEYBOARD {
+        DeviceKind::Keyboard
+    } else if guid == GUID_SYS_MOUSE {
+        DeviceKind::Mouse
+    } else {
+        DeviceKind::Other
+    }
+}
 
 /// Raw COM vtable for IDirectInput8 (A or W — layouts are identical).
 ///
@@ -151,8 +169,7 @@ unsafe extern "system" fn di8_create_device(
     if hr.is_ok() {
         let real_device = *ppdev;
         let guid = *rguid;
-        let is_keyboard = guid == GUID_SYS_KEYBOARD;
-        let proxy = DeviceProxy::new(real_device, is_keyboard);
+        let proxy = DeviceProxy::new(real_device, classify_device(guid));
         let proxy_ptr = Box::into_raw(Box::new(proxy));
         *ppdev = proxy_ptr as *mut c_void;
     }
@@ -253,4 +270,24 @@ unsafe extern "system" fn di8_config_interface(
     let method: unsafe extern "system" fn(*mut c_void, *mut c_void) -> HRESULT =
         real_method(real, 10);
     method(real, params)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_system_keyboard_mouse_and_other_devices() {
+        assert_eq!(classify_device(GUID_SYS_KEYBOARD), DeviceKind::Keyboard);
+        assert_eq!(classify_device(GUID_SYS_MOUSE), DeviceKind::Mouse);
+        assert_eq!(
+            classify_device(GUID {
+                data1: 0,
+                data2: 0,
+                data3: 0,
+                data4: [0; 8],
+            }),
+            DeviceKind::Other
+        );
+    }
 }
