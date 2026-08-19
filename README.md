@@ -4,11 +4,9 @@
   <img src="crates/stonemite/assets/app.png" width="128" alt="Stonemite">
 </p>
 
-EverQuest multiboxing tool for Windows.
+EverQuest multiboxing tool for Windows. Requires Windows 10 or later.
 
-> **Note:** Requires Windows 10 or later. Stonemite works best with EQ's borderless fullscreen mode, added in the March 2026 patch.
-
-Stonemite makes multiboxing EQ easy — PiP overlays with click-to-swap, swap hotkeys, key broadcasting, auto-login, automatic character detection, and a drag-and-drop layout editor. No subscription, no setup wizard.
+Stonemite makes multiboxing EQ easy: PiP overlays with click-to-swap, key broadcasting, character login, automatic character nameplates, a drag-and-drop layout editor, and more. Stonemite is free and open source.
 
 > [!WARNING]
 > **Stonemite is not an automation tool.** Every gameplay input must originate from an immediate physical user action; Stonemite never decides when a gameplay action should occur. Input sequences, loops, and game-state reactions that control EQ are intentionally unsupported. Passive log observation may drive UI telemetry, notifications, and display-only timers, but those features cannot inject input or invoke gameplay controls. Pull requests that add unattended gameplay will not be accepted. Stonemite is designed to comply fully with EverQuest's Terms of Service and EULA.
@@ -69,7 +67,7 @@ The app checks for updates against [eqlaika/stonemite](https://github.com/eqlaik
 
 ## Account login
 
-Stonemite can launch your EQ accounts and log them in automatically — no patcher, no typing passwords, no clicking through server select. Add your accounts in Settings > Accounts, and Stonemite handles the rest.
+Stonemite can launch your EQ accounts and log them in for you: no patcher, no typing passwords, no clicking through server select. Add your accounts in Settings > Accounts, and Stonemite handles the rest.
 
 ### Password security
 
