@@ -32,6 +32,18 @@ pip_edge = "right"
 # Hide background EQ windows from Alt-Tab (active window stays visible)
 # hide_from_alt_tab = true
 
+# Box notifications: highlight the receiving background PiP and play one of
+# the bundled EQ default audio-trigger sounds. Chat events use each character's
+# configured EQ channel color; system events use Stonemite status colors.
+# tell_visual_enabled = true
+# tell_sound_enabled = true
+# tell_sound = "tell.wav"
+# notify_tells = true
+# notify_group_invites = true
+# notify_raid_invites = true
+# notify_resurrections = true
+# notify_deaths = true
+
 # Per-PiP custom positions (set via Edit Layout mode, or manually).
 # Empty = auto strip layout. Each entry needs slot, x, y, width, height.
 # [[pip_positions]]

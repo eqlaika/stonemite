@@ -138,6 +138,30 @@ pub struct Config {
     /// Remembered settings window position [x, y].
     #[serde(default)]
     pub settings_position: Option<[f32; 2]>,
+    /// Highlight a background PiP when it receives a tell. Default: true.
+    #[serde(default = "default_tell_visual_enabled")]
+    pub tell_visual_enabled: bool,
+    /// Play a sound for every incoming tell, including on the active box. Default: true.
+    #[serde(default = "default_tell_sound_enabled")]
+    pub tell_sound_enabled: bool,
+    /// Bundled EQ audio-trigger filename used for incoming notifications.
+    #[serde(default = "default_tell_sound")]
+    pub tell_sound: String,
+    /// Notify for incoming tells.
+    #[serde(default = "default_notification_event_enabled")]
+    pub notify_tells: bool,
+    /// Notify for incoming group invitations.
+    #[serde(default = "default_notification_event_enabled")]
+    pub notify_group_invites: bool,
+    /// Notify for incoming raid invitations.
+    #[serde(default = "default_notification_event_enabled")]
+    pub notify_raid_invites: bool,
+    /// Notify when a resurrection is offered.
+    #[serde(default = "default_notification_event_enabled")]
+    pub notify_resurrections: bool,
+    /// Notify when a character dies.
+    #[serde(default = "default_notification_event_enabled")]
+    pub notify_deaths: bool,
     /// Enable toast notifications. Default: true.
     #[serde(default = "default_toast_enabled")]
     pub toast_enabled: bool,
@@ -191,6 +215,22 @@ fn default_swap_hotkeys() -> Vec<String> {
     (1..=6).map(|i| format!("Ctrl+F{i}")).collect()
 }
 
+fn default_tell_visual_enabled() -> bool {
+    true
+}
+
+fn default_tell_sound_enabled() -> bool {
+    true
+}
+
+fn default_tell_sound() -> String {
+    crate::sound::DEFAULT_SOUND_ID.to_owned()
+}
+
+fn default_notification_event_enabled() -> bool {
+    true
+}
+
 fn default_toast_enabled() -> bool {
     true
 }
@@ -227,6 +267,14 @@ impl Default for Config {
             trusik: false,
             swap_hotkeys: default_swap_hotkeys(),
             settings_position: None,
+            tell_visual_enabled: default_tell_visual_enabled(),
+            tell_sound_enabled: default_tell_sound_enabled(),
+            tell_sound: default_tell_sound(),
+            notify_tells: default_notification_event_enabled(),
+            notify_group_invites: default_notification_event_enabled(),
+            notify_raid_invites: default_notification_event_enabled(),
+            notify_resurrections: default_notification_event_enabled(),
+            notify_deaths: default_notification_event_enabled(),
             broadcast_hotkey: default_broadcast_hotkey(),
             mouse_clutch_key: default_mouse_clutch_key(),
             broadcast_filter_mode: default_broadcast_filter_mode(),
@@ -581,6 +629,14 @@ mod tests {
 
         assert_eq!(config.mouse_clutch_key, "F13");
         assert_eq!(config.mouse_clutch_vk(), Ok(Some(0x7c)));
+        assert!(config.tell_visual_enabled);
+        assert!(config.tell_sound_enabled);
+        assert_eq!(config.tell_sound, "tell.wav");
+        assert!(config.notify_tells);
+        assert!(config.notify_group_invites);
+        assert!(config.notify_raid_invites);
+        assert!(config.notify_resurrections);
+        assert!(config.notify_deaths);
         assert!(config.trushar.enabled);
         assert_eq!(config.trushar.bind, "127.0.0.1:19720");
         assert_eq!(config.trushar.auth_token, None);

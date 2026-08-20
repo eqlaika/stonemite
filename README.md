@@ -89,7 +89,7 @@ Config lives at `%APPDATA%\Stonemite\config.toml`. See [config/example.toml](con
 
 ## Disclaimer
 
-Stonemite uses standard Windows DWM thumbnail APIs to display copies of game windows. Its DLL proxy intercepts DirectInput only to discover EQ log paths and expose immediate, user-initiated keyboard or Mouse Clutch input to the selected EQ clients. It does not intercept rendering, read or modify game memory, or inspect network traffic. It may passively observe EQ logs for UI telemetry, notifications, and display-only timers, but it cannot turn those observations into gameplay input or otherwise automate gameplay.
+Stonemite uses standard Windows DWM thumbnail APIs to display copies of game windows. Its DLL proxy intercepts DirectInput only to discover EQ log paths and expose immediate, user-initiated keyboard, notification-action, or Mouse Clutch input to selected EQ clients. It does not intercept rendering, read or modify game memory, or inspect network traffic. It may passively observe EQ logs for UI telemetry, notifications, and display-only timers, but log events never cause gameplay input without a separate, explicit user action.
 
 Stonemite is intentionally designed to minimize account risk by avoiding automation and other invasive techniques. The risk of account action is believed to be low when the app is used as intended, but Daybreak has final authority over its rules and enforcement. As with any third-party tool, use Stonemite at your own discretion.
 

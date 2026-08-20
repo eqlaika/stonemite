@@ -2,6 +2,9 @@ use std::cell::{Cell, UnsafeCell};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+mod notifications;
+
+use notifications::{EnabledKinds, Notification};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
@@ -25,7 +28,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::eq_windows::EqWindow;
-use crate::{character_cache, config, eq_characters, eq_windows, log_watcher, trusik_shm};
+use crate::{
+    character_cache, config, eq_characters, eq_chat_colors, eq_windows, log_watcher, sound,
+    trusik_shm,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -128,6 +134,7 @@ const TOAST_MAX_ALPHA: u8 = 220;
 const TOAST_BG_COLOR: u32 = 0x00403020;
 /// Timer ID for toast animation.
 const TIMER_TOAST_FADE: usize = 42;
+const WM_CLEAR_INVITE_CAPTURE: u32 = WM_USER + 44;
 /// Color key for toast layered window.
 const TOAST_COLOR_KEY: u32 = 0x00FF00FF;
 
@@ -267,6 +274,14 @@ struct OverlayState {
     trusik_identities: HashMap<u32, (String, String)>,
     /// Latest passive per-character state derived by the EQ log reducer.
     log_telemetry: HashMap<(String, String), log_watcher::CharacterTelemetry>,
+    /// Durable unread notification state keyed by EQ process, surviving PiP rebuilds.
+    notifications: HashMap<u32, Notification>,
+    tell_visual_enabled: bool,
+    tell_sound_enabled: bool,
+    tell_sound: String,
+    notification_kinds: EnabledKinds,
+    animations_enabled: bool,
+    chat_colors: eq_chat_colors::EqChatColorResolver,
     /// Persistent character knowledge (class, pets).
     character_cache: character_cache::CharacterCache,
 }
@@ -379,6 +394,17 @@ fn exchange_window_numbers(
 
 /// Exchange a PiP client with the active client while preserving the partition.
 /// Returns false when the target is already active or is not currently a PiP.
+fn focused_foreground_pid(
+    windows: &[EqWindow],
+    foreground: HWND,
+    mut has_keyboard_focus: impl FnMut(HWND) -> bool,
+) -> Option<u32> {
+    windows
+        .iter()
+        .find(|window| window.hwnd == foreground && has_keyboard_focus(window.hwnd))
+        .map(|window| window.pid)
+}
+
 fn exchange_active_with_pip(
     active_pid: &mut Option<u32>,
     pip_order: &mut Vec<u32>,
@@ -495,6 +521,29 @@ unsafe fn get_dpi_scale(hwnd: HWND) -> f64 {
 
 fn dpi(val: i32, scale: f64) -> i32 {
     (val as f64 * scale).round() as i32
+}
+
+unsafe fn client_animations_enabled() -> bool {
+    let mut enabled = windows::Win32::Foundation::BOOL(1);
+    SystemParametersInfoW(
+        SPI_GETCLIENTAREAANIMATION,
+        0,
+        Some((&mut enabled as *mut windows::Win32::Foundation::BOOL).cast()),
+        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+    )
+    .is_err()
+        || enabled.as_bool()
+}
+
+fn pip_label_overlay_size(
+    _s: &OverlayState,
+    pip_width: i32,
+    pip_height: i32,
+    border: i32,
+) -> (i32, i32) {
+    let inner_width = (pip_width - 2 * border).max(0);
+    let inner_height = (pip_height - 2 * border).max(0);
+    (inner_width, inner_height)
 }
 
 fn color_for_number(number: usize) -> u32 {
@@ -1052,6 +1101,19 @@ unsafe fn init_inner() -> HWND {
         trusik_enabled: cfg.trusik,
         trusik_identities: HashMap::new(),
         log_telemetry: HashMap::new(),
+        notifications: HashMap::new(),
+        tell_visual_enabled: cfg.tell_visual_enabled,
+        tell_sound_enabled: cfg.tell_sound_enabled,
+        tell_sound: sound::normalized_id(&cfg.tell_sound).to_owned(),
+        notification_kinds: EnabledKinds {
+            tells: cfg.notify_tells,
+            group_invites: cfg.notify_group_invites,
+            raid_invites: cfg.notify_raid_invites,
+            resurrections: cfg.notify_resurrections,
+            deaths: cfg.notify_deaths,
+        },
+        animations_enabled: client_animations_enabled(),
+        chat_colors: eq_chat_colors::EqChatColorResolver::new(cfg.eq_directory()),
         character_cache: character_cache::CharacterCache::load(),
     });
 
@@ -1097,13 +1159,9 @@ unsafe fn poll_inner_guarded() {
         // A foreground WinEvent can be suppressed while an overlay transaction
         // is guarded. Reconcile on every poll so that skipped callbacks cannot
         // leave the active/PiP partition stale indefinitely.
-        let foreground_pid = {
-            let foreground = GetForegroundWindow();
-            s.eq_windows
-                .iter()
-                .find(|window| window.hwnd == foreground && target_has_keyboard_focus(window.hwnd))
-                .map(|window| window.pid)
-        };
+        let foreground_pid = focused_foreground_pid(&s.eq_windows, GetForegroundWindow(), |hwnd| {
+            target_has_keyboard_focus(hwnd)
+        });
         let foreground_changed = foreground_pid.is_some_and(|pid| {
             let changed = exchange_active_with_pip(&mut s.active_pid, &mut s.pip_order, pid);
             if changed && config::Config::load().auto_order {
@@ -1111,6 +1169,7 @@ unsafe fn poll_inner_guarded() {
             }
             crate::broadcast::set_active_pid(pid);
             sync_mouse_eligibility(s);
+            acknowledge_notification(s, pid);
             changed
         });
         // Poll trusik shared memory for character names.
@@ -1157,6 +1216,7 @@ unsafe fn poll_inner_guarded() {
         }
         s.eq_windows.retain(|w| w.pid != *pid);
         s.trusik_identities.remove(pid);
+        s.notifications.remove(pid);
         s.pip_order.retain(|p| *p != *pid);
         if s.active_pid == Some(*pid) {
             s.active_pid = s.pip_order.first().copied();
@@ -1170,10 +1230,9 @@ unsafe fn poll_inner_guarded() {
     }
 
     let fg_hwnd = GetForegroundWindow();
-    let fg_pid = new_windows
-        .iter()
-        .find(|w| w.hwnd == fg_hwnd)
-        .map(|w| w.pid);
+    let fg_pid = focused_foreground_pid(&new_windows, fg_hwnd, |hwnd| {
+        target_has_keyboard_focus(hwnd)
+    });
 
     for pid in &added {
         let nw = new_windows.iter().find(|w| w.pid == *pid).unwrap();
@@ -1212,6 +1271,7 @@ unsafe fn poll_inner_guarded() {
         }
         crate::broadcast::set_active_pid(fg);
         sync_mouse_eligibility(s);
+        acknowledge_notification(s, fg);
     }
 
     s.pip_order.truncate(MAX_PIPS);
@@ -1338,6 +1398,9 @@ fn apply_log_batches(s: &mut OverlayState, batches: Vec<log_watcher::LogBatch>) 
             debug_log(&format!("eq_logs: {diagnostic}"));
         }
         for envelope in batch.envelopes {
+            for event in envelope.events.iter() {
+                notifications::apply_log_event(s, event);
+            }
             for change in envelope.telemetry_changes.iter() {
                 let server = change.character.server.as_ref();
                 let character = change.character.character.as_ref();
@@ -1376,6 +1439,10 @@ fn apply_log_batches(s: &mut OverlayState, batches: Vec<log_watcher::LogBatch>) 
     if class_changed {
         unsafe { rebuild_thumbnails(s) };
     }
+}
+
+fn acknowledge_notification(s: &mut OverlayState, pid: u32) -> bool {
+    s.notifications.remove(&pid).is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -1566,7 +1633,7 @@ unsafe fn rebuild_thumbnails_guarded(s: &mut OverlayState) {
         let ch = rect.bottom - rect.top;
 
         let hwnd = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             pip_class,
             w!("StonemitePip"),
             WS_POPUP,
@@ -1615,24 +1682,17 @@ unsafe fn rebuild_thumbnails_guarded(s: &mut OverlayState) {
 
         // Create layered label overlay window on top of the PiP.
         let label_text = format_label(eq_win);
-        let label_h = dpi(s.label_height, d);
-        let (lbl_w, _) = measure_pip_label_size(
-            hwnd,
-            s,
-            &label_text,
-            eq_win.class.as_deref(),
-            cw - 2 * border,
-        );
+        let (lbl_w, lbl_h) = pip_label_overlay_size(s, cw, ch, border);
         let pip_label_class = w!("StonemitePipLabelClass");
         let lbl_hwnd = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
             pip_label_class,
             w!("StonemitePipLabel"),
             WS_POPUP,
             rect.left + border,
             rect.top + border,
             lbl_w,
-            label_h,
+            lbl_h,
             None,
             None,
             None,
@@ -1641,7 +1701,12 @@ unsafe fn rebuild_thumbnails_guarded(s: &mut OverlayState) {
         .expect("Failed to create PiP label window");
         SetWindowLongPtrW(lbl_hwnd, GWLP_USERDATA, (i + 1) as isize);
         let key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
-        let _ = SetLayeredWindowAttributes(lbl_hwnd, key, s.label_alpha, LWA_ALPHA | LWA_COLORKEY);
+        let label_alpha = if s.notifications.contains_key(&pid) {
+            s.label_alpha.max(notifications::LABEL_MIN_ALPHA)
+        } else {
+            s.label_alpha
+        };
+        let _ = SetLayeredWindowAttributes(lbl_hwnd, key, label_alpha, LWA_ALPHA | LWA_COLORKEY);
 
         s.pip_windows.push(PipWindowEntry {
             hwnd,
@@ -1920,12 +1985,10 @@ unsafe extern "system" fn foreground_event_proc(
     };
 
     let fg = GetForegroundWindow();
-    if let Some(fg_pid) = s
-        .eq_windows
-        .iter()
-        .find(|window| window.hwnd == fg && target_has_keyboard_focus(window.hwnd))
-        .map(|window| window.pid)
+    if let Some(fg_pid) =
+        focused_foreground_pid(&s.eq_windows, fg, |hwnd| target_has_keyboard_focus(hwnd))
     {
+        acknowledge_notification(s, fg_pid);
         if exchange_active_with_pip(&mut s.active_pid, &mut s.pip_order, fg_pid) {
             if config::Config::load().auto_order {
                 apply_auto_order(s);
@@ -2273,7 +2336,13 @@ pub unsafe fn activate_pid(
     if s.active_pid == Some(target_pid) {
         let target_hwnd = target_window.hwnd;
         let _ = s;
-        return reassert_active_foreground(target_hwnd);
+        let result = reassert_active_foreground(target_hwnd);
+        if result.is_ok() {
+            if let Some(s) = state().as_mut() {
+                acknowledge_notification(s, target_pid);
+            }
+        }
+        return result;
     }
     let Some(pip_index) = s.pip_order.iter().position(|pid| *pid == target_pid) else {
         return Err(trushar::control::ControlError::new(
@@ -2383,6 +2452,7 @@ unsafe fn swap_to_guarded(
 
     crate::broadcast::set_active_pid(new_active_pid);
     sync_mouse_eligibility(s);
+    acknowledge_notification(s, new_active_pid);
     if config::Config::load().auto_order {
         apply_auto_order(s);
     }
@@ -2877,6 +2947,21 @@ unsafe fn paint_pip_window(hwnd: HWND, pip_idx: usize) {
         let _ = windows::Win32::Graphics::Gdi::DeleteObject(white_brush);
     }
 
+    // Notifications own the normal frame, while edit and reorder modes retain
+    // their stronger interaction indicators.
+    if !is_reorder_dragging && !s.edit_mode {
+        if let Some(notification) = s.notifications.get(&pw.pid) {
+            notifications::draw_border(
+                hdc,
+                client_rect,
+                border,
+                notification,
+                windows::Win32::System::SystemInformation::GetTickCount64(),
+                s.animations_enabled,
+            );
+        }
+    }
+
     // Edit mode border indicator.
     if s.edit_mode {
         let edit_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(EDIT_BORDER_COLOR));
@@ -3126,32 +3211,42 @@ unsafe fn paint_pip_label(hwnd: HWND) {
     let lh = s.label_height;
     let number = pw.number;
     let text = &pw.label;
+    let notification = s.notifications.get(&pw.pid);
+    let now_ms = windows::Win32::System::SystemInformation::GetTickCount64();
 
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
 
     let mut rc = RECT::default();
     let _ = GetClientRect(hwnd, &mut rc);
-    let label_h = rc.bottom - rc.top;
+    let label_h = dpi(lh, d).min(rc.bottom - rc.top).max(1);
+    let max_label_w = (rc.right - rc.left).max(1);
+    let (label_w, _) = measure_pip_label_size(hwnd, s, text, pw.class.as_deref(), max_label_w);
+    let label_rc = RECT {
+        left: rc.left,
+        top: rc.top,
+        right: rc.left + label_w,
+        bottom: rc.top + label_h,
+    };
 
-    // Fill with color key for transparent corners.
+    // The unused portion of this full-width overlay is color-key transparent.
     let key_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY));
     let _ = FillRect(hdc, &rc, key_brush);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(key_brush);
 
-    // Rounded background.
     let radius = dpi(8, d);
-    let bg_color = color_for_number(number);
-    let bg_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(bg_color));
+    let bg_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(color_for_number(
+        number,
+    )));
     let null_pen = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
     let old_pen = SelectObject(hdc, null_pen);
     let old_brush = SelectObject(hdc, bg_brush);
     let _ = RoundRect(
         hdc,
-        rc.left,
-        rc.top,
-        rc.right,
-        rc.bottom,
+        label_rc.left,
+        label_rc.top,
+        label_rc.right,
+        label_rc.bottom,
         radius * 2,
         radius * 2,
     );
@@ -3159,19 +3254,17 @@ unsafe fn paint_pip_label(hwnd: HWND) {
     let _ = SelectObject(hdc, old_pen);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(bg_brush);
-
     let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
 
-    // Number badge circle.
     let badge_diameter = label_h - dpi(6, d);
-    let badge_x = rc.left + dpi(4, d);
-    let badge_y = rc.top + (label_h - badge_diameter) / 2;
+    let badge_x = label_rc.left + dpi(4, d);
+    let badge_y = label_rc.top + (label_h - badge_diameter) / 2;
     let badge_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(
         badge_color_for_number(number),
     ));
     let null_pen2 = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
-    let op2 = SelectObject(hdc, null_pen2);
-    let ob2 = SelectObject(hdc, badge_brush);
+    let old_pen2 = SelectObject(hdc, null_pen2);
+    let old_brush2 = SelectObject(hdc, badge_brush);
     let _ = Ellipse(
         hdc,
         badge_x,
@@ -3179,12 +3272,11 @@ unsafe fn paint_pip_label(hwnd: HWND) {
         badge_x + badge_diameter,
         badge_y + badge_diameter,
     );
-    let _ = SelectObject(hdc, ob2);
-    let _ = SelectObject(hdc, op2);
+    let _ = SelectObject(hdc, old_brush2);
+    let _ = SelectObject(hdc, old_pen2);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen2);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_brush);
 
-    // Number text in badge.
     let badge_font = CreateFontW(
         dpi(lh - 14, d),
         0,
@@ -3208,8 +3300,7 @@ unsafe fn paint_pip_label(hwnd: HWND) {
         right: badge_x + badge_diameter,
         bottom: badge_y + badge_diameter,
     };
-    let num_str = format!("{number}");
-    let mut num_wide: Vec<u16> = num_str.encode_utf16().collect();
+    let mut num_wide: Vec<u16> = number.to_string().encode_utf16().collect();
     let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
     let _ = DrawTextW(
         hdc,
@@ -3220,17 +3311,14 @@ unsafe fn paint_pip_label(hwnd: HWND) {
     let _ = SelectObject(hdc, old_font);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_font);
 
-    // Class icon badge (same size as number badge).
     let mut after_badges = badge_x + badge_diameter + dpi(6, d);
     if let Some(cls) = &pw.class {
         let icon_x = after_badges;
         let icon_y = badge_y;
-        let icon_size = badge_diameter;
-        crate::class_icons::draw_class_icon(hdc, cls, icon_x, icon_y, icon_size);
-        after_badges = icon_x + icon_size + dpi(6, d);
+        crate::class_icons::draw_class_icon(hdc, cls, icon_x, icon_y, badge_diameter);
+        after_badges = icon_x + badge_diameter + dpi(6, d);
     }
 
-    // Character name with shadow.
     let name_font = CreateFontW(
         dpi(lh - 12, d),
         0,
@@ -3248,16 +3336,13 @@ unsafe fn paint_pip_label(hwnd: HWND) {
         w!("Segoe UI"),
     );
     let old_font2 = SelectObject(hdc, name_font);
-    let text_left = after_badges;
     let mut wide: Vec<u16> = text.encode_utf16().collect();
-
     if !wide.is_empty() {
-        // Shadow.
         let mut shadow_rc = RECT {
-            left: text_left + dpi(1, d),
-            top: rc.top + dpi(1, d),
-            right: rc.right,
-            bottom: rc.bottom,
+            left: after_badges + dpi(1, d),
+            top: label_rc.top + dpi(1, d),
+            right: label_rc.right,
+            bottom: label_rc.bottom,
         };
         let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000000));
         let _ = DrawTextW(
@@ -3266,13 +3351,11 @@ unsafe fn paint_pip_label(hwnd: HWND) {
             &mut shadow_rc,
             DT_LEFT | DT_SINGLELINE | DT_VCENTER,
         );
-
-        // Main text (white).
         let mut text_rc = RECT {
-            left: text_left,
-            top: rc.top,
-            right: rc.right,
-            bottom: rc.bottom,
+            left: after_badges,
+            top: label_rc.top,
+            right: label_rc.right,
+            bottom: label_rc.bottom,
         };
         let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
         let _ = DrawTextW(
@@ -3282,9 +3365,22 @@ unsafe fn paint_pip_label(hwnd: HWND) {
             DT_LEFT | DT_SINGLELINE | DT_VCENTER,
         );
     }
-
     let _ = SelectObject(hdc, old_font2);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(name_font);
+
+    if let Some(notification) = notification {
+        let unread_bottom =
+            notifications::draw_unread_dots(hdc, rc, label_rc.bottom, d, notification);
+        if notification.preview_visible(now_ms) {
+            notifications::draw_preview(
+                hdc,
+                notifications::preview_bounds(rc, unread_bottom, d, notification),
+                d,
+                notification,
+            );
+        }
+    }
+
     let _ = EndPaint(hwnd, &ps);
 }
 
@@ -3298,6 +3394,7 @@ unsafe extern "system" fn pip_label_wnd_proc(
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
     match msg {
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_PAINT => {
             paint_pip_label(hwnd);
             LRESULT(0)
@@ -3712,6 +3809,18 @@ unsafe extern "system" fn pip_wnd_proc(
     let pip_idx = raw_idx - 1;
 
     match msg {
+        WM_MOUSEACTIVATE => {
+            if let Some(s) = state().as_ref() {
+                let mut point = POINT::default();
+                let _ = GetCursorPos(&mut point);
+                let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut point);
+                if notifications::has_invite_preview_at(s, pip_idx, point) {
+                    return LRESULT(MA_NOACTIVATE as isize);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+
         WM_SETCURSOR => {
             if (lparam.0 & 0xFFFF) as u32 == 1
             /* HTCLIENT */
@@ -3739,7 +3848,13 @@ unsafe extern "system" fn pip_wnd_proc(
                         let cursor = LoadCursorW(None, IDC_SIZEALL).unwrap_or_default();
                         SetCursor(cursor);
                         return LRESULT(1);
-                    } else if !s.has_custom_positions {
+                    }
+                    if notifications::has_invite_action_at(s, pip_idx, client_pt) {
+                        let cursor = LoadCursorW(None, IDC_HAND).unwrap_or_default();
+                        SetCursor(cursor);
+                        return LRESULT(1);
+                    }
+                    if !s.has_custom_positions {
                         // Strip resize cursor on interior edge.
                         let handle_w = dpi(RESIZE_HANDLE_WIDTH, s.dpi_scale);
                         if strip_resize_hit_test(
@@ -3888,22 +4003,15 @@ unsafe extern "system" fn pip_wnd_proc(
                         };
                         let _ = DwmUpdateThumbnailProperties(pw.thumb, &props);
                         let _ = InvalidateRect(pw.hwnd, None, true);
-                        // Reposition label overlay.
-                        let max_lbl_w = nw - 2 * border;
-                        let (lw, _) = measure_pip_label_size(
-                            pw.label_hwnd,
-                            s,
-                            &pw.label,
-                            pw.class.as_deref(),
-                            max_lbl_w,
-                        );
+                        // Reposition the full-width label and Tell overlay.
+                        let (lw, lh) = pip_label_overlay_size(s, nw, nh, border);
                         let _ = SetWindowPos(
                             pw.label_hwnd,
                             HWND_TOPMOST,
                             new_rect.left + border,
                             new_rect.top + border,
                             lw,
-                            dpi(s.label_height, d),
+                            lh,
                             SWP_NOACTIVATE,
                         );
                         let _ = InvalidateRect(pw.label_hwnd, None, true);
@@ -3984,22 +4092,15 @@ unsafe extern "system" fn pip_wnd_proc(
                             };
                             let _ = DwmUpdateThumbnailProperties(pw.thumb, &props);
                             let _ = InvalidateRect(pw.hwnd, None, true);
-                            // Reposition label overlay.
-                            let max_lbl_w = cw - 2 * border;
-                            let (lw, _) = measure_pip_label_size(
-                                pw.label_hwnd,
-                                s,
-                                &pw.label,
-                                pw.class.as_deref(),
-                                max_lbl_w,
-                            );
+                            // Reposition the full-width label and Tell overlay.
+                            let (lw, lh) = pip_label_overlay_size(s, cw, ch, border);
                             let _ = SetWindowPos(
                                 pw.label_hwnd,
                                 HWND_TOPMOST,
                                 rect.left + border,
                                 rect.top + border,
                                 lw,
-                                dpi(s.label_height, d),
+                                lh,
                                 SWP_NOACTIVATE,
                             );
                             let _ = InvalidateRect(pw.label_hwnd, None, true);
@@ -4070,7 +4171,12 @@ unsafe extern "system" fn pip_wnd_proc(
                 return LRESULT(0);
             }
 
-            // --- Use mode: hover ---
+            // --- Use mode: notification action and PiP hover ---
+            let point = POINT {
+                x: (lparam.0 & 0xFFFF) as i16 as i32,
+                y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+            };
+            notifications::update_invite_hover(s, pip_idx, point);
             if let Some(pw) = s.pip_windows.get_mut(pip_idx) {
                 if !pw.hovered {
                     pw.hovered = true;
@@ -4099,7 +4205,8 @@ unsafe extern "system" fn pip_wnd_proc(
                 return DefWindowProcW(hwnd, msg, wparam, lparam);
             };
 
-            // Clear hover.
+            // Clear notification and PiP hover.
+            notifications::clear_invite_interaction(s, pip_idx);
             if let Some(pw) = s.pip_windows.get_mut(pip_idx) {
                 if pw.hovered {
                     pw.hovered = false;
@@ -4122,6 +4229,36 @@ unsafe extern "system" fn pip_wnd_proc(
             LRESULT(0)
         }
 
+        WM_CANCELMODE => {
+            let had_invite_press = state()
+                .as_ref()
+                .is_some_and(|s| notifications::invite_action_pressed(s, pip_idx));
+            if had_invite_press {
+                if let Some(s) = state().as_mut() {
+                    notifications::clear_invite_interaction(s, pip_idx);
+                }
+                let _ = ReleaseCapture();
+                LRESULT(0)
+            } else {
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+        }
+
+        WM_CAPTURECHANGED => {
+            // Capture APIs can send this message synchronously while another
+            // branch still owns `&mut OverlayState`. Defer state access until
+            // the outer window-procedure invocation has returned.
+            let _ = PostMessageW(hwnd, WM_CLEAR_INVITE_CAPTURE, WPARAM(0), LPARAM(0));
+            LRESULT(0)
+        }
+
+        WM_CLEAR_INVITE_CAPTURE => {
+            if let Some(s) = state().as_mut() {
+                notifications::clear_invite_interaction(s, pip_idx);
+            }
+            LRESULT(0)
+        }
+
         WM_LBUTTONDOWN => {
             let Some(s) = state().as_mut() else {
                 return DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -4130,6 +4267,13 @@ unsafe extern "system" fn pip_wnd_proc(
                 x: (lparam.0 & 0xFFFF) as i16 as i32,
                 y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
             };
+
+            if !s.edit_mode && notifications::press_invite_action(s, pip_idx, pt) {
+                s.reorder_drag = None;
+                s.drop_target = None;
+                let _ = SetCapture(hwnd);
+                return LRESULT(0);
+            }
 
             if s.edit_mode {
                 let mut cr = RECT::default();
@@ -4203,6 +4347,24 @@ unsafe extern "system" fn pip_wnd_proc(
             let Some(s) = state().as_mut() else {
                 return DefWindowProcW(hwnd, msg, wparam, lparam);
             };
+
+            if !s.edit_mode {
+                let point = POINT {
+                    x: (lparam.0 & 0xFFFF) as i16 as i32,
+                    y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+                };
+                let had_invite_press = notifications::invite_action_pressed(s, pip_idx);
+                let invite_action = notifications::release_invite_action(s, pip_idx, point);
+                if had_invite_press {
+                    s.reorder_drag = None;
+                    s.drop_target = None;
+                    let _ = ReleaseCapture();
+                    if let Some((pid, action)) = invite_action {
+                        notifications::execute_invite_action(s, pid, action);
+                    }
+                    return LRESULT(0);
+                }
+            }
             let _ = ReleaseCapture();
 
             // --- Edit mode: finalize move/resize ---
@@ -4360,6 +4522,53 @@ unsafe extern "system" fn pip_wnd_proc(
 // Label window proc
 // ---------------------------------------------------------------------------
 
+unsafe fn invalidate_pip_border(hwnd: HWND, border: i32) {
+    let mut client = RECT::default();
+    if GetClientRect(hwnd, &mut client).is_err() || border <= 0 {
+        return;
+    }
+    let border = border
+        .min((client.right - client.left) / 2)
+        .min((client.bottom - client.top) / 2);
+    let regions = [
+        RECT {
+            left: client.left,
+            top: client.top,
+            right: client.right,
+            bottom: client.top + border,
+        },
+        RECT {
+            left: client.left,
+            top: client.bottom - border,
+            right: client.right,
+            bottom: client.bottom,
+        },
+        RECT {
+            left: client.left,
+            top: client.top + border,
+            right: client.left + border,
+            bottom: client.bottom - border,
+        },
+        RECT {
+            left: client.right - border,
+            top: client.top + border,
+            right: client.right,
+            bottom: client.bottom - border,
+        },
+    ];
+    for region in regions {
+        let _ = InvalidateRect(hwnd, Some(&region), false);
+    }
+}
+
+unsafe fn tick_notification_animation(timer_hwnd: HWND) {
+    let Some(s) = state().as_mut() else {
+        let _ = KillTimer(timer_hwnd, notifications::TIMER_ID);
+        return;
+    };
+    notifications::tick(s, timer_hwnd);
+}
+
 unsafe extern "system" fn label_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -4370,6 +4579,10 @@ unsafe extern "system" fn label_wnd_proc(
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
     match msg {
+        WM_TIMER if wparam.0 == notifications::TIMER_ID => {
+            tick_notification_animation(hwnd);
+            LRESULT(0)
+        }
         WM_SETCURSOR => {
             let cursor = LoadCursorW(None, IDC_ARROW).unwrap_or_default();
             SetCursor(cursor);
@@ -4537,6 +4750,25 @@ pub fn force_rebuild() {
         } else if s.hide_from_alt_tab {
             apply_alt_tab_hiding(s);
         }
+        // Reload notification config and the EQ profile resolver.
+        s.tell_visual_enabled = cfg.tell_visual_enabled;
+        s.tell_sound_enabled = cfg.tell_sound_enabled;
+        s.tell_sound = sound::normalized_id(&cfg.tell_sound).to_owned();
+        let notification_kinds = EnabledKinds {
+            tells: cfg.notify_tells,
+            group_invites: cfg.notify_group_invites,
+            raid_invites: cfg.notify_raid_invites,
+            resurrections: cfg.notify_resurrections,
+            deaths: cfg.notify_deaths,
+        };
+        let notification_selection_changed = s.notification_kinds != notification_kinds;
+        s.notification_kinds = notification_kinds;
+        s.animations_enabled = client_animations_enabled();
+        s.chat_colors.set_eq_dir(cfg.eq_directory());
+        if !s.tell_visual_enabled || notification_selection_changed {
+            s.notifications.clear();
+            let _ = KillTimer(s.active_label_hwnd, notifications::TIMER_ID);
+        }
         // Reload toast config.
         s.toast.enabled = cfg.toast_enabled;
         s.toast.height = cfg
@@ -4568,6 +4800,7 @@ pub fn cleanup() {
                 let _ = DestroyWindow(pw.label_hwnd);
                 let _ = DestroyWindow(pw.hwnd);
             }
+            let _ = KillTimer(s.active_label_hwnd, notifications::TIMER_ID);
             let _ = DestroyWindow(s.active_label_hwnd);
             let _ = DestroyWindow(s.broadcast_label_hwnd);
             let _ = KillTimer(s.toast.hwnd, TIMER_TOAST_FADE);
@@ -4609,6 +4842,21 @@ mod tests {
         );
         assert_eq!(exchange_window_numbers(&mut windows, 20, 20), Some((2, 2)));
         assert!(exchange_window_numbers(&mut windows, 10, 99).is_none());
+    }
+
+    #[test]
+    fn foreground_pid_requires_confirmed_keyboard_focus_during_client_set_changes() {
+        let hwnd = HWND(42usize as *mut _);
+        let mut candidate = window(42);
+        candidate.hwnd = hwnd;
+        let windows = vec![candidate];
+
+        assert_eq!(focused_foreground_pid(&windows, hwnd, |_| false), None);
+        assert_eq!(focused_foreground_pid(&windows, hwnd, |_| true), Some(42));
+        assert_eq!(
+            focused_foreground_pid(&windows, HWND(99usize as *mut _), |_| true),
+            None
+        );
     }
 
     #[test]

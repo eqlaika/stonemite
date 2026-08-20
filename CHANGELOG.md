@@ -4,6 +4,9 @@
 
 ### Added
 
+- Added built-in box notifications for incoming tells, group and raid invitations, resurrection offers, and character deaths, with per-box PiP border animation, brief previews, persistent per-event unread dots, per-event toggles, and selectable bundled EQ audio-trigger sounds
+- Added user-initiated **Accept** and **Dismiss** controls to eligible group-invite previews; Accept sends the receiving box's effective Invite/Follow binding without activating it, joined/declined log events clear pending invitations, and unavailable input or an unbound action falls back to the ordinary notification
+- Added generic parsing and profile-aware resolution for arbitrary EQ `[TextColors]` `User_N` RGB values, used by Tell, group, and raid notifications
 - Added a configurable Mouse Clutch, bound to F13 by default, that hold-broadcasts physical mouse movement, buttons, and wheel input from the active EQ client to ready background clients with matching window geometry and DPI
 - Added F13–F24 and keyboard-emulating foot-pedal support, live Mouse Clutch status in the overlay and tray, and fail-safe release when focus, clients, settings, or the controlling Stonemite process change
 - Added the **Stonemite · EQ boxing** Stream Deck plugin for Stream Deck Desktop 7.4+ on macOS 12+ or Windows 10+, with a live six-client roster, character and class identity, input-readiness indicators, exact-client activation, authoritative broadcast state, automatic reconnection, and visible command errors
@@ -23,7 +26,7 @@
 - Kept Stream Deck gameplay controls one-to-one with mapped EQ actions; grouping, following, assisting, and other multi-step behavior now belongs in user-authored in-game socials
 - Improved Stream Deck feedback with prominent active-client styling, immediate authoritative state after successful actions, 15px minimum text, a stable Bcast label, distinct action colors, filled running and armed states, and bounded icon animations
 - Allowed targeted input sequences to run concurrently across independent EQ clients while still rejecting overlapping sequences for the same client
-- Rebuilt EQ log ingestion around filesystem notifications and a background worker, with periodic reconciliation and reliable handling of partial writes, truncation, recreation, removed sources, malformed records, and notification loss
+- Rebuilt EQ log ingestion around filesystem notifications and a background worker, with 500 ms fallback reconciliation and reliable handling of partial writes, truncation, recreation, removed sources, malformed records, and notification loss
 - Updated the Stonemite/trusik shared-memory input ABI for independent keyboard and mouse activation; Mouse Clutch requires the matching proxy and an EQ restart after upgrading
 - Clarified and documented the project's policy against unattended gameplay automation while permitting only passive log-driven UI telemetry, notifications, and display-only timers
 

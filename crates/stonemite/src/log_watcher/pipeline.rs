@@ -114,6 +114,80 @@ mod tests {
     }
 
     #[test]
+    fn incoming_tell_keeps_source_attribution_and_structured_content() {
+        let (sender, _) = broadcast::channel(8);
+        let mut pipeline = LogPipeline::new(sender);
+        let envelope = pipeline
+            .process(raw("Laika tells you, 'I'm busy right now.'"))
+            .envelope;
+
+        assert_eq!(envelope.raw.source.id.as_str(), "client-1");
+        assert!(matches!(
+            &envelope.events[0].event,
+            eqlog::LogEvent::Chat(eqlog::ChatEvent::IncomingTell(tell))
+                if tell.sender.as_ref() == "Laika" && tell.message.as_ref() == "I'm busy right now."
+        ));
+        assert!(envelope.telemetry_changes.is_empty());
+    }
+
+    #[test]
+    fn invitation_and_resurrection_notifications_keep_source_attribution() {
+        let (sender, _) = broadcast::channel(8);
+        let mut pipeline = LogPipeline::new(sender);
+
+        let group = pipeline
+            .process(raw("Laika invites you to join a group."))
+            .envelope;
+        assert_eq!(group.raw.source.id.as_str(), "client-1");
+        assert!(matches!(
+            &group.events[0].event,
+            eqlog::LogEvent::Notification(eqlog::NotificationEvent::GroupInvite { inviter })
+                if inviter.as_ref() == "Laika"
+        ));
+
+        let accepted = pipeline.process(raw("You have joined the group.")).envelope;
+        assert!(matches!(
+            &accepted.events[0].event,
+            eqlog::LogEvent::Notification(eqlog::NotificationEvent::GroupInviteAccepted)
+        ));
+
+        let declined = pipeline
+            .process(raw("You cancel the invitation to join Laika's group."))
+            .envelope;
+        assert!(matches!(
+            &declined.events[0].event,
+            eqlog::LogEvent::Notification(
+                eqlog::NotificationEvent::GroupInviteDeclined { inviter }
+            ) if inviter.as_ref() == "Laika"
+        ));
+
+        let resurrection = pipeline
+            .process(raw("You have been offered a resurrection."))
+            .envelope;
+        assert!(matches!(
+            &resurrection.events[0].event,
+            eqlog::LogEvent::Notification(eqlog::NotificationEvent::ResurrectionOffered)
+        ));
+    }
+
+    #[test]
+    fn death_notifies_and_updates_persistent_character_state() {
+        let (sender, _) = broadcast::channel(8);
+        let mut pipeline = LogPipeline::new(sender);
+        let envelope = pipeline
+            .process(raw("You have been slain by a War Swarm invader!"))
+            .envelope;
+
+        assert!(envelope.events.iter().any(|event| matches!(
+            &event.event,
+            eqlog::LogEvent::Notification(eqlog::NotificationEvent::CharacterSlain { killer })
+                if killer.as_ref() == "a War Swarm invader"
+        )));
+        assert_eq!(envelope.telemetry_changes.len(), 1);
+        assert!(envelope.telemetry_changes[0].telemetry.dead);
+    }
+
+    #[test]
     fn event_ordering_is_monotonic_for_one_source() {
         let (sender, _) = broadcast::channel(8);
         let mut pipeline = LogPipeline::new(sender);

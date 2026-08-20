@@ -27,9 +27,9 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_USER};
 pub use diagnostic::{DiagnosticKind, LogDiagnostic};
 #[allow(unused_imports)]
 pub use eqlog::{
-    CharacterEvent, CharacterKey, CharacterTelemetry, DecodedRawLogLine, EqTimestamp,
-    IdentityEvent, LogEvent, LogEventDomain, LogSource, LogSourceId, ParsedLogEvent, PetEvent,
-    RawLogLine, TelemetryChange, WhoResult,
+    CharacterEvent, CharacterKey, CharacterTelemetry, ChatEvent, DecodedRawLogLine, EqTimestamp,
+    IdentityEvent, IncomingTell, LogEvent, LogEventDomain, LogSource, LogSourceId,
+    NotificationEvent, ParsedLogEvent, PetEvent, RawLogLine, TelemetryChange, WhoResult,
 };
 pub use pipeline::LogEnvelope;
 #[allow(unused_imports)]
@@ -44,7 +44,10 @@ use watcher::DirectoryWatcher;
 
 pub const WM_LOG_READY: u32 = WM_USER + 21;
 
-const RECONCILIATION_INTERVAL: Duration = Duration::from_secs(5);
+// Native filesystem notifications remain the primary low-latency path. Keep
+// the bounded metadata/offset fallback short enough that a coalesced or early
+// write notification cannot make one box visibly lag the others.
+const RECONCILIATION_INTERVAL: Duration = Duration::from_millis(500);
 const BACKPRESSURE_RETRY: Duration = Duration::from_millis(10);
 const OUTPUT_QUEUE_CAPACITY: usize = 32;
 const EVENT_BUS_CAPACITY: usize = 512;
@@ -605,8 +608,8 @@ mod tests {
         );
 
         // Source replacement and watcher setup happen on the worker. This is
-        // setup synchronization only; the assertion deadline remains well
-        // below the five-second reconciliation interval.
+        // setup synchronization only; delivery must still be attributed to a
+        // native wake rather than the periodic reconciliation fallback.
         std::thread::sleep(Duration::from_millis(250));
         let mut file = OpenOptions::new().append(true).open(&path).unwrap();
         writeln!(file, "[now] native notify").unwrap();
@@ -624,6 +627,13 @@ mod tests {
                         && envelope.raw.source.id.as_str() == "client-1"
                 })
             {
+                assert!(
+                    !batches
+                        .iter()
+                        .flat_map(|batch| &batch.diagnostics)
+                        .any(|diagnostic| diagnostic.kind == DiagnosticKind::Reconciliation),
+                    "native test record was recovered only by reconciliation"
+                );
                 break;
             }
             assert!(

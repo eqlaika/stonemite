@@ -107,6 +107,12 @@ const MAX_SWAP_HOTKEYS: usize = 6;
 const TIMER_POLL_EQ: usize = 1;
 /// Timer ID for Mouse Clutch lifecycle/focus/drain checks.
 const TIMER_MOUSE_CLUTCH: usize = 2;
+const _: () = assert!(
+    TIMER_POLL_EQ != TIMER_MOUSE_CLUTCH
+        && TIMER_POLL_EQ != control::TIMER_CONTROL_INPUT
+        && TIMER_MOUSE_CLUTCH != control::TIMER_CONTROL_INPUT,
+    "tray-window timer IDs must be unique",
+);
 /// Poll interval in milliseconds (2 seconds).
 const POLL_INTERVAL_MS: u32 = 2000;
 /// Keep lifecycle checks below the measured 28–30 ms background mouse poll.

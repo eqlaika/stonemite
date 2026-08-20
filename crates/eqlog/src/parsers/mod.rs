@@ -1,10 +1,22 @@
+mod chat;
 mod identity;
+mod notifications;
 mod pets;
 
 use std::error::Error;
 use std::fmt;
 
 use crate::{LogEvent, LogSource, ParsedLogEvent, RawLogLine};
+
+fn valid_player_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.split('.').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+}
 
 /// Ordered collection of coherent EQ parsing domains.
 ///
@@ -18,7 +30,9 @@ pub struct ParserRegistry {
 impl Default for ParserRegistry {
     fn default() -> Self {
         let mut registry = Self::empty();
+        registry.register(chat::ChatParser);
         registry.register(identity::IdentityParser::default());
+        registry.register(notifications::NotificationParser);
         registry.register(pets::PetParser);
         registry
     }

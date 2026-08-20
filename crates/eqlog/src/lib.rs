@@ -12,7 +12,8 @@ mod raw;
 mod telemetry;
 
 pub use event::{
-    CharacterEvent, IdentityEvent, LogEvent, LogEventDomain, ParsedLogEvent, PetEvent, WhoResult,
+    CharacterEvent, ChatEvent, IdentityEvent, IncomingTell, LogEvent, LogEventDomain,
+    NotificationEvent, ParsedLogEvent, PetEvent, WhoResult,
 };
 pub use parsers::{DomainParser, ParseOutcome, ParserError, ParserFailure, ParserRegistry};
 pub use raw::{DecodedRawLogLine, EqTimestamp, LogSource, LogSourceId, RawLogLine};

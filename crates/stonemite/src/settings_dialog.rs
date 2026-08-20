@@ -125,6 +125,7 @@ enum Tab {
     General,
     Accounts,
     PiP,
+    Notifications,
     Hotkeys,
     Broadcasting,
     About,
@@ -223,6 +224,14 @@ struct SettingsApp {
     label_opacity: u32,
     auto_order: bool,
     hide_from_alt_tab: bool,
+    tell_visual_enabled: bool,
+    tell_sound_enabled: bool,
+    tell_sound: String,
+    notify_tells: bool,
+    notify_group_invites: bool,
+    notify_raid_invites: bool,
+    notify_resurrections: bool,
+    notify_deaths: bool,
     toast_enabled: bool,
     toast_height: u32,
     toast_duration_tenths: u32,
@@ -301,6 +310,14 @@ impl SettingsApp {
             label_opacity: cfg.pip_label_opacity.unwrap_or(80),
             auto_order: cfg.auto_order,
             hide_from_alt_tab: cfg.hide_from_alt_tab,
+            tell_visual_enabled: cfg.tell_visual_enabled,
+            tell_sound_enabled: cfg.tell_sound_enabled,
+            tell_sound: crate::sound::normalized_id(&cfg.tell_sound).to_owned(),
+            notify_tells: cfg.notify_tells,
+            notify_group_invites: cfg.notify_group_invites,
+            notify_raid_invites: cfg.notify_raid_invites,
+            notify_resurrections: cfg.notify_resurrections,
+            notify_deaths: cfg.notify_deaths,
             toast_enabled: cfg.toast_enabled,
             toast_height: cfg.toast_height.unwrap_or(64),
             toast_duration_tenths: cfg
@@ -374,6 +391,7 @@ impl eframe::App for SettingsApp {
                 ui.selectable_value(&mut self.tab, Tab::General, "General");
                 ui.selectable_value(&mut self.tab, Tab::Accounts, "Accounts");
                 ui.selectable_value(&mut self.tab, Tab::PiP, "PiP");
+                ui.selectable_value(&mut self.tab, Tab::Notifications, "Notifications");
                 ui.selectable_value(&mut self.tab, Tab::Hotkeys, "Hotkeys");
                 ui.selectable_value(&mut self.tab, Tab::Broadcasting, "Broadcasting");
                 ui.selectable_value(&mut self.tab, Tab::About, "About");
@@ -407,6 +425,7 @@ impl eframe::App for SettingsApp {
             Tab::General => self.general_tab(ui),
             Tab::Accounts => self.accounts_tab(ui),
             Tab::PiP => self.pip_tab(ui),
+            Tab::Notifications => self.notifications_tab(ui),
             Tab::Hotkeys => self.hotkeys_tab(ui),
             Tab::Broadcasting => self.broadcasting_tab(ui),
             Tab::About => self.about_tab(ui),
@@ -684,6 +703,60 @@ impl SettingsApp {
                     self.hide_hotkey = combo;
                 }
             });
+        });
+    }
+
+    fn notifications_tab(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+
+        section(ui, "Box notifications", |ui| {
+            ui.checkbox(
+                &mut self.tell_visual_enabled,
+                "Highlight the background PiP",
+            );
+            ui.label(
+                "Shows the latest event briefly, then leaves its border and one dot per unread event until that box is activated.",
+            );
+
+            ui.add_space(6.0);
+            ui.label("Notify for:");
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut self.notify_tells, "Tells");
+                ui.checkbox(&mut self.notify_group_invites, "Group invites");
+                ui.checkbox(&mut self.notify_raid_invites, "Raid invites");
+                ui.checkbox(&mut self.notify_resurrections, "Resurrection offers");
+                ui.checkbox(&mut self.notify_deaths, "Character deaths");
+            });
+            ui.colored_label(
+                ui.visuals().weak_text_color(),
+                "Chat events use the character's configured EQ color. Resurrection and death use Stonemite status colors.",
+            );
+
+            ui.add_space(6.0);
+            ui.checkbox(&mut self.tell_sound_enabled, "Play a sound");
+            ui.add_enabled_ui(self.tell_sound_enabled, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Sound:");
+                    egui::ComboBox::from_id_salt("notification_sound")
+                        .selected_text(crate::sound::label(&self.tell_sound))
+                        .show_ui(ui, |ui| {
+                            for sound in crate::sound::BUILTIN_SOUNDS {
+                                ui.selectable_value(
+                                    &mut self.tell_sound,
+                                    sound.id.to_owned(),
+                                    sound.label,
+                                );
+                            }
+                        });
+                    if ui.button("Preview").clicked() {
+                        let _ = crate::sound::play(&self.tell_sound);
+                    }
+                });
+            });
+            ui.colored_label(
+                ui.visuals().weak_text_color(),
+                "Sounds use EverQuest's bundled default audio-trigger files. The active box plays sound only.",
+            );
         });
     }
 
@@ -985,6 +1058,14 @@ impl SettingsApp {
             trusik: existing.trusik,
             swap_hotkeys: self.swap_hotkeys.to_vec(),
             settings_position: self.last_position,
+            tell_visual_enabled: self.tell_visual_enabled,
+            tell_sound_enabled: self.tell_sound_enabled,
+            tell_sound: crate::sound::normalized_id(&self.tell_sound).to_owned(),
+            notify_tells: self.notify_tells,
+            notify_group_invites: self.notify_group_invites,
+            notify_raid_invites: self.notify_raid_invites,
+            notify_resurrections: self.notify_resurrections,
+            notify_deaths: self.notify_deaths,
             broadcast_hotkey: self.broadcast_hotkey.clone(),
             mouse_clutch_key: self.mouse_clutch_key.clone(),
             broadcast_filter_mode: FILTER_MODE_OPTIONS[self.filter_mode_index].1.to_string(),

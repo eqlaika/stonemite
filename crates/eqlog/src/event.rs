@@ -7,6 +7,8 @@ pub enum LogEventDomain {
     Identity,
     Pets,
     Character,
+    Chat,
+    Notification,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,6 +24,8 @@ pub enum LogEvent {
     Identity(IdentityEvent),
     Pet(PetEvent),
     Character(CharacterEvent),
+    Chat(ChatEvent),
+    Notification(NotificationEvent),
 }
 
 impl LogEvent {
@@ -30,6 +34,8 @@ impl LogEvent {
             Self::Identity(_) => LogEventDomain::Identity,
             Self::Pet(_) => LogEventDomain::Pets,
             Self::Character(_) => LogEventDomain::Character,
+            Self::Chat(_) => LogEventDomain::Chat,
+            Self::Notification(_) => LogEventDomain::Notification,
         }
     }
 }
@@ -58,6 +64,27 @@ pub struct WhoResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PetEvent {
     OwnershipClaimed { pet: Arc<str>, owner: Arc<str> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChatEvent {
+    IncomingTell(IncomingTell),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IncomingTell {
+    pub sender: Arc<str>,
+    pub message: Arc<str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NotificationEvent {
+    GroupInvite { inviter: Arc<str> },
+    GroupInviteAccepted,
+    GroupInviteDeclined { inviter: Arc<str> },
+    RaidInvite { inviter: Arc<str> },
+    ResurrectionOffered,
+    CharacterSlain { killer: Arc<str> },
 }
 
 /// Persistent-character facts have their own domain rather than being mixed

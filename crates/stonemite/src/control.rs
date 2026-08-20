@@ -18,7 +18,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW, VkKeyScanW, MA
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, PostMessageW, SetTimer, WM_USER};
 
 pub const WM_CONTROL_COMMAND: u32 = WM_USER + 20;
-pub const TIMER_CONTROL_INPUT: usize = 2;
+pub const TIMER_CONTROL_INPUT: usize = 3;
 const COMMAND_CAPACITY: usize = 32;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const INPUT_TIMEOUT: Duration = Duration::from_secs(45);
@@ -91,6 +91,7 @@ enum ActiveInputKind {
 enum InputCompletion {
     Single(oneshot::Sender<Result<CommandOutcome, ControlError>>),
     Batch(u64),
+    Local { failure_message: &'static str },
 }
 
 struct ActiveInput {
@@ -545,6 +546,93 @@ pub fn set_broadcast_on_ui(
 
 pub fn toggle_broadcast_on_ui(show_notification: bool) {
     let _ = set_broadcast_on_ui(!crate::broadcast::is_active(), show_notification);
+}
+
+fn resolve_local_eq_action(pid: u32, action: &EqAction) -> Result<ResolvedStroke, ControlError> {
+    action.validate()?;
+    if !crate::broadcast::is_available() {
+        return Err(ControlError::new(
+            ErrorCode::InputUnavailable,
+            "targeted input is unavailable because trusik is disabled",
+        ));
+    }
+    if !crate::broadcast::is_target_ready(pid) {
+        return Err(ControlError::new(
+            ErrorCode::InputUnavailable,
+            "targeted input is unavailable for this EQ client",
+        ));
+    }
+    let Some(state) = ui().as_mut() else {
+        return Err(ControlError::new(
+            ErrorCode::InternalError,
+            "control dispatcher is stopped",
+        ));
+    };
+    if state.active_inputs.contains_key(&pid) {
+        return Err(ControlError::new(
+            ErrorCode::InputOperationFailed,
+            "the selected target already has an input sequence in progress",
+        ));
+    }
+    let source = state
+        .latest_sources
+        .iter()
+        .find(|source| source.private_key as u32 == pid)
+        .cloned()
+        .ok_or_else(|| ControlError::new(ErrorCode::ClientNotFound, "the target is not loaded"))?;
+    let binding = resolve_action_for_source(state, &source, action)?;
+    Ok(ResolvedStroke {
+        scans: binding.scans,
+        hold: Duration::from_millis(u64::from(DEFAULT_KEY_HOLD_MS)),
+        pause: Duration::ZERO,
+    })
+}
+
+/// Return whether the exact EQ client can currently receive its configured
+/// Invite/Follow action. This is intentionally an owner-thread-only query.
+pub fn invite_follow_available(pid: u32) -> bool {
+    resolve_local_eq_action(pid, &EqAction::InviteFollow).is_ok()
+}
+
+/// Start a user-confirmed Invite/Follow action for one exact EQ process without
+/// activating it. Completion failures are surfaced as a toast on the UI thread.
+pub fn send_invite_follow(pid: u32) -> Result<(), ControlError> {
+    let action = EqAction::InviteFollow;
+    let stroke = resolve_local_eq_action(pid, &action)?;
+    crate::broadcast::begin_targeted_input(pid).map_err(map_targeted_input_error)?;
+
+    let Some(state) = ui().as_mut() else {
+        crate::broadcast::finish_targeted_input(pid);
+        return Err(ControlError::new(
+            ErrorCode::InternalError,
+            "control dispatcher is stopped",
+        ));
+    };
+    if state.active_inputs.is_empty() {
+        let timer = unsafe { SetTimer(state.tray_hwnd, TIMER_CONTROL_INPUT, INPUT_TICK_MS, None) };
+        if timer == 0 {
+            crate::broadcast::finish_targeted_input(pid);
+            return Err(ControlError::new(
+                ErrorCode::InputOperationFailed,
+                "failed to start the targeted input timer",
+            ));
+        }
+    }
+    state.active_inputs.insert(
+        pid,
+        ActiveInput {
+            pid,
+            kind: ActiveInputKind::EqAction(action),
+            strokes: vec![stroke],
+            index: 0,
+            phase: InputPhase::Press,
+            next_step: Instant::now() + INPUT_ACTIVATION_DELAY,
+            completion: InputCompletion::Local {
+                failure_message: "Could not accept the group invitation",
+            },
+        },
+    );
+    Ok(())
 }
 
 fn start_text_input(
@@ -1434,6 +1522,7 @@ fn input_completion_is_closed(state: &UiState, completion: &InputCompletion) -> 
             .input_batches
             .get(batch_id)
             .is_none_or(|batch| batch.reply.is_closed()),
+        InputCompletion::Local { .. } => false,
     }
 }
 
@@ -1478,6 +1567,11 @@ fn finish_input(
                     };
                     let _ = batch.reply.send(result);
                 }
+            }
+        }
+        InputCompletion::Local { failure_message } => {
+            if let Some(Err(error)) = result {
+                crate::overlay::show_toast(&format!("{failure_message}: {}", error.message));
             }
         }
     }

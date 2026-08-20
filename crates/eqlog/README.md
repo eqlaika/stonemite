@@ -9,7 +9,7 @@ It provides:
 - canonical `RawLogLine` records with application-defined source attribution;
 - EQ timestamp/body decoding;
 - an extensible parser registry;
-- typed `/who` identity and pet ownership events;
+- typed `/who` identity, pet ownership, incoming-Tell chat, invitation lifecycle, resurrection, and death events;
 - persistent, case-insensitive per-character telemetry reduction;
 - explicit reset behavior for truncated, recreated, or removed sources.
 
