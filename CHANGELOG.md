@@ -8,14 +8,11 @@
 - Added F13–F24 and keyboard-emulating foot-pedal support, live Mouse Clutch status in the overlay and tray, and fail-safe release when focus, clients, settings, or the controlling Stonemite process change
 - Added the **Stonemite · EQ boxing** Stream Deck plugin for Stream Deck Desktop 7.4+ on macOS 12+ or Windows 10+, with a live six-client roster, character and class identity, input-readiness indicators, exact-client activation, authoritative broadcast state, automatic reconnection, and visible command errors
 - Added a Stream Deck Broadcast key that explicitly turns Stonemite key broadcasting on or off instead of issuing a blind toggle
-- Added a Stream Deck Group key that invites ready boxes from the active client and invokes each character's configured Invite/Follow action after one second
-- Added a Stream Deck Follow key that concurrently sends `/follow <leader>` to ready background clients
-- Added a Stream Deck Assist key that concurrently sends `/assist <main>` to ready background clients
-- Added a Stream Deck Use key that invokes each input-ready character's configured Use Center Screen action
 - Added a two-step Stream Deck Swap key for exchanging the active and selected characters' stable window numbers without changing the active client
 - Added generic keymap-aware Trushar actions for all 11×12 EQ hotbar buttons, all 14 spell gems, and arbitrary mapped EQ actions
-- Added a configurable Stream Deck Hotkey tile with a custom name, per-tile color, contrast-aware running content, the complete pinned 466-icon Lucide Animated catalog, and all-loaded or stable box-number targets
-- Added shared keymap discovery and all-target preflight so a configured hotkey starts on no boxes unless every requested box is loaded, input-ready, idle, and mapped
+- Added authoritative active-box and background-box targets alongside all-loaded and stable box-number targeting
+- Added a configurable Stream Deck Hotkey tile with a custom name, per-tile color, contrast-aware running content, the complete pinned 466-icon Lucide Animated catalog, and all-loaded, active, background, or stable box-number targets
+- Added shared keymap discovery and target-set preflight so a configured hotkey starts on no boxes unless every resolved box is loaded, input-ready, idle, and mapped
 
 ### Changed
 
@@ -23,6 +20,7 @@
 - Limited address/code authentication to cross-PC LAN access and moved pairing, reconnection, and saved-credential management into the Stonemite setup key
 - Resolved semantic actions per character and persona from `Character_Server_Class.ini`, with legacy character INI and shared `eqclient.ini` fallbacks
 - Made Stream Deck character slots and controls independently placeable, supported duplicate actions, and removed preset profiles for now
+- Kept Stream Deck gameplay controls one-to-one with mapped EQ actions; grouping, following, assisting, and other multi-step behavior now belongs in user-authored in-game socials
 - Improved Stream Deck feedback with prominent active-client styling, immediate authoritative state after successful actions, 15px minimum text, a stable Bcast label, distinct action colors, filled running and armed states, and bounded icon animations
 - Allowed targeted input sequences to run concurrently across independent EQ clients while still rejecting overlapping sequences for the same client
 - Rebuilt EQ log ingestion around filesystem notifications and a background worker, with periodic reconciliation and reliable handling of partial writes, truncation, recreation, removed sources, malformed records, and notification loss

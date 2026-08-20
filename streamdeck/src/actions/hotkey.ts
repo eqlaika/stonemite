@@ -36,8 +36,10 @@ export interface HotkeySettings extends JsonObject {
   color?: string;
 }
 
+export type HotkeyTargetMode = "all" | "active" | "background" | "selected";
+
 export interface NormalizedHotkeySettings {
-  targetMode: "all" | "selected";
+  targetMode: HotkeyTargetMode;
   windowNumbers: number[];
   mapping?: string;
   label: string;
@@ -360,7 +362,7 @@ export class HotkeyAction extends SingletonAction<HotkeySettings> {
 export function normalizeHotkeySettings(
   settings: HotkeySettings,
 ): NormalizedHotkeySettings {
-  const targetMode = settings.targetMode === "selected" ? "selected" : "all";
+  const targetMode = normalizeTargetMode(settings.targetMode);
   const windowNumbers = normalizeWindowNumbers(settings.windowNumbers);
   const mapping = normalizeMapping(settings.mapping);
   const defaultLabel = mapping ? shortEqMappingLabel(mapping) : "Configure";
@@ -394,12 +396,19 @@ export function serializeHotkeySettings(
 export function targetsForSettings(
   settings: NormalizedHotkeySettings,
 ): EqActionTargets {
-  return settings.targetMode === "all"
-    ? { type: "all_loaded" }
-    : {
+  switch (settings.targetMode) {
+    case "all":
+      return { type: "all_loaded" };
+    case "active":
+      return { type: "active" };
+    case "background":
+      return { type: "background_loaded" };
+    case "selected":
+      return {
         type: "window_numbers",
         window_numbers: settings.windowNumbers,
       };
+  }
 }
 
 export function formatEqMappingLabel(mapping: string): string {
@@ -430,6 +439,12 @@ function shortEqMappingLabel(mapping: string): string {
   if (mapping === "USE") return "Use";
   if (mapping === "INVITE_FOLLOW") return "Invite";
   return formatEqMappingLabel(mapping).slice(0, MAX_TILE_LABEL_LENGTH);
+}
+
+function normalizeTargetMode(value: unknown): HotkeyTargetMode {
+  return value === "active" || value === "background" || value === "selected"
+    ? value
+    : "all";
 }
 
 function normalizeColor(value: unknown): string {
@@ -464,6 +479,8 @@ function parseTargets(
 ): EqActionTargets | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined;
   if (value.type === "all_loaded") return { type: "all_loaded" };
+  if (value.type === "active") return { type: "active" };
+  if (value.type === "background_loaded") return { type: "background_loaded" };
   if (value.type !== "window_numbers") return undefined;
   const windowNumbers = normalizeWindowNumbers(value.window_numbers);
   return { type: "window_numbers", window_numbers: windowNumbers };
@@ -482,6 +499,21 @@ function hotkeyUnavailableReason(
       ? undefined
       : "Input not ready";
   }
+  const active = activeClient(snapshot);
+  if (settings.targetMode === "active") {
+    if (!active) return "No active box";
+    return active.input_ready ? undefined : "Active not ready";
+  }
+  if (settings.targetMode === "background") {
+    if (!active) return "No active box";
+    const background = snapshot.clients.filter(
+      (client) => client.id !== active.id,
+    );
+    if (background.length === 0) return "No background boxes";
+    return background.every((client) => client.input_ready)
+      ? undefined
+      : "Input not ready";
+  }
   for (const number of settings.windowNumbers) {
     const client = snapshot.clients.find(
       (candidate) => candidate.window_number === number,
@@ -494,12 +526,24 @@ function hotkeyUnavailableReason(
 
 function targetSummary(settings: NormalizedHotkeySettings): string {
   if (settings.targetMode === "all") return "ALL";
+  if (settings.targetMode === "active") return "ACT";
+  if (settings.targetMode === "background") return "BG";
   if (
     settings.windowNumbers.length === 6 &&
     settings.windowNumbers.every((number, index) => number === index + 1)
   )
     return "1–6";
   return settings.windowNumbers.join("·");
+}
+
+function activeClient(
+  snapshot: TrusharState,
+): TrusharState["clients"][number] | undefined {
+  return (
+    snapshot.clients.find(
+      (client) => client.id === snapshot.active_client_id,
+    ) ?? snapshot.clients.find((client) => client.active)
+  );
 }
 
 function boxSummaries(snapshot: TrusharState | null): Array<JsonObject> {
@@ -524,7 +568,7 @@ function friendlyHotkeyError(error: unknown): string {
       return "Partial send";
     switch (error.code) {
       case "client_not_found":
-        return "Box missing";
+        return "Target missing";
       case "input_unavailable":
         return "Input not ready";
       case "eq_action_unbound":

@@ -849,11 +849,37 @@ fn sources_for_targets(
     targets: &EqActionTargets,
     require_all: bool,
 ) -> Result<Vec<SourceClient>, ControlError> {
-    let mut sources = state
-        .latest_sources
+    select_sources_for_targets(&state.latest_sources, targets, require_all)
+}
+
+fn select_sources_for_targets(
+    latest_sources: &[SourceClient],
+    targets: &EqActionTargets,
+    require_all: bool,
+) -> Result<Vec<SourceClient>, ControlError> {
+    let active_key = matches!(
+        targets,
+        EqActionTargets::Active | EqActionTargets::BackgroundLoaded
+    )
+    .then(|| {
+        latest_sources
+            .iter()
+            .find(|source| source.active)
+            .map(|source| source.private_key)
+            .ok_or_else(|| {
+                ControlError::new(
+                    ErrorCode::ClientNotFound,
+                    "no active client is available for the dynamic EQ action target",
+                )
+            })
+    })
+    .transpose()?;
+    let mut sources = latest_sources
         .iter()
         .filter(|source| match targets {
             EqActionTargets::AllLoaded => true,
+            EqActionTargets::Active => active_key == Some(source.private_key),
+            EqActionTargets::BackgroundLoaded => active_key != Some(source.private_key),
             EqActionTargets::WindowNumbers(numbers) => numbers.contains(&source.window_number),
         })
         .cloned()
@@ -866,6 +892,10 @@ fn sources_for_targets(
         EqActionTargets::AllLoaded if sources.is_empty() => Err(ControlError::new(
             ErrorCode::ClientNotFound,
             "no loaded clients match the all-boxes target",
+        )),
+        EqActionTargets::BackgroundLoaded if sources.is_empty() => Err(ControlError::new(
+            ErrorCode::ClientNotFound,
+            "no loaded clients match the background-boxes target",
         )),
         EqActionTargets::WindowNumbers(numbers) if sources.len() != numbers.len() => {
             let missing = numbers
@@ -1496,6 +1526,51 @@ mod tests {
             phase_scans(&stroke, InputPhase::ReleaseModifiers),
             vec![0x1d]
         );
+    }
+
+    #[test]
+    fn dynamic_batch_targets_use_the_current_active_source() {
+        let sources = vec![source(3, false), source(1, true), source(2, false)];
+        let active = select_sources_for_targets(&sources, &EqActionTargets::Active, true).unwrap();
+        assert_eq!(
+            active
+                .iter()
+                .map(|source| source.window_number)
+                .collect::<Vec<_>>(),
+            [1]
+        );
+        let background =
+            select_sources_for_targets(&sources, &EqActionTargets::BackgroundLoaded, true).unwrap();
+        assert_eq!(
+            background
+                .iter()
+                .map(|source| source.window_number)
+                .collect::<Vec<_>>(),
+            [2, 3]
+        );
+
+        let solo = [source(1, true)];
+        let error = select_sources_for_targets(&solo, &EqActionTargets::BackgroundLoaded, true)
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::ClientNotFound);
+
+        let inactive = [source(1, false)];
+        let error =
+            select_sources_for_targets(&inactive, &EqActionTargets::Active, false).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ClientNotFound);
+    }
+
+    fn source(window_number: usize, active: bool) -> SourceClient {
+        SourceClient {
+            private_key: window_number as u64,
+            character: None,
+            server: None,
+            class_code: None,
+            window_number,
+            active,
+            activatable: true,
+            input_ready: true,
+        }
     }
 
     #[test]

@@ -386,6 +386,8 @@ impl EqMappingName {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EqActionTargets {
     AllLoaded,
+    Active,
+    BackgroundLoaded,
     WindowNumbers(Vec<usize>),
 }
 
@@ -1221,7 +1223,7 @@ impl Controller for InMemoryController {
         Box::pin(async move {
             targets.validate()?;
             let state = inner.state.lock().expect("memory controller poisoned");
-            let clients = memory_clients_for_listing(&state, &targets);
+            let clients = memory_clients_for_listing(&state, &targets)?;
             let mut window_numbers = clients
                 .iter()
                 .map(|client| client.window_number)
@@ -1374,26 +1376,50 @@ fn memory_action_is_mapped(state: &MemoryState, client_id: &ClientId, action: &E
 fn memory_clients_for_listing<'a>(
     state: &'a MemoryState,
     targets: &EqActionTargets,
-) -> Vec<&'a ClientState> {
-    state
+) -> Result<Vec<&'a ClientState>, ControlError> {
+    let active_id = matches!(
+        targets,
+        EqActionTargets::Active | EqActionTargets::BackgroundLoaded
+    )
+    .then(|| {
+        state
+            .clients
+            .iter()
+            .find(|client| client.active)
+            .map(|client| &client.id)
+            .ok_or_else(|| {
+                ControlError::new(
+                    ErrorCode::ClientNotFound,
+                    "no active client is available for the dynamic EQ action target",
+                )
+            })
+    })
+    .transpose()?;
+    Ok(state
         .clients
         .iter()
         .filter(|client| match targets {
             EqActionTargets::AllLoaded => true,
+            EqActionTargets::Active => active_id == Some(&client.id),
+            EqActionTargets::BackgroundLoaded => active_id != Some(&client.id),
             EqActionTargets::WindowNumbers(numbers) => numbers.contains(&client.window_number),
         })
-        .collect()
+        .collect())
 }
 
 fn memory_clients_for_delivery<'a>(
     state: &'a MemoryState,
     targets: &EqActionTargets,
 ) -> Result<Vec<&'a ClientState>, ControlError> {
-    let clients = memory_clients_for_listing(state, targets);
+    let clients = memory_clients_for_listing(state, targets)?;
     match targets {
         EqActionTargets::AllLoaded if clients.is_empty() => Err(ControlError::new(
             ErrorCode::ClientNotFound,
             "no loaded clients match the all-boxes target",
+        )),
+        EqActionTargets::BackgroundLoaded if clients.is_empty() => Err(ControlError::new(
+            ErrorCode::ClientNotFound,
+            "no loaded clients match the background-boxes target",
         )),
         EqActionTargets::WindowNumbers(numbers) if clients.len() != numbers.len() => {
             let missing = numbers

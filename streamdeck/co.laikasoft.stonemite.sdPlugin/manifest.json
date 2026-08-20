@@ -94,54 +94,10 @@
       "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
     },
     {
-      "Name": "Group",
-      "UUID": "co.laikasoft.stonemite.group",
-      "Icon": "imgs/actions/stonemite/icon",
-      "Tooltip": "Invite every ready character and accept the invitations.",
-      "Controllers": ["Keypad"],
-      "SupportedInMultiActions": false,
-      "SupportedInKeyLogicActions": false,
-      "UserTitleEnabled": false,
-      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
-    },
-    {
       "Name": "Broadcast",
       "UUID": "co.laikasoft.stonemite.broadcast",
       "Icon": "imgs/actions/stonemite/icon",
       "Tooltip": "Turn Stonemite key broadcasting on or off.",
-      "Controllers": ["Keypad"],
-      "SupportedInMultiActions": false,
-      "SupportedInKeyLogicActions": false,
-      "UserTitleEnabled": false,
-      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
-    },
-    {
-      "Name": "Follow",
-      "UUID": "co.laikasoft.stonemite.follow",
-      "Icon": "imgs/actions/stonemite/icon",
-      "Tooltip": "Tell every ready background character to follow the active character.",
-      "Controllers": ["Keypad"],
-      "SupportedInMultiActions": false,
-      "SupportedInKeyLogicActions": false,
-      "UserTitleEnabled": false,
-      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
-    },
-    {
-      "Name": "Use",
-      "UUID": "co.laikasoft.stonemite.use",
-      "Icon": "imgs/actions/stonemite/icon",
-      "Tooltip": "Invoke Use Center Screen on every ready character.",
-      "Controllers": ["Keypad"],
-      "SupportedInMultiActions": false,
-      "SupportedInKeyLogicActions": false,
-      "UserTitleEnabled": false,
-      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
-    },
-    {
-      "Name": "Assist",
-      "UUID": "co.laikasoft.stonemite.assist",
-      "Icon": "imgs/actions/stonemite/icon",
-      "Tooltip": "Tell every ready background character to assist the active character.",
       "Controllers": ["Keypad"],
       "SupportedInMultiActions": false,
       "SupportedInKeyLogicActions": false,
@@ -163,7 +119,7 @@
       "Name": "Hotkey",
       "UUID": "co.laikasoft.stonemite.hotkey",
       "Icon": "imgs/actions/stonemite/icon",
-      "Tooltip": "Send one configured EverQuest keymap action to all loaded boxes or selected Stonemite box numbers.",
+      "Tooltip": "Send one configured EverQuest keymap action to all loaded, active, background, or selected boxes.",
       "PropertyInspectorPath": "ui/hotkey.html",
       "Controllers": ["Keypad"],
       "SupportedInMultiActions": false,

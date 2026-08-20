@@ -463,6 +463,74 @@ fn mapped_actions_are_intersected_and_batch_delivery_preflights_every_box() {
 }
 
 #[test]
+fn dynamic_action_targets_resolve_from_authoritative_active_state() {
+    let control = InMemoryController::new(available(false));
+    let first = control.add_client(1, Some("Laika"), Some("Xegony"), None, true, true);
+    let second = control.add_client(2, Some("Serein"), Some("Xegony"), None, false, true);
+    let third = control.add_client(3, Some("Rook"), Some("Xegony"), None, false, true);
+    for client in [&first, &second, &third] {
+        control.set_mapped_actions(client, ["DUCK"]).unwrap();
+    }
+
+    let active = block_on(control.list_eq_keymap_actions(EqActionTargets::Active, None)).unwrap();
+    assert!(matches!(
+        active,
+        CommandOutcome::EqKeymapActionsListed {
+            mappings,
+            window_numbers,
+            next_after: None,
+        } if mappings.iter().map(|mapping| mapping.as_str()).collect::<Vec<_>>() == ["DUCK"]
+            && window_numbers == [1]
+    ));
+    let background =
+        block_on(control.list_eq_keymap_actions(EqActionTargets::BackgroundLoaded, None)).unwrap();
+    assert!(matches!(
+        background,
+        CommandOutcome::EqKeymapActionsListed {
+            mappings,
+            window_numbers,
+            next_after: None,
+        } if mappings.iter().map(|mapping| mapping.as_str()).collect::<Vec<_>>() == ["DUCK"]
+            && window_numbers == [2, 3]
+    ));
+
+    control.set_active_locally(&second);
+    let action = EqAction::keymap("DUCK").unwrap();
+    let delivered =
+        block_on(control.send_eq_action_batch(EqActionTargets::BackgroundLoaded, action.clone()))
+            .unwrap();
+    assert_eq!(
+        delivered,
+        CommandOutcome::EqActionBatchDelivered {
+            action,
+            window_numbers: vec![1, 3],
+        }
+    );
+    assert!(matches!(
+        control.recorded_inputs().as_slice(),
+        [
+            RecordedInput::EqAction { client_id: first_id, .. },
+            RecordedInput::EqAction { client_id: third_id, .. },
+        ] if first_id == &first && third_id == &third
+    ));
+
+    let solo = InMemoryController::new(available(false));
+    solo.add_client(1, None, None, None, true, true);
+    let error = block_on(solo.send_eq_action_batch(
+        EqActionTargets::BackgroundLoaded,
+        EqAction::keymap("HOT1_1").unwrap(),
+    ))
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::ClientNotFound);
+
+    let inactive = InMemoryController::new(available(false));
+    inactive.add_client(1, None, None, None, false, true);
+    let error =
+        block_on(inactive.list_eq_keymap_actions(EqActionTargets::Active, None)).unwrap_err();
+    assert_eq!(error.code, ErrorCode::ClientNotFound);
+}
+
+#[test]
 fn mapped_action_discovery_pages_large_profiles() {
     let control = InMemoryController::new(available(false));
     let client = control.add_client(1, None, None, None, true, true);

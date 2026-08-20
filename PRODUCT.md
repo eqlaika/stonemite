@@ -37,9 +37,9 @@ Stonemite derives character identity from the running EQ clients and controls an
 
 ## Capabilities and constraints
 
-- Protocol v1 provides complete pushed state, exact client activation, active-to-selected window-number swaps, explicit broadcast state, exact-client text/key delivery, keymap-aware EQ actions, shared mapping discovery, all-target preflight, request correlation, and six-digit LAN pairing.
-- The Stream Deck plugin v0 is the core deck only: position-independent boot/handoff, six separately placeable character slots, window-number swaps, broadcast, group, follow, assist, all-boxes Use, configurable mapped Hotkey tiles, a Stonemite setup key with connection status, automatic loopback, LAN pairing, and honest error states.
-- Assist concurrently sends `/assist <active character>` to every input-ready background client. Use and Group resolve each character/persona's configured EQ actions. A Hotkey tile can name, icon, and color one mapped EQ action and target all loaded boxes or stable box numbers; opinionated fixed Burn, Camp, heal, and spell behaviors remain outside v0.
+- Protocol v1 provides complete pushed state, exact client activation, active-to-selected window-number swaps, explicit broadcast state, exact-client text/key delivery, keymap-aware EQ actions, shared mapping discovery, preflighted all-loaded, active, background, and stable-number targets, request correlation, and six-digit LAN pairing.
+- The Stream Deck plugin v0 is the core deck only: position-independent boot/handoff, six separately placeable character slots, window-number swaps, broadcast, configurable mapped Hotkey tiles, a Stonemite setup key with connection status, automatic loopback, LAN pairing, and honest error states.
+- A Hotkey tile can name, icon, and color one mapped EQ action and target all loaded boxes, the active box, every background box, or stable box numbers. User-authored EverQuest socials own grouping, following, assisting, burns, camps, healing, and other multi-step gameplay policy. Dynamic target modes select recipients but do not synthesize commands or substitute character names.
 - An input result proves delivery to the intended process, not an observed spell, target, buff, or combat result. The interface must never claim otherwise.
 - Client IDs are opaque and valid only for the current Stonemite run. Reconnect state is authoritative.
 - Character, server, and class can be temporarily unknown. Clients can be absent, extra, unactivatable, or not ready for targeted input.
@@ -67,7 +67,7 @@ Stonemite derives character identity from the running EQ clients and controls an
 2. Make exact-client control obvious and recoverable at a glance.
 3. Connect locally without setup, pair LAN clients once, reconnect automatically, and treat startup order as irrelevant.
 4. Preserve one roster and one identity system across the desktop overlay and deck.
-5. Add semantic actions only when their commands and failure policy are explicit.
+5. Keep gameplay controls one-to-one with existing EQ key mappings; multi-step policy belongs in user-authored in-game socials.
 
 ## Accessibility & inclusion
 

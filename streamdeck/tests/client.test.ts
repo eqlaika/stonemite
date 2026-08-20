@@ -208,7 +208,7 @@ describe("local and LAN connections", () => {
     expect(normalSocket?.readyState).toBe(1);
   });
 
-  it("sends exact-client swaps, text, key chords, and EQ actions", async () => {
+  it("sends swaps, mapped-action discovery, and dynamic batches", async () => {
     const server = await startServer();
     const requests: Array<Record<string, unknown>> = [];
     server.wss.on("connection", (socket) => {
@@ -218,6 +218,7 @@ describe("local and LAN connections", () => {
       socket.on("message", (raw) => {
         const request = JSON.parse(raw.toString()) as Record<string, unknown>;
         requests.push(request);
+        const targets = request.targets as { type?: string } | undefined;
         socket.send(
           JSON.stringify({
             type: "result",
@@ -230,35 +231,24 @@ describe("local and LAN connections", () => {
                     active_previous_number: 1,
                     selected_previous_number: 2,
                   }
-                : request.type === "send_eq_action"
-                  ? {
-                      type: "eq_action_delivered",
+                : request.type === "list_eq_keymap_actions"
+                  ? request.after
+                    ? {
+                        type: "eq_keymap_actions_listed",
+                        mappings: ["SIT_STAND"],
+                        window_numbers: [1, 2],
+                      }
+                    : {
+                        type: "eq_keymap_actions_listed",
+                        mappings: ["DUCK"],
+                        window_numbers: [1, 2],
+                        next_after: "DUCK",
+                      }
+                  : {
+                      type: "eq_action_batch_delivered",
                       action: request.action,
-                    }
-                  : request.type === "list_eq_keymap_actions"
-                    ? request.after
-                      ? {
-                          type: "eq_keymap_actions_listed",
-                          mappings: ["SIT_STAND"],
-                          window_numbers: [1, 2],
-                        }
-                      : {
-                          type: "eq_keymap_actions_listed",
-                          mappings: ["DUCK"],
-                          window_numbers: [1, 2],
-                          next_after: "DUCK",
-                        }
-                    : request.type === "send_eq_action_batch"
-                      ? {
-                          type: "eq_action_batch_delivered",
-                          action: request.action,
-                          window_numbers: [1, 2],
-                        }
-                      : {
-                          type: "input_delivered",
-                          input: request.type === "send_text" ? "text" : "keys",
-                          strokes: 1,
-                        },
+                      window_numbers: targets?.type === "active" ? [1] : [2],
+                    },
             state: stateFixture(),
           }),
         );
@@ -276,69 +266,43 @@ describe("local and LAN connections", () => {
     await vi.waitFor(() => expect(server.wss.clients.size).toBe(1));
 
     await client.swapWindowNumbers("serein-id");
-    await client.sendText("leader-id", "/invite Serein", true);
-    await client.sendKeys("serein-id", [
-      { keys: ["left_control", "i"], hold_ms: 50, pause_ms: 40 },
-    ]);
-    await client.sendEqAction("serein-id", {
-      type: "hotbar",
-      bar: 11,
-      button: 12,
-    });
-    await client.sendEqAction("serein-id", { type: "spell_gem", gem: 14 });
     const listed = await client.listEqKeymapActions({
       type: "window_numbers",
       window_numbers: [1, 2],
     });
     expect(listed.mappings).toEqual(["DUCK", "SIT_STAND"]);
     await client.sendEqActionBatch(
-      { type: "all_loaded" },
+      { type: "active" },
       { type: "keymap", mapping: "DUCK" },
     );
+    await client.sendEqActionBatch(
+      { type: "background_loaded" },
+      { type: "keymap", mapping: "SIT_STAND" },
+    );
 
-    expect(requests).toHaveLength(8);
+    expect(requests).toHaveLength(5);
     expect(requests[0]).toMatchObject({
       type: "swap_window_numbers",
       version: 1,
       target: { type: "client_id", client_id: "serein-id" },
     });
     expect(requests[1]).toMatchObject({
-      type: "send_text",
-      version: 1,
-      client_id: "leader-id",
-      text: "/invite Serein",
-      submit: true,
-    });
-    expect(requests[2]).toMatchObject({
-      type: "send_keys",
-      version: 1,
-      client_id: "serein-id",
-      strokes: [{ keys: ["left_control", "i"], hold_ms: 50, pause_ms: 40 }],
-    });
-    expect(requests[3]).toMatchObject({
-      type: "send_eq_action",
-      version: 1,
-      client_id: "serein-id",
-      action: { type: "hotbar", bar: 11, button: 12 },
-    });
-    expect(requests[4]).toMatchObject({
-      type: "send_eq_action",
-      version: 1,
-      client_id: "serein-id",
-      action: { type: "spell_gem", gem: 14 },
-    });
-    expect(requests[5]).toMatchObject({
       type: "list_eq_keymap_actions",
       targets: { type: "window_numbers", window_numbers: [1, 2] },
     });
-    expect(requests[6]).toMatchObject({
+    expect(requests[2]).toMatchObject({
       type: "list_eq_keymap_actions",
       after: "DUCK",
     });
-    expect(requests[7]).toMatchObject({
+    expect(requests[3]).toMatchObject({
       type: "send_eq_action_batch",
-      targets: { type: "all_loaded" },
+      targets: { type: "active" },
       action: { type: "keymap", mapping: "DUCK" },
+    });
+    expect(requests[4]).toMatchObject({
+      type: "send_eq_action_batch",
+      targets: { type: "background_loaded" },
+      action: { type: "keymap", mapping: "SIT_STAND" },
     });
   });
 

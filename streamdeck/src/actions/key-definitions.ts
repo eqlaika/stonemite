@@ -12,7 +12,7 @@ const UUID_PREFIX = "co.laikasoft.stonemite";
 export const HOTKEY_ACTION_DEFINITION = {
   name: "Hotkey",
   tooltip:
-    "Send one configured EverQuest keymap action to all loaded boxes or selected Stonemite box numbers.",
+    "Send one configured EverQuest keymap action to all loaded, active, background, or selected boxes.",
   uuid: `${UUID_PREFIX}.hotkey`,
 } as const;
 
@@ -24,36 +24,10 @@ export const DASHBOARD_ACTION_DEFINITIONS = [
     uuid: `${UUID_PREFIX}.character-slot-${slot}`,
   })),
   {
-    key: "group",
-    name: "Group",
-    tooltip: "Invite every ready character and accept the invitations.",
-    uuid: `${UUID_PREFIX}.group`,
-  },
-  {
     key: "broadcast",
     name: "Broadcast",
     tooltip: "Turn Stonemite key broadcasting on or off.",
     uuid: `${UUID_PREFIX}.broadcast`,
-  },
-  {
-    key: "follow",
-    name: "Follow",
-    tooltip:
-      "Tell every ready background character to follow the active character.",
-    uuid: `${UUID_PREFIX}.follow`,
-  },
-  {
-    key: "use",
-    name: "Use",
-    tooltip: "Invoke Use Center Screen on every ready character.",
-    uuid: `${UUID_PREFIX}.use`,
-  },
-  {
-    key: "assist",
-    name: "Assist",
-    tooltip:
-      "Tell every ready background character to assist the active character.",
-    uuid: `${UUID_PREFIX}.assist`,
   },
   {
     key: "swap",

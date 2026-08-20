@@ -1,8 +1,7 @@
 import { APP_IMAGE, CLASS_IMAGES } from "./assets.generated";
 import {
   renderConfigurableLucideIcon,
-  renderLucideActionIcon,
-  type ActionIcon,
+  renderSwapIcon,
   type LucideAnimatedIcon,
 } from "./action-icons";
 import { BADGE_COLORS, SLOT_COLORS, type KeyCell } from "../state/layout";
@@ -22,13 +21,7 @@ const COLORS = {
   notification: "#203040",
 };
 
-export const ACTION_COLORS = {
-  group: SLOT_COLORS[0],
-  follow: COLORS.green,
-  assist: SLOT_COLORS[3],
-  use: SLOT_COLORS[4],
-  swap: COLORS.cyan,
-} satisfies Record<ActionIcon, string>;
+export const SWAP_COLOR = COLORS.cyan;
 
 export function renderCell(cell: KeyCell, motionFrame = 0): string {
   const body = (() => {
@@ -36,12 +29,7 @@ export function renderCell(cell: KeyCell, motionFrame = 0): string {
       case "boot":
         return renderBoot(cell.stage);
       case "feedback":
-        return renderFeedback(
-          cell.feedback.kind,
-          cell.feedback.message,
-          cell.feedback.motion,
-          motionFrame,
-        );
+        return renderFeedback(cell.feedback.kind, cell.feedback.message);
       case "character":
         return renderCharacter(
           cell.client,
@@ -51,34 +39,8 @@ export function renderCell(cell: KeyCell, motionFrame = 0): string {
         );
       case "empty":
         return `${base()}<circle cx="36" cy="36" r="13" fill="${COLORS.notification}"/><text x="36" y="43" class="text center large">${cell.slot}</text>`;
-      case "blank":
-        return base();
       case "logo":
         return renderLogo(cell.connection);
-      case "group":
-        return renderActionTile(
-          "group",
-          "Group",
-          cell.available ? ACTION_COLORS.group : COLORS.disabled,
-        );
-      case "follow":
-        return renderActionTile(
-          "follow",
-          "Follow",
-          cell.available ? ACTION_COLORS.follow : COLORS.disabled,
-        );
-      case "assist":
-        return renderActionTile(
-          "assist",
-          "Assist",
-          cell.available ? ACTION_COLORS.assist : COLORS.disabled,
-        );
-      case "use":
-        return renderActionTile(
-          "use",
-          "Use",
-          cell.available ? ACTION_COLORS.use : COLORS.disabled,
-        );
       case "broadcast":
         return renderBroadcast(cell.available, cell.enabled);
       case "swap":
@@ -226,13 +188,11 @@ function renderSwap(
   armed: boolean,
   motionFrame: number,
 ): string {
-  const accent = available ? ACTION_COLORS.swap : COLORS.disabled;
-  return renderActionTile("swap", "Swap", accent, motionFrame, armed);
+  const accent = available ? SWAP_COLOR : COLORS.disabled;
+  return renderSwapTile(accent, motionFrame, armed);
 }
 
-function renderActionTile(
-  icon: ActionIcon,
-  label: string,
+function renderSwapTile(
   accent: string,
   motionFrame = 0,
   active = false,
@@ -242,7 +202,7 @@ function renderActionTile(
     : base();
   const foreground = active ? COLORS.ink : accent;
   const labelClass = active ? "active-text center" : "text center";
-  return `${surface}${renderLucideActionIcon(icon, foreground, motionFrame, active)}<text x="36" y="65" class="${labelClass}" font-size="15"${fittedTextAttributes(label, 6, 62)}>${escapeXml(label)}</text>`;
+  return `${surface}${renderSwapIcon(foreground, motionFrame, active)}<text x="36" y="65" class="${labelClass}" font-size="15">Swap</text>`;
 }
 
 function renderBroadcast(available: boolean, enabled: boolean): string {
@@ -255,28 +215,7 @@ function renderBroadcast(available: boolean, enabled: boolean): string {
   return `${base()}<g color="${accent}">${lightning}</g><text x="36" y="65" class="text center small"${fittedTextAttributes(label, 6, 62)}>${label}</text>`;
 }
 
-function renderFeedback(
-  kind: "pending" | "error",
-  message: string,
-  motion: "group" | "follow" | "assist" | "use" | undefined,
-  motionFrame: number,
-): string {
-  if (kind === "pending" && motion) {
-    const labels = {
-      group: "Group",
-      follow: "Follow",
-      assist: "Assist",
-      use: "Use",
-    } as const;
-    return renderActionTile(
-      motion,
-      labels[motion],
-      ACTION_COLORS[motion],
-      motionFrame,
-      true,
-    );
-  }
-
+function renderFeedback(kind: "pending" | "error", message: string): string {
   const accent = kind === "error" ? COLORS.red : COLORS.amber;
   const label = kind === "error" ? "FAILED" : "WORKING";
   const normalizedMessage = message.toUpperCase();

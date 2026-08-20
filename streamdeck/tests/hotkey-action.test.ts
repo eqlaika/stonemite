@@ -17,6 +17,7 @@ import {
   HotkeyAction,
   formatEqMappingLabel,
   normalizeHotkeySettings,
+  targetsForSettings,
 } from "../src/actions/hotkey";
 import { LUCIDE_ANIMATED_ICON_NAMES } from "../src/render/action-icons";
 import {
@@ -51,6 +52,21 @@ describe("HotkeyAction", () => {
       icon: "flame",
       color: "#e0b848",
     });
+    expect(normalizeHotkeySettings({ targetMode: "active" }).targetMode).toBe(
+      "active",
+    );
+    expect(
+      normalizeHotkeySettings({ targetMode: "background" }).targetMode,
+    ).toBe("background");
+    expect(normalizeHotkeySettings({ targetMode: "unknown" }).targetMode).toBe(
+      "all",
+    );
+    expect(
+      targetsForSettings(normalizeHotkeySettings({ targetMode: "active" })),
+    ).toEqual({ type: "active" });
+    expect(
+      targetsForSettings(normalizeHotkeySettings({ targetMode: "background" })),
+    ).toEqual({ type: "background_loaded" });
     expect(normalizeHotkeySettings({ color: "invalid" }).color).toBe("#59d8d0");
     expect(formatEqMappingLabel("HOT11_12")).toBe("Hotbar 11 button 12");
     expect(formatEqMappingLabel("CAST14")).toBe("Spell gem 14");
@@ -111,6 +127,45 @@ describe("HotkeyAction", () => {
     );
   });
 
+  it("resolves background targeting on Stonemite when the key is pressed", async () => {
+    const store = connectedStore();
+    const snapshot = store.view.snapshot!;
+    store.setSnapshot({
+      ...snapshot,
+      clients: [
+        ...snapshot.clients,
+        {
+          id: "client-2",
+          character: "Serein",
+          window_number: 2,
+          active: false,
+          activatable: true,
+          input_ready: true,
+        },
+      ],
+    });
+    const client = fakeClient();
+    const hotkey = new HotkeyAction(store, client as never);
+    const action = fakeKey({
+      targetMode: "background",
+      mapping: "HOT1_1",
+      icon: "keyboard",
+    });
+    hotkey.onWillAppear({
+      action,
+      payload: { settings: action.settings },
+    } as never);
+
+    await hotkey.onKeyDown({ action } as never);
+
+    expect(client.sendEqActionBatch).toHaveBeenCalledWith(
+      { type: "background_loaded" },
+      { type: "keymap", mapping: "HOT1_1" },
+    );
+    const image = action.setImage.mock.calls.at(-1)?.[0] as string;
+    expect(decodeURIComponent(image)).toContain(">BG</text>");
+  });
+
   it("requires every selected window to be loaded and ready before sending", async () => {
     const store = connectedStore();
     const client = fakeClient();
@@ -135,6 +190,35 @@ describe("HotkeyAction", () => {
     expect(decodeURIComponent(image)).toContain("BOX 2 MISSING");
   });
 
+  it("rejects an active target when no active box is known", async () => {
+    const store = connectedStore();
+    const snapshot = store.view.snapshot!;
+    store.setSnapshot({
+      ...snapshot,
+      active_client_id: null,
+      clients: snapshot.clients.map((client) => ({ ...client, active: false })),
+    });
+    const client = fakeClient();
+    const hotkey = new HotkeyAction(store, client as never);
+    const action = fakeKey({
+      targetMode: "active",
+      mapping: "HOT1_1",
+      icon: "keyboard",
+    });
+    hotkey.onWillAppear({
+      action,
+      payload: { settings: action.settings },
+    } as never);
+
+    await hotkey.onKeyDown({ action } as never);
+
+    expect(client.sendEqActionBatch).not.toHaveBeenCalled();
+    expect(action.showAlert).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    const image = action.setImage.mock.calls.at(-1)?.[0] as string;
+    expect(decodeURIComponent(image)).toContain("NO ACTIVE BOX");
+  });
+
   it("lists shared mappings for property-inspector draft targets", async () => {
     const store = connectedStore();
     const client = fakeClient();
@@ -155,13 +239,12 @@ describe("HotkeyAction", () => {
       payload: {
         type: "list-hotkey-mappings",
         requestId: "draft-2",
-        targets: { type: "window_numbers", window_numbers: [1, 3] },
+        targets: { type: "background_loaded" },
       },
     } as never);
 
     expect(client.listEqKeymapActions).toHaveBeenCalledWith({
-      type: "window_numbers",
-      window_numbers: [1, 3],
+      type: "background_loaded",
     });
     expect(sdk.sendToPropertyInspector).toHaveBeenCalledWith(
       expect.objectContaining({

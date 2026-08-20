@@ -85,6 +85,14 @@ describe("release inputs", () => {
       HOTKEY_ACTION_DEFINITION,
     ].sort((a, b) => a.uuid.localeCompare(b.uuid));
     expect(actualActions).toEqual(expectedActions);
+    expect(actualActions.map((action) => action.uuid)).not.toEqual(
+      expect.arrayContaining([
+        "co.laikasoft.stonemite.group",
+        "co.laikasoft.stonemite.follow",
+        "co.laikasoft.stonemite.assist",
+        "co.laikasoft.stonemite.use",
+      ]),
+    );
     for (const action of manifest.Actions ?? []) {
       expect(action.Icon).toBe("imgs/actions/stonemite/icon");
       expect(action.PropertyInspectorPath).toBe(
@@ -144,6 +152,9 @@ describe("release inputs", () => {
       ),
     ]);
     expect(html).toContain("Only actions with a key mapping");
+    expect(html).toContain('value="active"');
+    expect(html).toContain('value="background"');
+    expect(html).toContain("character-specific EQ social");
     expect(html).toContain("no key mapping");
     expect(html).toContain("lucide-animated-icons.generated.js");
     expect(html).toContain("No icons match this search.");
@@ -160,6 +171,8 @@ describe("release inputs", () => {
     expect(script).toContain("color: draft.color");
     expect(script).not.toContain("showConnection");
     expect(script).toContain("mappingValidated");
+    expect(script).toContain('{ type: "active" }');
+    expect(script).toContain('{ type: "background_loaded" }');
     expect(script).not.toContain("custom image");
     expect(previews).toContain("Lucide Animated (MIT)");
     expect(previews).toContain('"flame"');

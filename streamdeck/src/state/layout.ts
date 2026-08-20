@@ -1,25 +1,9 @@
 import type { ConnectionPhase, DashboardView, Feedback } from "./store";
 import type { TrusharClient, TrusharState } from "../types/trushar";
 
-export const GRID_COLUMNS = 5;
-export const GRID_ROWS = 3;
-
 export type CharacterSlot = 1 | 2 | 3 | 4 | 5 | 6;
 export type DashboardKey =
-  | `character-${CharacterSlot}`
-  | "group"
-  | "broadcast"
-  | "follow"
-  | "use"
-  | "assist"
-  | "swap"
-  | "logo";
-
-export const DEFAULT_LAYOUT = [
-  ["character-1", "character-2", "character-3", "group", "broadcast"],
-  ["character-4", "character-5", "character-6", "follow", "use"],
-  ["logo", "blank", "blank", "assist", "swap"],
-] as const satisfies ReadonlyArray<ReadonlyArray<DashboardKey | "blank">>;
+  `character-${CharacterSlot}` | "broadcast" | "swap" | "logo";
 
 export const SLOT_COLORS = [
   "#4a86d4",
@@ -38,7 +22,7 @@ export const BADGE_COLORS = [
   "#38a888",
 ] as const;
 
-export type KeyCell = { row?: number; column?: number } & (
+export type KeyCell =
   | { type: "boot"; stage: number }
   | { type: "feedback"; feedback: Feedback }
   | {
@@ -49,32 +33,7 @@ export type KeyCell = { row?: number; column?: number } & (
       interaction: "activate" | "swap";
     }
   | { type: "empty"; slot: CharacterSlot }
-  | { type: "blank" }
   | { type: "logo"; connection: ConnectionPhase }
-  | {
-      type: "group";
-      available: boolean;
-      ready: number;
-      status: string;
-    }
-  | {
-      type: "follow";
-      available: boolean;
-      ready: number;
-      status: string;
-    }
-  | {
-      type: "assist";
-      available: boolean;
-      ready: number;
-      status: string;
-    }
-  | {
-      type: "use";
-      available: boolean;
-      ready: number;
-      status: string;
-    }
   | {
       type: "broadcast";
       available: boolean;
@@ -85,8 +44,7 @@ export type KeyCell = { row?: number; column?: number } & (
       available: boolean;
       armed: boolean;
       status: string;
-    }
-);
+    };
 
 export interface SwapPlan {
   active: TrusharClient | null;
@@ -127,145 +85,6 @@ export function buildSwapPlan(view: DashboardView): SwapPlan {
   return { active, available, status };
 }
 
-export type GroupInvitee = TrusharClient & { character: string };
-
-export interface GroupPlan {
-  active: TrusharClient | null;
-  invitees: GroupInvitee[];
-  available: boolean;
-  status: string;
-}
-
-export function buildGroupPlan(view: DashboardView): GroupPlan {
-  const snapshot = view.snapshot;
-  const active = activeClient(snapshot);
-  const invitees =
-    snapshot && active
-      ? snapshot.clients.filter(
-          (client): client is GroupInvitee =>
-            client.id !== active.id &&
-            client.input_ready &&
-            typeof client.character === "string" &&
-            client.character.trim().length > 0,
-        )
-      : [];
-  const inputAvailable = Boolean(
-    snapshot?.capabilities.send_text &&
-    snapshot.capabilities.eq_actions.invite_follow,
-  );
-  const available =
-    view.connection.state === "connected" &&
-    inputAvailable &&
-    Boolean(active?.input_ready) &&
-    invitees.length > 0;
-
-  let status: string;
-  if (view.connection.state !== "connected") status = "OFFLINE";
-  else if (!snapshot) status = "NO STATE";
-  else if (!inputAvailable) status = "INPUT UNAVAILABLE";
-  else if (!active) status = "NO ACTIVE BOX";
-  else if (!active.input_ready) status = "ACTIVE NOT READY";
-  else if (invitees.length === 0) status = "NO READY BOXES";
-  else
-    status = `${invitees.length} ${invitees.length === 1 ? "BOX" : "BOXES"} READY`;
-
-  return { active, invitees, available, status };
-}
-
-export type FollowLeader = TrusharClient & { character: string };
-
-export interface FollowPlan {
-  leader: FollowLeader | null;
-  followers: TrusharClient[];
-  available: boolean;
-  status: string;
-}
-
-export function buildFollowPlan(view: DashboardView): FollowPlan {
-  const snapshot = view.snapshot;
-  const active = activeClient(snapshot);
-  const leader =
-    active &&
-    typeof active.character === "string" &&
-    active.character.trim().length > 0
-      ? (active as FollowLeader)
-      : null;
-  const followers =
-    snapshot && leader
-      ? snapshot.clients.filter(
-          (client) => client.id !== leader.id && client.input_ready,
-        )
-      : [];
-  const inputAvailable = Boolean(snapshot?.capabilities.send_text);
-  const available =
-    view.connection.state === "connected" &&
-    inputAvailable &&
-    Boolean(leader) &&
-    followers.length > 0;
-
-  let status: string;
-  if (view.connection.state !== "connected") status = "OFFLINE";
-  else if (!snapshot) status = "NO STATE";
-  else if (!inputAvailable) status = "INPUT UNAVAILABLE";
-  else if (!active) status = "NO ACTIVE BOX";
-  else if (!leader) status = "LEADER UNKNOWN";
-  else if (followers.length === 0) status = "NO READY BOXES";
-  else
-    status = `${followers.length} ${followers.length === 1 ? "BOX" : "BOXES"} READY`;
-
-  return { leader, followers, available, status };
-}
-
-export interface UsePlan {
-  clients: TrusharClient[];
-  available: boolean;
-  status: string;
-}
-
-export function buildUsePlan(view: DashboardView): UsePlan {
-  const clients =
-    view.snapshot?.clients.filter((client) => client.input_ready) ?? [];
-  const capabilityAvailable = Boolean(
-    view.snapshot?.capabilities.eq_actions.use_center_screen,
-  );
-  const available =
-    view.connection.state === "connected" &&
-    capabilityAvailable &&
-    clients.length > 0;
-
-  let status: string;
-  if (view.connection.state !== "connected") status = "OFFLINE";
-  else if (!view.snapshot) status = "NO STATE";
-  else if (!capabilityAvailable) status = "UPDATE STONEMITE";
-  else if (clients.length === 0) status = "NO READY BOXES";
-  else
-    status = `${clients.length} ${clients.length === 1 ? "BOX" : "BOXES"} READY`;
-
-  return { clients, available, status };
-}
-
-export type AssistMain = FollowLeader;
-
-export interface AssistPlan {
-  main: AssistMain | null;
-  assistants: TrusharClient[];
-  available: boolean;
-  status: string;
-}
-
-export function buildAssistPlan(view: DashboardView): AssistPlan {
-  const followPlan = buildFollowPlan(view);
-  return {
-    main: followPlan.leader,
-    assistants: followPlan.followers,
-    available: followPlan.available,
-    status:
-      followPlan.status === "LEADER UNKNOWN"
-        ? "MAIN UNKNOWN"
-        : followPlan.status,
-  };
-}
-
 function activeClient(snapshot: TrusharState | null): TrusharClient | null {
   if (!snapshot) return null;
   return (
@@ -275,39 +94,6 @@ function activeClient(snapshot: TrusharState | null): TrusharClient | null {
     snapshot.clients.find((client) => client.active) ??
     null
   );
-}
-
-export function cellKey(row: number, column: number): string {
-  return `${row},${column}`;
-}
-
-export function buildGrid(view: DashboardView): KeyCell[] {
-  const cells: KeyCell[] = [];
-  for (let row = 0; row < GRID_ROWS; row += 1) {
-    for (let column = 0; column < GRID_COLUMNS; column += 1) {
-      cells.push(buildCell(view, row, column));
-    }
-  }
-  return cells;
-}
-
-export function buildCell(
-  view: DashboardView,
-  row: number,
-  column: number,
-  swapArmed = false,
-): KeyCell {
-  if (!isCoordinate(row, column)) {
-    throw new RangeError(`Grid coordinate is outside 5 by 3: ${row},${column}`);
-  }
-
-  const key = DEFAULT_LAYOUT[row]?.[column];
-  if (!key || key === "blank") return { type: "blank", row, column };
-  return {
-    ...buildKey(view, key, cellKey(row, column), swapArmed),
-    row,
-    column,
-  };
 }
 
 export function buildKey(
@@ -345,15 +131,6 @@ export function buildKey(
   }
 
   switch (key) {
-    case "group": {
-      const plan = buildGroupPlan(view);
-      return {
-        type: "group",
-        available: plan.available,
-        ready: plan.invitees.length,
-        status: plan.status,
-      };
-    }
     case "broadcast":
       return {
         type: "broadcast",
@@ -362,33 +139,6 @@ export function buildKey(
           Boolean(view.snapshot?.broadcast.available),
         enabled: Boolean(view.snapshot?.broadcast.enabled),
       };
-    case "follow": {
-      const plan = buildFollowPlan(view);
-      return {
-        type: "follow",
-        available: plan.available,
-        ready: plan.followers.length,
-        status: plan.status,
-      };
-    }
-    case "use": {
-      const plan = buildUsePlan(view);
-      return {
-        type: "use",
-        available: plan.available,
-        ready: plan.clients.length,
-        status: plan.status,
-      };
-    }
-    case "assist": {
-      const plan = buildAssistPlan(view);
-      return {
-        type: "assist",
-        available: plan.available,
-        ready: plan.assistants.length,
-        status: plan.status,
-      };
-    }
     case "swap": {
       const plan = buildSwapPlan(view);
       return {
@@ -420,15 +170,4 @@ function characterSlot(key: DashboardKey): CharacterSlot | null {
     default:
       return null;
   }
-}
-
-function isCoordinate(row: number, column: number): boolean {
-  return (
-    Number.isInteger(row) &&
-    Number.isInteger(column) &&
-    row >= 0 &&
-    row < GRID_ROWS &&
-    column >= 0 &&
-    column < GRID_COLUMNS
-  );
 }

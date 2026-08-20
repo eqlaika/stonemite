@@ -56,7 +56,7 @@
 
   function applySettings(settings) {
     draft = {
-      targetMode: settings?.targetMode === "selected" ? "selected" : "all",
+      targetMode: normalizeTargetMode(settings?.targetMode),
       windowNumbers: normalizeWindowNumbers(settings?.windowNumbers),
       mapping: typeof settings?.mapping === "string" ? settings.mapping : "",
       label: typeof settings?.label === "string" ? settings.label : "",
@@ -73,6 +73,12 @@
     updateTargetVisibility();
     renderColor();
     renderSelectedIcon();
+  }
+
+  function normalizeTargetMode(value) {
+    return value === "active" || value === "background" || value === "selected"
+      ? value
+      : "all";
   }
 
   function normalizeColor(value) {
@@ -159,7 +165,7 @@
     mappingSelect.value = selected;
     mappingSelect.disabled = mappingBusy || mappingSelect.options.length === 0;
     mappingStatus.textContent = mappingBusy
-      ? "Checking the selected boxes…"
+      ? "Checking the target boxes…"
       : `${mappings.length} shared mapped ${mappings.length === 1 ? "action" : "actions"}`;
     queueSave();
   }
@@ -300,14 +306,13 @@
   }
 
   function targetsPayload() {
-    return draft.targetMode === "all"
-      ? { type: "all_loaded" }
-      : {
-          type: "window_numbers",
-          window_numbers: draft.windowNumbers.length
-            ? draft.windowNumbers
-            : [1],
-        };
+    if (draft.targetMode === "all") return { type: "all_loaded" };
+    if (draft.targetMode === "active") return { type: "active" };
+    if (draft.targetMode === "background") return { type: "background_loaded" };
+    return {
+      type: "window_numbers",
+      window_numbers: draft.windowNumbers.length ? draft.windowNumbers : [1],
+    };
   }
 
   async function ensureSettingsInitialized() {
@@ -429,7 +434,7 @@
   targetModes.forEach((radio) => {
     radio.addEventListener("change", () => {
       if (!radio.checked) return;
-      draft.targetMode = radio.value === "selected" ? "selected" : "all";
+      draft.targetMode = normalizeTargetMode(radio.value);
       updateTargetVisibility();
       markSettingsChanged();
       void requestMappings();

@@ -1,20 +1,14 @@
 # Stonemite Stream Deck plugin
 
-The **Stonemite · EQ boxing** Stream Deck plugin provides customizable controls for Stonemite. It shows the current six-client roster, activates an exact loaded EQ client, swaps the window numbers of the active and selected clients, forms a group, directs ready background clients to follow or assist the active character, sends configurable mapped hotkeys, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting.
-
-The Group key invites every other named, input-ready client from the active box, waits one second, then invokes each invited client's configured **Invite/Follow** EQ action. Boxes without a detected character name or ready targeted-input channel are skipped.
-
-The Follow key identifies the active named leader and concurrently sends `/follow <leader>` to every other input-ready client.
-
-The Assist key replaces the noninteractive STONE tile. It identifies the active named main box and concurrently sends `/assist <main>` to every other input-ready client.
+The **Stonemite · EQ boxing** Stream Deck plugin provides customizable controls for Stonemite. It shows the current six-client roster, activates an exact loaded EQ client, swaps the window numbers of the active and selected clients, invokes configurable mapped EQ actions, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting.
 
 The Swap key replaces the old MITE ambient key. Press **Swap**, then press a character. Stonemite exchanges that character's window number with the currently active character's number without activating a different window. Press Swap again or select the current character to cancel.
 
-The Bcast key explicitly toggles Stonemite broadcasting. Its label stays **Bcast** in both states; a solid red surface means enabled. Group is blue, Follow green, Assist gold, Use orchid, and Swap cyan. Each uses a dark surface while idle and fills with its action color only while running or armed.
+The Bcast key explicitly toggles Stonemite broadcasting. Its label stays **Bcast** in both states; a solid red surface means enabled. Swap uses a dark surface while idle and fills cyan while armed.
 
-The Use key invokes each input-ready client's configured **Use Center Screen** EQ action, including the active client. The Stonemite setup key shows connection recovery state and owns the plugin-wide connection inspector; pressing it does not send a command.
+The Stonemite setup key shows connection recovery state and owns the plugin-wide connection inspector; pressing it does not send a command.
 
-V0 remains an honest control surface rather than a combat-state monitor. Configurable Hotkey tiles can invoke any EQ action whose effective key mapping Stonemite can resolve, including all 11×12 hotbar actions and all 14 spell gems, but the plugin does not invent fixed Burn, Camp, heal, target, buff, cooldown, or outcome policies.
+V0 remains an honest control surface rather than a gameplay automation layer. Each configurable Hotkey tile invokes one EQ action whose effective key mapping Stonemite can resolve, including all 11×12 hotbar actions and all 14 spell gems. Grouping, following, assisting, burns, camps, healing, targeting, and other workflows belong in user-authored EverQuest socials assigned to mapped hotbar positions.
 
 ## Requirements
 
@@ -61,21 +55,27 @@ Linking restarts or changes the user's Stream Deck installation, so it is a deli
 
 The plugin does not currently install a preset profile. Create or open a profile in Stream Deck, then place the controls you want.
 
-Character slots 1–6, Group, Broadcast, Follow, Use, Assist, Swap, Hotkey, and Stonemite setup are separate actions in the Stream Deck action list. Drag any of them to any key position to create your own layout; behavior follows the action rather than its row and column. Duplicate actions are supported. Leave each action image at its default because a user-defined image takes precedence over the plugin's live rendering. The plugin disables user titles for these actions.
+Character slots 1–6, Broadcast, Swap, Hotkey, and Stonemite setup are separate actions in the Stream Deck action list. Drag any of them to any key position to create your own layout; behavior follows the action rather than its row and column. Duplicate actions are supported. Leave each action image at its default because a user-defined image takes precedence over the plugin's live rendering. The plugin disables user titles for these actions.
 
 ## Configure a mapped hotkey
 
 Drag **Hotkey** from the Stonemite action list onto any key, then use its property inspector:
 
-1. Choose **All loaded boxes** or **Selected boxes**. Selected targets are stable Stonemite window numbers 1–6, so they keep following the same box when its character or persona changes.
-2. Choose an EQ action from the shared mapping list. Only actions mapped on every selected loaded box appear. If the action you want is missing, assign its key mapping in EverQuest for each intended box and choose **Refresh mappings**.
+1. Choose **All loaded boxes**, **Active box**, **Background boxes**, or **Selected boxes**. Active and background targets are resolved from authoritative Stonemite state when the key is pressed. Selected targets are stable Stonemite window numbers 1–6, so they keep following the same box when its character or persona changes.
+2. Choose an EQ action from the shared mapping list. Only actions mapped on every currently resolved target appear. If the action you want is missing, assign its key mapping in EverQuest for each intended box and choose **Refresh mappings**.
 3. Enter an optional tile name of up to 14 characters.
 4. Choose a Stonemite palette color or use the custom color picker. The idle icon and running background use this color; running text automatically switches between white and dark for contrast.
 5. Search the icon catalog and select an icon.
 
-Changes save automatically after the selected targets and mapping validate.
+Changes save automatically after the targets and mapping validate.
 
-All-loaded targeting resolves the current loaded roster when the tile is pressed. Before exposing any key, Stonemite requires every requested box to be present, input-ready, free of another targeted sequence, and mapped for the selected action. A predictable failure therefore sends nothing. A process that disappears after delivery starts can still produce an honest failure because input already observed by another EQ client cannot be rolled back.
+All-loaded, active, and background targeting resolve from the current roster when the tile is pressed. Background means every loaded client except the active client. Before exposing any key, Stonemite requires every resolved target to be present, input-ready, free of another targeted sequence, and mapped for the selected action. A predictable failure therefore sends nothing. A process that disappears after delivery starts can still produce an honest failure because input already observed by another EQ client cannot be rolled back.
+
+### Use EverQuest socials
+
+For multi-step behavior, create character-specific socials in EverQuest and place them on the same mapped hotbar position. A Follow or Assist social can target **Background boxes** so the active character does not receive the follower action. A leader or invite social can target **Active box** without hard-coding a Stonemite window number. Character-specific social contents may differ even when every box uses the same `HOTn_m` mapping.
+
+Stonemite invokes only the mapped hotbar position. EverQuest owns the social's commands, timing, and native interruption behavior. Dynamic target modes choose recipients; they do not substitute the active character's name into a social.
 
 ## Connect over LAN
 
@@ -107,7 +107,7 @@ The manifest uses `imgs/plugin/icon.png` and its `@2x` variant for the 256px and
 - **Window numbers swapped** means Stonemite exchanged the active and selected clients' stable numbers and returned authoritative current state; it does not change the active client.
 - **Broadcast on/off** is Stonemite's pushed broadcast state, not a blind local toggle.
 - **Input ready** means that client's compatible trusik input channel acknowledged readiness.
-- Group, Follow, Assist, Use, and Hotkey progress confirm exact-client input delivery only; they do not prove that EQ formed the group, moved a character, changed a target, used the centered object, or performed the mapped action.
+- Hotkey progress confirms mapped-key delivery to the resolved clients only; it does not prove that EQ performed the mapped action or completed an in-game social.
 - The plugin does not observe whether EQ accepted input or performed a resulting in-game action.
 
 Pairing codes, bearer credentials, and raw command traffic are never written to plugin logs.

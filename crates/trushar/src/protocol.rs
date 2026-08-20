@@ -262,6 +262,8 @@ impl From<EqAction> for WireEqAction {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WireEqActionTargets {
     AllLoaded,
+    Active,
+    BackgroundLoaded,
     WindowNumbers { window_numbers: Vec<usize> },
 }
 
@@ -271,6 +273,8 @@ impl TryFrom<WireEqActionTargets> for EqActionTargets {
     fn try_from(value: WireEqActionTargets) -> Result<Self, Self::Error> {
         match value {
             WireEqActionTargets::AllLoaded => Ok(Self::AllLoaded),
+            WireEqActionTargets::Active => Ok(Self::Active),
+            WireEqActionTargets::BackgroundLoaded => Ok(Self::BackgroundLoaded),
             WireEqActionTargets::WindowNumbers { window_numbers } => {
                 Self::window_numbers(window_numbers)
             }
@@ -282,6 +286,8 @@ impl From<EqActionTargets> for WireEqActionTargets {
     fn from(value: EqActionTargets) -> Self {
         match value {
             EqActionTargets::AllLoaded => Self::AllLoaded,
+            EqActionTargets::Active => Self::Active,
+            EqActionTargets::BackgroundLoaded => Self::BackgroundLoaded,
             EqActionTargets::WindowNumbers(window_numbers) => {
                 Self::WindowNumbers { window_numbers }
             }
@@ -832,6 +838,22 @@ mod tests {
                 targets: WireEqActionTargets::AllLoaded,
                 action: WireEqAction::Keymap {
                     mapping: "SIT_STAND".into(),
+                },
+            },
+            ClientMessage::SendEqActionBatch {
+                version: 1,
+                request_id: "twelve".into(),
+                targets: WireEqActionTargets::Active,
+                action: WireEqAction::Keymap {
+                    mapping: "HOT1_1".into(),
+                },
+            },
+            ClientMessage::SendEqActionBatch {
+                version: 1,
+                request_id: "thirteen".into(),
+                targets: WireEqActionTargets::BackgroundLoaded,
+                action: WireEqAction::Keymap {
+                    mapping: "HOT1_2".into(),
                 },
             },
         ];

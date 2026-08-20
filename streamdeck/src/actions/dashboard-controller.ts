@@ -6,17 +6,9 @@ import streamDeck, {
   type WillDisappearEvent,
 } from "@elgato/streamdeck";
 import type { JsonObject, JsonValue } from "@elgato/utils";
-import {
-  buildAssistPlan,
-  buildFollowPlan,
-  buildGroupPlan,
-  buildKey,
-  buildSwapPlan,
-  buildUsePlan,
-  type DashboardKey,
-} from "../state/layout";
-import { DashboardStore } from "../state/store";
 import { renderCell } from "../render/key-svg";
+import { buildKey, buildSwapPlan, type DashboardKey } from "../state/layout";
+import { DashboardStore } from "../state/store";
 import {
   CommandError,
   LOCAL_CONNECTION,
@@ -26,10 +18,8 @@ import {
 } from "../trushar/client";
 import { keyForManifestId } from "./key-definitions";
 
-const GROUP_ACCEPT_DELAY_MS = 1_000;
-const ACTION_FEEDBACK_TIMEOUT_MS = 60_000;
-const ACTIVE_TILE_FRAME_MS = 125;
-const ACTIVE_TILE_FRAME_COUNT = 8;
+const SWAP_TILE_FRAME_MS = 125;
+const SWAP_TILE_FRAME_COUNT = 8;
 
 export interface PluginSettings extends JsonObject {
   address?: string;
@@ -54,10 +44,6 @@ export class DashboardController {
   #credentialEpoch = 0;
   readonly #activationsInFlight = new Set<string>();
   #broadcastInFlight = false;
-  #groupInFlight = false;
-  #followInFlight = false;
-  #assistInFlight = false;
-  #useInFlight = false;
   #swapArmed = false;
   #swapInFlight = false;
 
@@ -154,54 +140,6 @@ export class DashboardController {
         }
         return;
       }
-      if (cell.type === "group" && cell.available && !this.#groupInFlight) {
-        const feedbackKey = key.action.id;
-        this.#groupInFlight = true;
-        this.#setActionFeedback(feedbackKey, "Inviting", "group");
-        try {
-          await this.#formGroup(feedbackKey);
-          this.#store.clearFeedback(feedbackKey);
-        } finally {
-          this.#groupInFlight = false;
-        }
-        return;
-      }
-      if (cell.type === "follow" && cell.available && !this.#followInFlight) {
-        const feedbackKey = key.action.id;
-        this.#followInFlight = true;
-        this.#setActionFeedback(feedbackKey, "Following", "follow");
-        try {
-          await this.#startFollow();
-          this.#store.clearFeedback(feedbackKey);
-        } finally {
-          this.#followInFlight = false;
-        }
-        return;
-      }
-      if (cell.type === "assist" && cell.available && !this.#assistInFlight) {
-        const feedbackKey = key.action.id;
-        this.#assistInFlight = true;
-        this.#setActionFeedback(feedbackKey, "Sending", "assist");
-        try {
-          await this.#startAssist();
-          this.#store.clearFeedback(feedbackKey);
-        } finally {
-          this.#assistInFlight = false;
-        }
-        return;
-      }
-      if (cell.type === "use" && cell.available && !this.#useInFlight) {
-        const feedbackKey = key.action.id;
-        this.#useInFlight = true;
-        this.#setActionFeedback(feedbackKey, "Using", "use");
-        try {
-          await this.#useCenterScreen();
-          this.#store.clearFeedback(feedbackKey);
-        } finally {
-          this.#useInFlight = false;
-        }
-        return;
-      }
       if (
         cell.type === "broadcast" &&
         cell.available &&
@@ -293,148 +231,6 @@ export class DashboardController {
     }
   }
 
-  async #startFollow(): Promise<void> {
-    const plan = buildFollowPlan(this.#store.view);
-    if (!plan.available || !plan.leader) {
-      throw new CommandError(
-        "follow_unavailable",
-        "No named active leader and ready followers are available.",
-      );
-    }
-
-    const command = `/follow ${plan.leader.character.trim()}`;
-    const results = await Promise.allSettled(
-      plan.followers.map((follower) =>
-        this.#client.sendText(follower.id, command, true),
-      ),
-    );
-    const failures = results.filter((result) => result.status === "rejected");
-    if (failures.length > 0) {
-      throw new CommandError(
-        failures.length === results.length ? "follow_failed" : "follow_partial",
-        failures.length === results.length
-          ? "No ready box received the follow command."
-          : "Some ready boxes missed the follow command.",
-      );
-    }
-  }
-
-  async #startAssist(): Promise<void> {
-    const plan = buildAssistPlan(this.#store.view);
-    if (!plan.available || !plan.main) {
-      throw new CommandError(
-        "assist_unavailable",
-        "No named active main box and ready assistants are available.",
-      );
-    }
-
-    const command = `/assist ${plan.main.character.trim()}`;
-    const results = await Promise.allSettled(
-      plan.assistants.map((assistant) =>
-        this.#client.sendText(assistant.id, command, true),
-      ),
-    );
-    const failures = results.filter((result) => result.status === "rejected");
-    if (failures.length > 0) {
-      throw new CommandError(
-        failures.length === results.length ? "assist_failed" : "assist_partial",
-        failures.length === results.length
-          ? "No ready box received the assist command."
-          : "Some ready boxes missed the assist command.",
-      );
-    }
-  }
-
-  async #useCenterScreen(): Promise<void> {
-    const plan = buildUsePlan(this.#store.view);
-    if (!plan.available) {
-      throw new CommandError(
-        "use_unavailable",
-        "No input-ready boxes can receive Use Center Screen.",
-      );
-    }
-
-    const results = await Promise.allSettled(
-      plan.clients.map((client) =>
-        this.#client.sendEqAction(client.id, { type: "use_center_screen" }),
-      ),
-    );
-    const failures = results.filter((result) => result.status === "rejected");
-    if (failures.length > 0) {
-      throw new CommandError(
-        failures.length === results.length ? "use_failed" : "use_partial",
-        failures.length === results.length
-          ? "No ready box received Use Center Screen."
-          : "Some ready boxes missed Use Center Screen.",
-      );
-    }
-  }
-
-  async #formGroup(feedbackKey: string): Promise<void> {
-    const plan = buildGroupPlan(this.#store.view);
-    if (!plan.available || !plan.active) {
-      throw new CommandError(
-        "group_unavailable",
-        "No active box and ready invitees are available.",
-      );
-    }
-
-    const invited: Array<(typeof plan.invitees)[number]> = [];
-    const failures: Error[] = [];
-    for (const invitee of plan.invitees) {
-      try {
-        await this.#client.sendText(
-          plan.active.id,
-          `/invite ${invitee.character.trim()}`,
-          true,
-        );
-        invited.push(invitee);
-      } catch (error) {
-        failures.push(asError(error));
-      }
-    }
-
-    if (invited.length === 0) {
-      throw (
-        failures[0] ??
-        new CommandError("group_unavailable", "No invites were delivered.")
-      );
-    }
-
-    this.#setActionFeedback(feedbackKey, "Waiting 1 sec", "group");
-    await wait(GROUP_ACCEPT_DELAY_MS);
-    this.#setActionFeedback(feedbackKey, "Accepting", "group");
-
-    for (const invitee of invited) {
-      try {
-        await this.#client.sendEqAction(invitee.id, {
-          type: "invite_follow",
-        });
-      } catch (error) {
-        failures.push(asError(error));
-      }
-    }
-
-    if (failures.length > 0) {
-      throw new CommandError(
-        "group_partial",
-        "Some ready boxes missed the group sequence.",
-      );
-    }
-  }
-
-  #setActionFeedback(
-    key: string,
-    message: string,
-    motion: "group" | "follow" | "assist" | "use",
-  ): void {
-    this.#store.setFeedback(
-      key,
-      { kind: "pending", message, motion },
-      ACTION_FEEDBACK_TIMEOUT_MS,
-    );
-  }
-
   async #sendStatus(): Promise<void> {
     const status = this.#store.view.connection;
     await streamDeck.ui.sendToPropertyInspector({
@@ -489,20 +285,15 @@ export class DashboardController {
         key.action.id,
         this.#swapArmed,
       );
-      return (
-        (cell.type === "swap" && cell.armed) ||
-        (cell.type === "feedback" &&
-          cell.feedback.kind === "pending" &&
-          Boolean(cell.feedback.motion))
-      );
+      return cell.type === "swap" && cell.armed;
     });
 
     if (active && !this.#motionTimer) {
       this.#motionFrame = 0;
       this.#motionTimer = setInterval(() => {
-        this.#motionFrame = (this.#motionFrame + 1) % ACTIVE_TILE_FRAME_COUNT;
+        this.#motionFrame = (this.#motionFrame + 1) % SWAP_TILE_FRAME_COUNT;
         this.#queueRender();
-      }, ACTIVE_TILE_FRAME_MS);
+      }, SWAP_TILE_FRAME_MS);
       this.#motionTimer.unref?.();
       return;
     }
@@ -563,46 +354,11 @@ function friendlyError(error: unknown): string {
         return "Timed out";
       case "input_unavailable":
         return "Input not ready";
-      case "eq_action_unbound":
-        return "Action unbound";
-      case "group_unavailable":
-        return "No ready boxes";
-      case "group_partial":
-        return "Partial send";
-      case "follow_unavailable":
-        return "No ready boxes";
-      case "follow_failed":
-        return "Follow failed";
-      case "follow_partial":
-        return "Partial follow";
-      case "assist_unavailable":
-        return "No ready boxes";
-      case "assist_failed":
-        return "Assist failed";
-      case "assist_partial":
-        return "Partial assist";
-      case "use_unavailable":
-        return "No ready boxes";
-      case "use_failed":
-        return "Use failed";
-      case "use_partial":
-        return "Partial use";
       default:
         return error.message;
     }
   }
   return error instanceof Error ? error.message : "Command failed";
-}
-
-function wait(delayMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, delayMs);
-    timer.unref?.();
-  });
-}
-
-function asError(value: unknown): Error {
-  return value instanceof Error ? value : new Error("Command failed");
 }
 
 function isRecord(value: JsonValue): value is Record<string, JsonValue> {

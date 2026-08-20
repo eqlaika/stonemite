@@ -116,7 +116,7 @@ The server sends a complete `state` message immediately after a successful upgra
 
 `broadcast.available` is false when trusik/broadcast support was not initialized. In that state `enabled` is false, `set_broadcast` capability is false, and mutation requests return `broadcast_unavailable`.
 
-`swap_window_numbers` is true when the server supports exchanging the active client's stable window number with one selected client without changing the foreground client. `send_text`, `send_keys`, and the typed delivery ranges under `eq_actions` are available when at least one loaded client has `input_ready: true`. They require `trusik = true` but do not depend on whether broadcasting is enabled. `eq_actions.hotbars`, `hotbar_buttons`, and `spell_gems` are zero when unavailable; otherwise they advertise the supported one-based ranges. `keymap_actions` advertises generic mapping discovery and all-target preflight and remains true while no input channel is currently ready, so clients can distinguish temporary readiness from an older server. Consumers must still check the selected client's `input_ready`; command-time validation is authoritative because readiness, identity, and effective keymaps can change after a snapshot. Clients talking to older servers must treat missing `eq_actions` fields as unsupported.
+`swap_window_numbers` is true when the server supports exchanging the active client's stable window number with one selected client without changing the foreground client. `send_text`, `send_keys`, and the typed delivery ranges under `eq_actions` are available when at least one loaded client has `input_ready: true`. They require `trusik = true` but do not depend on whether broadcasting is enabled. `eq_actions.hotbars`, `hotbar_buttons`, and `spell_gems` are zero when unavailable; otherwise they advertise the supported one-based ranges. `keymap_actions` advertises generic mapping discovery and batch-target preflight and remains true while no input channel is currently ready, so clients can distinguish temporary readiness from an older server. Consumers must still check the selected client's `input_ready`; command-time validation is authoritative because readiness, identity, and effective keymaps can change after a snapshot. Clients talking to older servers must treat missing `eq_actions` fields as unsupported.
 
 ## Client requests
 
@@ -251,7 +251,7 @@ Discover generic mappings shared by the selected loaded boxes:
 }
 ```
 
-Targets are either `{"type":"all_loaded"}` or `{"type":"window_numbers","window_numbers":[...]}` with 1–6 unique Stonemite window numbers from 1 through 6. Discovery intersects the effective mappings of the requested boxes that are currently loaded; requested empty positions are omitted and reported through `window_numbers`. Results are sorted pages of at most 64 mapping names:
+Targets are `{"type":"all_loaded"}`, `{"type":"active"}`, `{"type":"background_loaded"}`, or `{"type":"window_numbers","window_numbers":[...]}` with 1–6 unique Stonemite window numbers from 1 through 6. Active resolves the current foreground EQ client. Background resolves every loaded EQ client except that active client. Dynamic targets are evaluated from authoritative owner-thread state for each request. Discovery intersects the effective mappings of the currently resolved boxes; requested empty numeric positions are omitted and reported through `window_numbers`. A missing active client rejects active or background discovery. Results are sorted pages of at most 64 mapping names:
 
 ```json
 {
@@ -276,7 +276,7 @@ Deliver one action to a preflighted target set:
 }
 ```
 
-For `all_loaded`, Stonemite freezes the current loaded roster when the command reaches its owner thread. For explicit window numbers, every requested position must be loaded. Before exposing any key, Stonemite validates every target's readiness and effective mapping, rejects targets with another sequence in progress, and acquires every trusik input channel. Any preflight or acquisition failure rolls back and sends nothing. Once admitted, target chords start concurrently and success is returned only after all keys are released:
+For `all_loaded`, `active`, and `background_loaded`, Stonemite resolves and freezes the target set when the command reaches its owner thread. Active requires a current active client. Background additionally requires at least one loaded background client. For explicit window numbers, every requested position must be loaded. Before exposing any key, Stonemite validates every target's readiness and effective mapping, rejects targets with another sequence in progress, and acquires every trusik input channel. Any preflight or acquisition failure rolls back and sends nothing. Once admitted, target chords start concurrently and success is returned only after all keys are released:
 
 ```json
 {

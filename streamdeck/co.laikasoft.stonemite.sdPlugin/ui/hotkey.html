@@ -22,6 +22,20 @@
             </span>
           </label>
           <label class="radio-row">
+            <input type="radio" name="target-mode" value="active" />
+            <span>
+              <strong>Active box</strong>
+              <small>The foreground EQ client when the key is pressed.</small>
+            </span>
+          </label>
+          <label class="radio-row">
+            <input type="radio" name="target-mode" value="background" />
+            <span>
+              <strong>Background boxes</strong>
+              <small>Every loaded EQ client except the active box.</small>
+            </span>
+          </label>
+          <label class="radio-row">
             <input type="radio" name="target-mode" value="selected" />
             <span>
               <strong>Selected boxes</strong>
@@ -56,7 +70,9 @@
             Only actions with a key mapping on every targeted loaded box are
             shown. If the action you want isn’t shown, it has no key mapping
             Stonemite can use on at least one target box. Assign it in
-            EverQuest, then refresh mappings.
+            EverQuest, then refresh mappings. For follow, assist, grouping, or
+            other workflows, put a character-specific EQ social in the same
+            mapped hotbar position on each intended box.
           </p>
           <p
             class="mapping-status"

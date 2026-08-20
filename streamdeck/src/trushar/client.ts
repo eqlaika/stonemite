@@ -7,7 +7,6 @@ import {
   type ClientMessage,
   type EqAction,
   type EqActionTargets,
-  type KeyStroke,
   type ServerMessage,
   type Success,
   type TrusharState,
@@ -324,56 +323,6 @@ export class TrusharClient {
         enabled,
       },
       "broadcast_set",
-    );
-  }
-
-  async sendText(
-    clientId: string,
-    text: string,
-    submit = false,
-  ): Promise<Extract<ServerMessage, { type: "result" }>> {
-    return this.#request(
-      {
-        type: "send_text",
-        version: PROTOCOL_VERSION,
-        request_id: this.#nextRequestId("text"),
-        client_id: clientId,
-        text,
-        submit,
-      },
-      "input_delivered",
-    );
-  }
-
-  async sendKeys(
-    clientId: string,
-    strokes: KeyStroke[],
-  ): Promise<Extract<ServerMessage, { type: "result" }>> {
-    return this.#request(
-      {
-        type: "send_keys",
-        version: PROTOCOL_VERSION,
-        request_id: this.#nextRequestId("keys"),
-        client_id: clientId,
-        strokes,
-      },
-      "input_delivered",
-    );
-  }
-
-  async sendEqAction(
-    clientId: string,
-    action: EqAction,
-  ): Promise<Extract<ServerMessage, { type: "result" }>> {
-    return this.#request(
-      {
-        type: "send_eq_action",
-        version: PROTOCOL_VERSION,
-        request_id: this.#nextRequestId("eq-action"),
-        client_id: clientId,
-        action,
-      },
-      "eq_action_delivered",
     );
   }
 

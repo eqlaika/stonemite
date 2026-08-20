@@ -44,7 +44,10 @@ export type EqAction =
   | { type: "keymap"; mapping: string };
 
 export type EqActionTargets =
-  { type: "all_loaded" } | { type: "window_numbers"; window_numbers: number[] };
+  | { type: "all_loaded" }
+  | { type: "active" }
+  | { type: "background_loaded" }
+  | { type: "window_numbers"; window_numbers: number[] };
 
 export interface WireError {
   code: string;

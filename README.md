@@ -22,7 +22,7 @@ A system tray icon appears with access to all settings. Check for updates from t
 
 ## Stream Deck
 
-The separately packaged **Stonemite · EQ boxing** plugin shows a live six-client roster and provides exact-client activation, broadcast control, Group, Follow, Assist, Use, window-number Swap, and configurable mapped Hotkey actions. Same-PC installations connect automatically over loopback; running Stream Deck Desktop on another computer requires one-time LAN pairing.
+The separately packaged **Stonemite · EQ boxing** plugin shows a live six-client roster and provides exact-client activation, broadcast control, window-number Swap, and configurable mapped Hotkey actions for all loaded, active, background, or selected boxes. Multi-step behavior stays in user-authored EverQuest socials. Same-PC installations connect automatically over loopback; running Stream Deck Desktop on another computer requires one-time LAN pairing.
 
 The plugin requires Stream Deck Desktop 7.4+ on macOS 12+ or Windows 10+. It is not bundled with the Stonemite installer or portable ZIP. See [`streamdeck/README.md`](streamdeck/README.md) for setup, development, and packaging details.
 
