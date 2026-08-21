@@ -1,16 +1,16 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use serde::Serialize;
+use tauri::{LogicalPosition, Manager, Position, RunEvent};
 use windows::core::w;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowW, PostMessageW, SendMessageTimeoutW, SetForegroundWindow, SMTO_ABORTIFHUNG, WM_USER,
 };
 
-use eframe::egui;
-
-use crate::config::{Account, Config, PipEdge};
-use crate::crypt;
+use crate::config::Config;
+use crate::settings_model::{SaveOutcome, SettingsDraft, SettingsPayload};
 
 /// Custom message posted to the tray window after settings are saved.
 pub const WM_SETTINGS_CHANGED: u32 = WM_USER + 100;
@@ -23,1428 +23,180 @@ pub const WM_CANCEL_PAIRING: u32 = WM_USER + 103;
 /// Synchronous query for whether the current pairing window is still open.
 pub const WM_PAIRING_STATUS: u32 = WM_USER + 104;
 
-const PIP_EDGE_OPTIONS: &[(&str, PipEdge)] = &[
-    ("Right", PipEdge::Right),
-    ("Left", PipEdge::Left),
-    ("Top", PipEdge::Top),
-    ("Bottom", PipEdge::Bottom),
-];
-
-const SERVER_OPTIONS: &[&str] = &[
-    "",
-    "Agnarr",
-    "Antonius Bayle - Kane Bayle",
-    "Aradune",
-    "Bertoxxulous - Saryn",
-    "Bristlebane - The Tribunal",
-    "Cazic-Thule - Fennin Ro",
-    "Drinal - Maelin Starpyre",
-    "Erollisi Marr - The Nameless",
-    "Fangbreaker",
-    "Firiona Vie",
-    "Luclin - Stromm",
-    "Mangler",
-    "Mischief",
-    "Oakwynd",
-    "Povar - Quellious",
-    "Rizlona",
-    "Teek",
-    "The Rathe - Prexus",
-    "Tormax",
-    "Tunare - The Seventh Hammer",
-    "Vaniki",
-    "Vox",
-    "Xegony - Druzzil Ro",
-    "Yelinak",
-    "Zek",
-];
-
-/// Whether a settings subprocess is currently running.
 static SETTINGS_OPEN: AtomicBool = AtomicBool::new(false);
 
-/// Show the settings window by spawning a subprocess.
-/// If already open, brings the existing window to the foreground.
+/// Show the Tauri settings window in a same-executable subprocess. If it is
+/// already open, bring the existing window to the foreground.
 pub fn show() {
     if SETTINGS_OPEN.load(Ordering::SeqCst) {
-        // Already open — try to focus the existing window.
         unsafe {
-            if let Ok(hwnd) = FindWindowW(None, w!("Stonemite Settings")) {
-                let _ = SetForegroundWindow(hwnd);
+            if let Ok(window) = FindWindowW(None, w!("Stonemite Settings")) {
+                let _ = SetForegroundWindow(window);
             }
         }
         return;
     }
 
-    // Spawn ourselves with --settings flag.
-    let exe = std::env::current_exe().expect("Failed to get current exe path");
-    match std::process::Command::new(&exe).arg("--settings").spawn() {
+    let executable = std::env::current_exe().expect("failed to locate Stonemite executable");
+    match std::process::Command::new(executable)
+        .arg("--settings")
+        .spawn()
+    {
         Ok(mut child) => {
             SETTINGS_OPEN.store(true, Ordering::SeqCst);
-            // Wait for the child to exit in a background thread.
             std::thread::spawn(move || {
                 let _ = child.wait();
                 SETTINGS_OPEN.store(false, Ordering::SeqCst);
             });
         }
-        Err(e) => eprintln!("Failed to open settings: {e}"),
+        Err(error) => eprintln!("Failed to open settings: {error}"),
     }
 }
 
-/// Entry point for the `--settings` subprocess. Runs eframe on the main thread.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PairingSession {
+    code: String,
+    address: String,
+    expires_in_seconds: u64,
+}
+
 pub fn run_standalone() {
-    let cfg = Config::load();
-    let app = SettingsApp::from_config(&cfg);
-
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Stonemite Settings")
-            .with_inner_size([480.0, 400.0])
-            .with_min_inner_size([480.0, 300.0])
-            .with_maximize_button(false)
-            .with_icon(load_app_icon())
-            .with_position(
-                cfg.settings_position
-                    .map(|p| egui::pos2(p[0], p[1]))
-                    .unwrap_or_else(|| centered_position(480.0, 400.0)),
-            ),
-        ..Default::default()
-    };
-
-    let _ = eframe::run_native(
-        "Stonemite Settings",
-        options,
-        Box::new(|cc| {
-            configure_fonts(&cc.egui_ctx);
-            Ok(Box::new(app))
-        }),
-    );
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Tab {
-    General,
-    Accounts,
-    PiP,
-    Notifications,
-    Hotkeys,
-    Broadcasting,
-    About,
-}
-
-/// UI state for an account row (plaintext password for editing).
-struct AccountRow {
-    username: String,
-    password: String,
-    show_password: bool,
-}
-
-fn configure_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    if let Some(data) = load_system_font() {
-        fonts
-            .font_data
-            .insert("system".to_owned(), egui::FontData::from_owned(data).into());
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .insert(0, "system".to_owned());
-    }
-    ctx.set_fonts(fonts);
-}
-
-fn configure_style(ctx: &egui::Context) {
-    let mut style = (*ctx.style()).clone();
-
-    style
-        .text_styles
-        .insert(egui::TextStyle::Body, egui::FontId::proportional(12.0));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Button, egui::FontId::proportional(12.0));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Heading, egui::FontId::proportional(12.0));
-
-    style.spacing.item_spacing = egui::vec2(6.0, 5.0);
-    style.spacing.button_padding = egui::vec2(16.0, 4.0);
-    style.spacing.combo_width = 120.0;
-
-    let r = egui::CornerRadius::same(2);
-    let border = egui::Color32::from_gray(190);
-    let light_fill = egui::Color32::from_gray(251);
-    let hover_fill = egui::Color32::from_gray(243);
-    let active_fill = egui::Color32::from_gray(235);
-    let text = egui::Color32::from_gray(30);
-
-    style.visuals.widgets.inactive.corner_radius = r;
-    style.visuals.widgets.inactive.bg_fill = light_fill;
-    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, border);
-    style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text);
-
-    style.visuals.widgets.hovered.corner_radius = r;
-    style.visuals.widgets.hovered.bg_fill = hover_fill;
-    style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(160));
-    style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, text);
-
-    style.visuals.widgets.active.corner_radius = r;
-    style.visuals.widgets.active.bg_fill = active_fill;
-    style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(140));
-    style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, text);
-
-    style.visuals.widgets.noninteractive.corner_radius = r;
-    style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, text);
-
-    style.visuals.extreme_bg_color = egui::Color32::WHITE;
-
-    style.visuals.selection.bg_fill = egui::Color32::from_rgb(204, 224, 255);
-    style.visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 95, 184));
-
-    ctx.set_style(style);
-}
-
-const FILTER_MODE_OPTIONS: &[(&str, &str)] =
-    &[("Blacklist", "blacklist"), ("Whitelist", "whitelist")];
-
-struct SettingsApp {
-    tab: Tab,
-    eq_dir: String,
-    hide_hotkey: String,
-    capturing_hotkey: bool,
-    broadcast_hotkey: String,
-    capturing_broadcast_hotkey: bool,
-    mouse_clutch_key: String,
-    capturing_mouse_clutch_key: bool,
-    swap_hotkeys: [String; 6],
-    capturing_swap_hotkey: Option<usize>,
-    filter_mode_index: usize,
-    filter_keys_text: String,
-    edge_index: usize,
-    label_height: u32,
-    label_opacity: u32,
-    auto_order: bool,
-    hide_from_alt_tab: bool,
-    tell_visual_enabled: bool,
-    tell_sound_enabled: bool,
-    tell_sound: String,
-    notify_tells: bool,
-    notify_group_invites: bool,
-    notify_raid_invites: bool,
-    notify_resurrections: bool,
-    notify_deaths: bool,
-    toast_enabled: bool,
-    toast_height: u32,
-    toast_duration_tenths: u32,
-    auto_update_check: bool,
-    update_check_interval_days: u32,
-    trusik_enabled: bool,
-    trushar_enabled: bool,
-    initial_trushar_enabled: bool,
-    trushar_lan_enabled: bool,
-    trushar_bind: String,
-    initial_trushar_bind: String,
-    trushar_auth_token: Option<String>,
-    initial_trushar_auth_token: Option<String>,
-    pairing_code: Option<(u32, Instant)>,
-    next_pairing_status_check: Option<Instant>,
-    pairing_error: Option<String>,
-    server_index: usize,
-    accounts: Vec<AccountRow>,
-    last_position: Option<[f32; 2]>,
-    logo: Option<egui::TextureHandle>,
-    avatar: Option<egui::TextureHandle>,
-}
-
-impl SettingsApp {
-    fn from_config(cfg: &Config) -> Self {
-        let edge_index = PIP_EDGE_OPTIONS
-            .iter()
-            .position(|(_, e)| *e == cfg.pip_edge)
-            .unwrap_or(0);
-
-        let filter_mode_index = FILTER_MODE_OPTIONS
-            .iter()
-            .position(|(_, v)| *v == cfg.broadcast_filter_mode)
-            .unwrap_or(0);
-
-        let trushar_lan_enabled = trushar_lan_enabled(&cfg.trushar.bind);
-        let trushar_auth_token = if trushar_lan_enabled
-            && cfg
-                .trushar
-                .auth_token
-                .as_ref()
-                .is_none_or(|token| token.trim().is_empty())
-        {
-            Some(generate_auth_token())
-        } else {
-            cfg.trushar.auth_token.clone()
-        };
-
-        let mut swap_hotkeys = [
-            "Ctrl+F1".to_string(),
-            "Ctrl+F2".to_string(),
-            "Ctrl+F3".to_string(),
-            "Ctrl+F4".to_string(),
-            "Ctrl+F5".to_string(),
-            "Ctrl+F6".to_string(),
-        ];
-        for (i, s) in cfg.swap_hotkeys.iter().enumerate().take(6) {
-            swap_hotkeys[i] = s.clone();
-        }
-
-        Self {
-            tab: Tab::General,
-            eq_dir: cfg.eq_dir.clone(),
-            hide_hotkey: cfg.hide_hotkey.clone(),
-            capturing_hotkey: false,
-            broadcast_hotkey: cfg.broadcast_hotkey.clone(),
-            capturing_broadcast_hotkey: false,
-            mouse_clutch_key: cfg.mouse_clutch_key.clone(),
-            capturing_mouse_clutch_key: false,
-            swap_hotkeys,
-            capturing_swap_hotkey: None,
-            filter_mode_index,
-            filter_keys_text: cfg.broadcast_filter_keys.join(", "),
-            edge_index,
-            label_height: cfg.pip_label_height.unwrap_or(48),
-            label_opacity: cfg.pip_label_opacity.unwrap_or(80),
-            auto_order: cfg.auto_order,
-            hide_from_alt_tab: cfg.hide_from_alt_tab,
-            tell_visual_enabled: cfg.tell_visual_enabled,
-            tell_sound_enabled: cfg.tell_sound_enabled,
-            tell_sound: crate::sound::normalized_id(&cfg.tell_sound).to_owned(),
-            notify_tells: cfg.notify_tells,
-            notify_group_invites: cfg.notify_group_invites,
-            notify_raid_invites: cfg.notify_raid_invites,
-            notify_resurrections: cfg.notify_resurrections,
-            notify_deaths: cfg.notify_deaths,
-            toast_enabled: cfg.toast_enabled,
-            toast_height: cfg.toast_height.unwrap_or(64),
-            toast_duration_tenths: cfg
-                .toast_duration
-                .map(|d| (d * 10.0).round() as u32)
-                .unwrap_or(20),
-            auto_update_check: cfg.auto_update_check,
-            update_check_interval_days: cfg.update_check_interval_days,
-            trusik_enabled: cfg.trusik,
-            trushar_enabled: cfg.trushar.enabled,
-            initial_trushar_enabled: cfg.trushar.enabled,
-            trushar_lan_enabled,
-            trushar_bind: cfg.trushar.bind.clone(),
-            initial_trushar_bind: cfg.trushar.bind.clone(),
-            trushar_auth_token,
-            initial_trushar_auth_token: cfg.trushar.auth_token.clone(),
-            pairing_code: None,
-            next_pairing_status_check: None,
-            pairing_error: None,
-            server_index: {
-                let ini_server = cfg.read_server_from_ini().unwrap_or_default();
-                let server = if ini_server.is_empty() {
-                    &cfg.server
-                } else {
-                    &ini_server
-                };
-                SERVER_OPTIONS
-                    .iter()
-                    .position(|s| *s == server)
-                    .unwrap_or(0)
-            },
-            accounts: cfg
-                .accounts
-                .iter()
-                .map(|a| AccountRow {
-                    username: a.username.clone(),
-                    password: crypt::decrypt(&a.password).unwrap_or_default(),
-                    show_password: false,
-                })
-                .collect(),
-            last_position: None,
-            logo: None,
-            avatar: None,
-        }
-    }
-}
-
-impl Drop for SettingsApp {
-    fn drop(&mut self) {
-        if self.pairing_code.is_some() {
-            cancel_pairing();
-        }
-    }
-}
-
-impl eframe::App for SettingsApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        configure_style(ctx);
-        self.expire_pairing_code();
-        if self.pairing_code.is_some() {
-            ctx.request_repaint_after(Duration::from_secs(1));
-        }
-
-        if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
-            self.last_position = Some([rect.min.x, rect.min.y]);
-        }
-
-        egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.tab, Tab::General, "General");
-                ui.selectable_value(&mut self.tab, Tab::Accounts, "Accounts");
-                ui.selectable_value(&mut self.tab, Tab::PiP, "PiP");
-                ui.selectable_value(&mut self.tab, Tab::Notifications, "Notifications");
-                ui.selectable_value(&mut self.tab, Tab::Hotkeys, "Hotkeys");
-                ui.selectable_value(&mut self.tab, Tab::Broadcasting, "Broadcasting");
-                ui.selectable_value(&mut self.tab, Tab::About, "About");
-            });
-            ui.add_space(2.0);
-        });
-
-        egui::TopBottomPanel::bottom("buttons")
-            .min_height(40.0)
-            .show(ctx, |ui| {
-                ui.add_space(4.0);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Cancel").clicked() {
-                        self.save_position();
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                    if ui.button("  Save  ").clicked() {
-                        let integrations_changed = self.integrations_changed();
-                        let saved = self.save_config();
-                        if saved {
-                            if integrations_changed && offer_restart() {
-                                request_tray_restart();
-                            }
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                    }
-                });
-            });
-
-        egui::CentralPanel::default().show(ctx, |ui| match self.tab {
-            Tab::General => self.general_tab(ui),
-            Tab::Accounts => self.accounts_tab(ui),
-            Tab::PiP => self.pip_tab(ui),
-            Tab::Notifications => self.notifications_tab(ui),
-            Tab::Hotkeys => self.hotkeys_tab(ui),
-            Tab::Broadcasting => self.broadcasting_tab(ui),
-            Tab::About => self.about_tab(ui),
-        });
-    }
-}
-
-impl SettingsApp {
-    fn general_tab(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.add_space(4.0);
-
-            section(ui, "EverQuest directory", |ui| {
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.eq_dir)
-                            .desired_width(ui.available_width() - 88.0),
-                    );
-                    if ui.button("Browse...").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_directory(&self.eq_dir)
-                            .pick_folder()
-                        {
-                            self.eq_dir = path.display().to_string();
-                        }
-                    }
-                });
-            });
-
-            section(ui, "EQ windows", |ui| {
-                ui.checkbox(&mut self.hide_from_alt_tab, "Hide from Alt-Tab");
-            });
-
-            section(ui, "Integrations", |ui| {
-                ui.checkbox(&mut self.trushar_enabled, "Enable integrations");
-                ui.label("Allows trusted apps such as Stream Deck plugins to control Stonemite.");
-
-                ui.add_enabled_ui(self.trushar_enabled, |ui| {
-                    ui.add_space(2.0);
-                    ui.label("Access:");
-                    let previous = self.trushar_lan_enabled;
-                    ui.radio_value(&mut self.trushar_lan_enabled, false, "This PC only");
-                    ui.radio_value(
-                        &mut self.trushar_lan_enabled,
-                        true,
-                        "Devices on my local network",
-                    );
-                    if self.trushar_lan_enabled != previous {
-                        self.apply_lan_access();
-                    }
-                });
-
-                if self.trushar_enabled && self.trushar_lan_enabled {
-                    ui.add_space(2.0);
-                    ui.label("Only pair devices you trust on a private network.");
-                    ui.label("On first restart, allow Private networks if Windows asks.");
-                    let pairing_config_saved = !self.integrations_changed();
-                    if ui
-                        .add_enabled(pairing_config_saved, egui::Button::new("Pair a device"))
-                        .clicked()
-                    {
-                        self.start_pairing();
-                    }
-                    if !pairing_config_saved {
-                        ui.label("Save and restart before pairing a device.");
-                    }
-                    if let Some((code, expires_at)) = self.pairing_code {
-                        let remaining = expires_at.saturating_duration_since(Instant::now());
-                        ui.group(|ui| {
-                            ui.label(format!(
-                                "In Stream Deck, connect to {} and enter:",
-                                integration_address(&self.trushar_bind)
-                            ));
-                            ui.label(
-                                egui::RichText::new(format_pairing_code(code))
-                                    .monospace()
-                                    .size(24.0)
-                                    .strong(),
-                            );
-                            ui.label(format!(
-                                "Expires in {}:{:02}",
-                                remaining.as_secs() / 60,
-                                remaining.as_secs() % 60
-                            ));
-                        });
-                    }
-                    if let Some(error) = &self.pairing_error {
-                        ui.colored_label(egui::Color32::from_rgb(180, 35, 35), error);
-                    }
-                }
-                ui.label("Changes to integration access require a restart.");
-            });
-
-            section(ui, "Toast notifications", |ui| {
-                ui.checkbox(&mut self.toast_enabled, "Enabled");
-                ui.horizontal(|ui| {
-                    ui.label("Height:");
-                    ui.scope(|ui| {
-                        ui.style_mut().visuals.widgets.inactive.bg_fill =
-                            egui::Color32::from_gray(220);
-                        ui.add(egui::Slider::new(&mut self.toast_height, 24..=128).suffix(" px"));
-                    });
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Duration:");
-                    ui.scope(|ui| {
-                        ui.style_mut().visuals.widgets.inactive.bg_fill =
-                            egui::Color32::from_gray(220);
-                        ui.add(
-                            egui::Slider::new(&mut self.toast_duration_tenths, 5..=100)
-                                .custom_formatter(|v, _| format!("{:.1} s", v / 10.0))
-                                .custom_parser(|s| {
-                                    s.trim()
-                                        .trim_end_matches('s')
-                                        .trim()
-                                        .parse::<f64>()
-                                        .ok()
-                                        .map(|v| v * 10.0)
-                                }),
-                        );
-                    });
-                });
-            });
-
-            section(ui, "Updates", |ui| {
-                ui.checkbox(&mut self.auto_update_check, "Check automatically on launch");
-                ui.horizontal(|ui| {
-                    ui.label("Check every:");
-                    ui.scope(|ui| {
-                        ui.style_mut().visuals.widgets.inactive.bg_fill =
-                            egui::Color32::from_gray(220);
-                        ui.add(
-                            egui::Slider::new(&mut self.update_check_interval_days, 1..=30)
-                                .custom_formatter(|v, _| {
-                                    let d = v as u32;
-                                    if d == 1 {
-                                        "1 day".to_string()
-                                    } else {
-                                        format!("{d} days")
-                                    }
-                                })
-                                .custom_parser(|s| {
-                                    s.trim()
-                                        .trim_end_matches("days")
-                                        .trim_end_matches("day")
-                                        .trim()
-                                        .parse::<f64>()
-                                        .ok()
-                                }),
-                        );
-                    });
-                });
-            });
-        });
-    }
-
-    fn accounts_tab(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
-
-        section(ui, "Server", |ui| {
-            let selected = SERVER_OPTIONS[self.server_index];
-            let display = if selected.is_empty() {
-                "None"
-            } else {
-                selected
-            };
-            egui::ComboBox::from_id_salt("server")
-                .selected_text(display)
-                .width(240.0)
-                .show_ui(ui, |ui| {
-                    for (i, name) in SERVER_OPTIONS.iter().enumerate() {
-                        let label = if name.is_empty() { "None" } else { name };
-                        ui.selectable_value(&mut self.server_index, i, label);
-                    }
-                });
-        });
-
-        ui.strong("EverQuest accounts");
-        ui.indent("accounts", |ui| {
-            ui.label("Credentials are encrypted with Windows DPAPI");
-            ui.add_space(4.0);
-        });
-
-        let mut remove_index = None;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.indent("accounts_list", |ui| {
-                for (i, account) in self.accounts.iter_mut().enumerate() {
-                    ui.group(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Username:");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut account.username)
-                                    .desired_width(200.0),
-                            );
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Password:");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut account.password)
-                                    .password(!account.show_password)
-                                    .desired_width(200.0),
-                            );
-                            let toggle_label = if account.show_password {
-                                "Hide"
-                            } else {
-                                "Show"
-                            };
-                            if ui.button(toggle_label).clicked() {
-                                account.show_password = !account.show_password;
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            if ui.button("Remove").clicked() {
-                                remove_index = Some(i);
-                            }
-                        });
-                    });
-                    ui.add_space(2.0);
-                }
-
-                ui.add_space(4.0);
-                if ui.button("Add account").clicked() {
-                    self.accounts.push(AccountRow {
-                        username: String::new(),
-                        password: String::new(),
-                        show_password: false,
-                    });
-                }
-            });
-        });
-
-        if let Some(i) = remove_index {
-            self.accounts.remove(i);
-        }
-    }
-
-    fn pip_tab(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
-
-        section(ui, "Layout", |ui| {
-            ui.label("Screen edge where PiP thumbnails are anchored");
-            egui::ComboBox::from_id_salt("pip_edge")
-                .selected_text(PIP_EDGE_OPTIONS[self.edge_index].0)
-                .show_ui(ui, |ui| {
-                    for (i, (label, _)) in PIP_EDGE_OPTIONS.iter().enumerate() {
-                        ui.selectable_value(&mut self.edge_index, i, *label);
-                    }
-                });
-            ui.checkbox(&mut self.auto_order, "Auto order windows");
-        });
-
-        section(ui, "Labels", |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Height:");
-                ui.scope(|ui| {
-                    ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(220);
-                    ui.add(egui::Slider::new(&mut self.label_height, 24..=64).suffix(" px"));
-                });
-            });
-            ui.horizontal(|ui| {
-                ui.label("Opacity:");
-                ui.scope(|ui| {
-                    ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(220);
-                    ui.add(egui::Slider::new(&mut self.label_opacity, 10..=100).suffix("%"));
-                });
-            });
-        });
-
-        section(ui, "Hide overlay hotkey", |ui| {
-            ui.label("Toggle PiP overlay visibility while EQ is focused");
-            ui.horizontal(|ui| {
-                if let Some(combo) =
-                    hotkey_capture_button(ui, &self.hide_hotkey, &mut self.capturing_hotkey)
-                {
-                    self.hide_hotkey = combo;
-                }
-            });
-        });
-    }
-
-    fn notifications_tab(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
-
-        section(ui, "Box notifications", |ui| {
-            ui.checkbox(
-                &mut self.tell_visual_enabled,
-                "Highlight the background PiP",
-            );
-            ui.label(
-                "Shows the latest event briefly, then leaves its border and one dot per unread event until that box is activated.",
-            );
-
-            ui.add_space(6.0);
-            ui.label("Notify for:");
-            ui.horizontal_wrapped(|ui| {
-                ui.checkbox(&mut self.notify_tells, "Tells");
-                ui.checkbox(&mut self.notify_group_invites, "Group invites");
-                ui.checkbox(&mut self.notify_raid_invites, "Raid invites");
-                ui.checkbox(&mut self.notify_resurrections, "Resurrection offers");
-                ui.checkbox(&mut self.notify_deaths, "Character deaths");
-            });
-            ui.colored_label(
-                ui.visuals().weak_text_color(),
-                "Chat events use the character's configured EQ color. Resurrection and death use Stonemite status colors.",
-            );
-
-            ui.add_space(6.0);
-            ui.checkbox(&mut self.tell_sound_enabled, "Play a sound");
-            ui.add_enabled_ui(self.tell_sound_enabled, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Sound:");
-                    egui::ComboBox::from_id_salt("notification_sound")
-                        .selected_text(crate::sound::label(&self.tell_sound))
-                        .show_ui(ui, |ui| {
-                            for sound in crate::sound::BUILTIN_SOUNDS {
-                                ui.selectable_value(
-                                    &mut self.tell_sound,
-                                    sound.id.to_owned(),
-                                    sound.label,
-                                );
-                            }
-                        });
-                    if ui.button("Preview").clicked() {
-                        let _ = crate::sound::play(&self.tell_sound);
-                    }
-                });
-            });
-            ui.colored_label(
-                ui.visuals().weak_text_color(),
-                "Sounds use EverQuest's bundled default audio-trigger files. The active box plays sound only.",
-            );
-        });
-    }
-
-    fn hotkeys_tab(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
-
-        section(ui, "Swap to window", |ui| {
-            for slot in 0..6 {
-                ui.horizontal(|ui| {
-                    ui.label(format!("Window {}:", slot + 1));
-                    let mut capturing = self.capturing_swap_hotkey == Some(slot);
-                    if let Some(combo) =
-                        hotkey_capture_button(ui, &self.swap_hotkeys[slot], &mut capturing)
-                    {
-                        self.swap_hotkeys[slot] = combo;
-                    }
-                    // Sync the per-slot capturing state back.
-                    if capturing && self.capturing_swap_hotkey != Some(slot) {
-                        self.capturing_swap_hotkey = Some(slot);
-                    } else if !capturing && self.capturing_swap_hotkey == Some(slot) {
-                        self.capturing_swap_hotkey = None;
-                    }
-                });
-            }
-        });
-    }
-
-    fn broadcasting_tab(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.add_space(4.0);
-
-            section(ui, "Broadcast toggle hotkey", |ui| {
-                ui.label("Toggle key broadcasting on/off");
-                ui.horizontal(|ui| {
-                    if let Some(combo) = hotkey_capture_button(
-                        ui,
-                        &self.broadcast_hotkey,
-                        &mut self.capturing_broadcast_hotkey,
-                    ) {
-                        self.broadcast_hotkey = combo;
-                    }
-                });
-            });
-
-            section(ui, "Mouse Clutch", |ui| {
-                if !self.trusik_enabled {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(150, 90, 0),
-                        "Unavailable: enable the DirectInput proxy (trusik) and restart Stonemite and EQ.",
-                    );
-                }
-                ui.label(
-                    "Hold one key to send the complete physical mouse to ready background EQ clients.",
-                );
-                ui.label("Keyboard-emulating foot pedals are supported, including F13–F24.");
-                if self.capturing_broadcast_hotkey {
-                    self.capturing_mouse_clutch_key = false;
-                }
-                ui.horizontal(|ui| {
-                    ui.add_enabled_ui(self.trusik_enabled, |ui| {
-                        if let Some(key) = single_key_capture_button(
-                            ui,
-                            &self.mouse_clutch_key,
-                            &mut self.capturing_mouse_clutch_key,
-                        ) {
-                            self.mouse_clutch_key = key;
-                        }
-                    });
-                    if ui
-                        .add_enabled(
-                            !self.mouse_clutch_key.is_empty(),
-                            egui::Button::new("Clear"),
-                        )
-                        .clicked()
-                    {
-                        self.mouse_clutch_key.clear();
-                        self.capturing_mouse_clutch_key = false;
-                    }
-                });
-                if self.capturing_mouse_clutch_key {
-                    self.capturing_broadcast_hotkey = false;
-                }
-                if let Err(error) = crate::config::validate_mouse_clutch_binding(
-                    &self.mouse_clutch_key,
-                    &self.hide_hotkey,
-                    &self.broadcast_hotkey,
-                    &self.swap_hotkeys,
-                ) {
-                    ui.colored_label(egui::Color32::from_rgb(180, 35, 35), error);
-                }
-                ui.colored_label(
-                    ui.visuals().weak_text_color(),
-                    "Defaults to F13; Clear leaves it unbound. Requires matching EQ window geometry and DPI.",
-                );
-            });
-
-            section(ui, "Key filter", |ui| {
-                ui.label("Choose which keys are broadcast to background windows");
-                ui.horizontal(|ui| {
-                    ui.label("Mode:");
-                    egui::ComboBox::from_id_salt("filter_mode")
-                        .selected_text(FILTER_MODE_OPTIONS[self.filter_mode_index].0)
-                        .show_ui(ui, |ui| {
-                            for (i, (label, _)) in FILTER_MODE_OPTIONS.iter().enumerate() {
-                                ui.selectable_value(&mut self.filter_mode_index, i, *label);
-                            }
-                        });
-                });
-                ui.label("Keys (comma-separated, e.g. Enter, Escape, Tab):");
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.filter_keys_text)
-                        .desired_width(ui.available_width())
-                        .desired_rows(3),
-                );
-            });
-        });
-    }
-
-    fn about_tab(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
-
-        let logo = self.logo.get_or_insert_with(|| {
-            let png_data = include_bytes!("../assets/app.png");
-            let img = image::load_from_memory(png_data).expect("Failed to load logo");
-            let rgba = img.to_rgba8();
-            let (w, h) = rgba.dimensions();
-            let color_image = egui::ColorImage::from_rgba_unmultiplied(
-                [w as usize, h as usize],
-                &rgba.into_raw(),
-            );
-            ui.ctx()
-                .load_texture("logo", color_image, egui::TextureOptions::LINEAR)
-        });
-
-        let logo_size = egui::vec2(48.0, 48.0);
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.strong(format!("Stonemite v{}", env!("CARGO_PKG_VERSION")));
-                ui.add_space(2.0);
-                ui.label("EverQuest multiboxing tool");
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                ui.image(egui::load::SizedTexture::new(logo.id(), logo_size));
-            });
-        });
-
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(4.0);
-
-        let avatar = self.avatar.get_or_insert_with(|| {
-            let png_data = include_bytes!("../assets/author.png");
-            let img = image::load_from_memory(png_data).expect("Failed to load avatar");
-            let rgba = img.to_rgba8();
-            let (w, h) = rgba.dimensions();
-            let color_image = egui::ColorImage::from_rgba_unmultiplied(
-                [w as usize, h as usize],
-                &rgba.into_raw(),
-            );
-            ui.ctx()
-                .load_texture("avatar", color_image, egui::TextureOptions::LINEAR)
-        });
-
-        let avatar_size = egui::vec2(48.0, 48.0);
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.label("Author: Laika");
-                ui.horizontal(|ui| {
-                    ui.label("GitHub:");
-                    ui.hyperlink("https://github.com/eqlaika/stonemite");
-                });
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                let (rect, _) = ui.allocate_exact_size(avatar_size, egui::Sense::hover());
-                let rounding = egui::CornerRadius::same(6);
-                ui.painter().add(
-                    egui::epaint::RectShape::filled(rect, rounding, egui::Color32::WHITE)
-                        .with_texture(
-                            avatar.id(),
-                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        ),
-                );
-            });
-        });
-
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(4.0);
-
-        ui.strong("Contact");
-        ui.label("In-game: /tell Xegony.Laika");
-        ui.horizontal(|ui| {
-            ui.label("Email:");
-            ui.hyperlink_to("laika@laikasoft.co", "mailto:laika@laikasoft.co");
-        });
-    }
-
-    fn integrations_changed(&self) -> bool {
-        self.trushar_enabled != self.initial_trushar_enabled
-            || self.trushar_bind != self.initial_trushar_bind
-            || self.trushar_auth_token != self.initial_trushar_auth_token
-    }
-
-    fn apply_lan_access(&mut self) {
-        cancel_pairing();
-        self.pairing_code = None;
-        self.next_pairing_status_check = None;
-        self.pairing_error = None;
-        let port = integration_port(&self.trushar_bind);
-        if self.trushar_lan_enabled {
-            self.trushar_bind = format!("0.0.0.0:{port}");
-            if self
-                .trushar_auth_token
-                .as_ref()
-                .is_none_or(|token| token.trim().is_empty())
+    let app = tauri::Builder::default()
+        .setup(|app| {
+            let config = Config::load();
+            if let (Some(position), Some(window)) =
+                (config.settings_position, app.get_webview_window("main"))
             {
-                self.trushar_auth_token = Some(generate_auth_token());
+                window.set_position(Position::Logical(LogicalPosition::new(
+                    position[0] as f64,
+                    position[1] as f64,
+                )))?;
             }
-        } else {
-            self.trushar_bind = format!("127.0.0.1:{port}");
-            self.trushar_auth_token = None;
-        }
-    }
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            load_settings,
+            save_settings,
+            choose_eq_directory,
+            preview_notification_sound,
+            begin_pairing,
+            pairing_is_open,
+            cancel_pairing,
+            request_restart,
+            open_external,
+        ])
+        .build(tauri::generate_context!());
 
-    fn start_pairing(&mut self) {
-        let code = generate_pairing_code();
-        if request_pairing(code) {
-            let now = Instant::now();
-            self.pairing_code = Some((code, now + trushar::server::PAIRING_CODE_TTL));
-            self.next_pairing_status_check = Some(now + Duration::from_secs(1));
-            self.pairing_error = None;
-        } else {
-            self.pairing_code = None;
-            self.next_pairing_status_check = None;
-            self.pairing_error =
-                Some("Save and restart Stonemite with local-network access before pairing.".into());
-        }
-    }
-
-    fn expire_pairing_code(&mut self) {
-        let now = Instant::now();
-        if self
-            .pairing_code
-            .is_some_and(|(_, expires_at)| now >= expires_at)
-        {
-            cancel_pairing();
-            self.pairing_code = None;
-            self.next_pairing_status_check = None;
+    let app = match app {
+        Ok(app) => app,
+        Err(error) => {
+            let download = rfd::MessageDialog::new()
+                .set_title("Stonemite Settings could not open")
+                .set_description(format!(
+                    "Stonemite could not start its settings window:\n\n{error}\n\nMicrosoft Edge WebView2 may be missing. Download it now?"
+                ))
+                .set_level(rfd::MessageLevel::Error)
+                .set_buttons(rfd::MessageButtons::YesNo)
+                .show();
+            if download == rfd::MessageDialogResult::Yes {
+                let _ = webbrowser::open("https://go.microsoft.com/fwlink/p/?LinkId=2124703");
+            }
             return;
         }
-        if self
-            .next_pairing_status_check
-            .is_some_and(|next_check| now >= next_check)
-        {
-            if pairing_is_open() {
-                self.next_pairing_status_check = Some(now + Duration::from_secs(1));
-            } else {
-                cancel_pairing();
-                self.pairing_code = None;
-                self.next_pairing_status_check = None;
-            }
+    };
+
+    app.run(|app_handle, event| {
+        if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+            save_window_position(app_handle);
+            cancel_pairing_window();
         }
-    }
-
-    fn save_config(&self) -> bool {
-        if let Err(error) = crate::config::validate_mouse_clutch_binding(
-            &self.mouse_clutch_key,
-            &self.hide_hotkey,
-            &self.broadcast_hotkey,
-            &self.swap_hotkeys,
-        ) {
-            let _ = rfd::MessageDialog::new()
-                .set_title("Invalid Mouse Clutch binding")
-                .set_description(error)
-                .set_level(rfd::MessageLevel::Error)
-                .set_buttons(rfd::MessageButtons::Ok)
-                .show();
-            return false;
-        }
-
-        let existing = Config::load();
-        let filter_keys: Vec<String> = self
-            .filter_keys_text
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        let mut trushar = existing.trushar;
-        trushar.enabled = self.trushar_enabled;
-        trushar.bind = self.trushar_bind.clone();
-        trushar.auth_token = self.trushar_auth_token.clone();
-        let cfg = Config {
-            eq_dir: self.eq_dir.clone(),
-            hide_hotkey: self.hide_hotkey.clone(),
-            pip_edge: PIP_EDGE_OPTIONS[self.edge_index].1,
-            pip_strip_width: existing.pip_strip_width,
-            pip_positions: existing.pip_positions,
-            snap_grid: existing.snap_grid,
-            trusik: existing.trusik,
-            swap_hotkeys: self.swap_hotkeys.to_vec(),
-            settings_position: self.last_position,
-            tell_visual_enabled: self.tell_visual_enabled,
-            tell_sound_enabled: self.tell_sound_enabled,
-            tell_sound: crate::sound::normalized_id(&self.tell_sound).to_owned(),
-            notify_tells: self.notify_tells,
-            notify_group_invites: self.notify_group_invites,
-            notify_raid_invites: self.notify_raid_invites,
-            notify_resurrections: self.notify_resurrections,
-            notify_deaths: self.notify_deaths,
-            broadcast_hotkey: self.broadcast_hotkey.clone(),
-            mouse_clutch_key: self.mouse_clutch_key.clone(),
-            broadcast_filter_mode: FILTER_MODE_OPTIONS[self.filter_mode_index].1.to_string(),
-            broadcast_filter_keys: filter_keys,
-            auto_update_check: self.auto_update_check,
-            update_check_interval_days: self.update_check_interval_days,
-            last_update_check: existing.last_update_check,
-            accounts: self
-                .accounts
-                .iter()
-                .filter(|a| !a.username.is_empty())
-                .filter_map(|a| {
-                    crypt::encrypt(&a.password).ok().map(|encrypted| Account {
-                        username: a.username.clone(),
-                        password: encrypted,
-                    })
-                })
-                .collect(),
-            pip_label_height: Some(self.label_height),
-            pip_label_opacity: Some(self.label_opacity),
-            auto_order: self.auto_order,
-            hide_from_alt_tab: self.hide_from_alt_tab,
-            toast_enabled: self.toast_enabled,
-            toast_height: Some(self.toast_height),
-            toast_duration: Some(self.toast_duration_tenths as f32 / 10.0),
-            server: SERVER_OPTIONS[self.server_index].to_string(),
-            trushar,
-        };
-        cfg.write_server_to_ini();
-        if let Err(error) = cfg.save() {
-            eprintln!("Failed to save config: {error}");
-            let _ = rfd::MessageDialog::new()
-                .set_title("Could not save settings")
-                .set_description(format!("Stonemite could not save its settings:\n\n{error}"))
-                .set_level(rfd::MessageLevel::Error)
-                .set_buttons(rfd::MessageButtons::Ok)
-                .show();
-            return false;
-        }
-
-        notify_tray();
-        true
-    }
-
-    fn save_position(&self) {
-        let mut cfg = Config::load();
-        cfg.settings_position = self.last_position;
-        let _ = cfg.save();
-    }
-}
-
-/// Map an egui Key to the config key name used by `config::parse_vk_name`.
-fn egui_key_to_config_name(key: &egui::Key) -> Option<&'static str> {
-    use egui::Key::*;
-    match key {
-        F1 => Some("F1"),
-        F2 => Some("F2"),
-        F3 => Some("F3"),
-        F4 => Some("F4"),
-        F5 => Some("F5"),
-        F6 => Some("F6"),
-        F7 => Some("F7"),
-        F8 => Some("F8"),
-        F9 => Some("F9"),
-        F10 => Some("F10"),
-        F11 => Some("F11"),
-        F12 => Some("F12"),
-        F13 => Some("F13"),
-        F14 => Some("F14"),
-        F15 => Some("F15"),
-        F16 => Some("F16"),
-        F17 => Some("F17"),
-        F18 => Some("F18"),
-        F19 => Some("F19"),
-        F20 => Some("F20"),
-        F21 => Some("F21"),
-        F22 => Some("F22"),
-        F23 => Some("F23"),
-        F24 => Some("F24"),
-        Insert => Some("Insert"),
-        Delete => Some("Delete"),
-        Home => Some("Home"),
-        End => Some("End"),
-        PageUp => Some("PageUp"),
-        PageDown => Some("PageDown"),
-        A => Some("A"),
-        B => Some("B"),
-        C => Some("C"),
-        D => Some("D"),
-        E => Some("E"),
-        F => Some("F"),
-        G => Some("G"),
-        H => Some("H"),
-        I => Some("I"),
-        J => Some("J"),
-        K => Some("K"),
-        L => Some("L"),
-        M => Some("M"),
-        N => Some("N"),
-        O => Some("O"),
-        P => Some("P"),
-        Q => Some("Q"),
-        R => Some("R"),
-        S => Some("S"),
-        T => Some("T"),
-        U => Some("U"),
-        V => Some("V"),
-        W => Some("W"),
-        X => Some("X"),
-        Y => Some("Y"),
-        Z => Some("Z"),
-        Num0 => Some("0"),
-        Num1 => Some("1"),
-        Num2 => Some("2"),
-        Num3 => Some("3"),
-        Num4 => Some("4"),
-        Num5 => Some("5"),
-        Num6 => Some("6"),
-        Num7 => Some("7"),
-        Num8 => Some("8"),
-        Num9 => Some("9"),
-        Space => Some("Space"),
-        Tab => Some("Tab"),
-        Minus => Some("Minus"),
-        Plus => Some("Plus"),
-        Equals => Some("Equals"),
-        Backtick => Some("Backtick"),
-        OpenBracket => Some("OpenBracket"),
-        CloseBracket => Some("CloseBracket"),
-        Backslash => Some("Backslash"),
-        Semicolon => Some("Semicolon"),
-        Quote => Some("Quote"),
-        Comma => Some("Comma"),
-        Period => Some("Period"),
-        Slash => Some("Slash"),
-        _ => None,
-    }
-}
-
-/// Capture one unmodified key for Mouse Clutch. Escape cancels capture.
-fn single_key_capture_button(
-    ui: &mut egui::Ui,
-    current_value: &str,
-    capturing: &mut bool,
-) -> Option<String> {
-    if *capturing {
-        let response = ui.add(egui::Button::new(
-            egui::RichText::new("Press one key (no modifiers)...").italics(),
-        ));
-        let pressed = ui.input(|input| {
-            input.events.iter().find_map(|event| {
-                if let egui::Event::Key {
-                    key,
-                    pressed: true,
-                    modifiers,
-                    ..
-                } = event
-                {
-                    if *key == egui::Key::Escape {
-                        return Some(None);
-                    }
-                    if modifiers.ctrl || modifiers.alt || modifiers.shift {
-                        return None;
-                    }
-                    egui_key_to_config_name(key).map(|name| Some(name.to_owned()))
-                } else {
-                    None
-                }
-            })
-        });
-        match pressed {
-            Some(Some(key)) => {
-                *capturing = false;
-                Some(key)
-            }
-            Some(None) => {
-                *capturing = false;
-                None
-            }
-            None => {
-                response.request_focus();
-                None
-            }
-        }
-    } else {
-        let label = if current_value.is_empty() {
-            "Unbound"
-        } else {
-            current_value
-        };
-        if ui.button(label).clicked() {
-            *capturing = true;
-        }
-        ui.colored_label(ui.visuals().weak_text_color(), "Click to change");
-        None
-    }
-}
-
-/// Render a hotkey capture button. When `capturing` is true, waits for a key
-/// combo (Escape cancels). Returns `Some(combo)` when a combo is captured.
-fn hotkey_capture_button(
-    ui: &mut egui::Ui,
-    current_value: &str,
-    capturing: &mut bool,
-) -> Option<String> {
-    if *capturing {
-        let mods = ui.input(|i| i.modifiers);
-        let mut parts = Vec::new();
-        if mods.ctrl {
-            parts.push("Ctrl");
-        }
-        if mods.alt {
-            parts.push("Alt");
-        }
-        if mods.shift {
-            parts.push("Shift");
-        }
-
-        let label = if parts.is_empty() {
-            "Press a key combo...".to_string()
-        } else {
-            format!("{}+...", parts.join("+"))
-        };
-
-        let btn = egui::Button::new(egui::RichText::new(&label).italics());
-        let resp = ui.add(btn);
-
-        let pressed = ui.input(|i| {
-            i.events.iter().find_map(|e| {
-                if let egui::Event::Key {
-                    key,
-                    pressed: true,
-                    modifiers,
-                    ..
-                } = e
-                {
-                    if *key == egui::Key::Escape {
-                        return Some(None);
-                    }
-                    egui_key_to_config_name(key).map(|name| {
-                        let mut combo = Vec::new();
-                        if modifiers.ctrl {
-                            combo.push("Ctrl");
-                        }
-                        if modifiers.alt {
-                            combo.push("Alt");
-                        }
-                        if modifiers.shift {
-                            combo.push("Shift");
-                        }
-                        combo.push(name);
-                        Some(combo.join("+"))
-                    })
-                } else {
-                    None
-                }
-            })
-        });
-
-        match pressed {
-            Some(Some(combo)) => {
-                *capturing = false;
-                return Some(combo);
-            }
-            Some(None) => {
-                *capturing = false;
-            }
-            None => {
-                resp.request_focus();
-            }
-        }
-        None
-    } else {
-        let label = if current_value.is_empty() {
-            "None"
-        } else {
-            current_value
-        };
-        if ui.button(label).clicked() {
-            *capturing = true;
-        }
-        ui.colored_label(ui.visuals().weak_text_color(), "Click to change");
-        None
-    }
-}
-
-fn section(ui: &mut egui::Ui, heading: &str, content: impl FnOnce(&mut egui::Ui)) {
-    ui.strong(heading);
-    ui.indent(heading, |ui| {
-        content(ui);
     });
-    ui.add_space(6.0);
 }
 
-fn load_app_icon() -> egui::IconData {
-    let ico_data = include_bytes!("../assets/app.ico");
-    let count = u16::from_le_bytes([ico_data[4], ico_data[5]]) as usize;
-    let mut best = (0usize, 0u32);
-    for i in 0..count {
-        let off = 6 + i * 16;
-        let w = if ico_data[off] == 0 {
-            256
-        } else {
-            ico_data[off] as u32
-        };
-        if w > best.1 {
-            best = (i, w);
-        }
+#[tauri::command]
+fn load_settings() -> Result<SettingsPayload, String> {
+    SettingsPayload::load()
+}
+
+#[tauri::command]
+fn save_settings(draft: SettingsDraft) -> Result<SaveOutcome, String> {
+    let outcome = draft.save()?;
+    notify_tray();
+    Ok(outcome)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn choose_eq_directory(current_directory: String) -> Option<String> {
+    rfd::FileDialog::new()
+        .set_directory(current_directory)
+        .pick_folder()
+        .map(|path| path.display().to_string())
+}
+
+#[tauri::command]
+fn preview_notification_sound(sound: String) -> Result<(), String> {
+    crate::sound::play(&sound)
+        .then_some(())
+        .ok_or_else(|| "Stonemite could not play that notification sound".to_owned())
+}
+
+#[tauri::command]
+fn begin_pairing() -> Result<PairingSession, String> {
+    let code = generate_pairing_code();
+    if !request_pairing_window(code) {
+        return Err(
+            "Save and restart Stonemite with local-network access before pairing.".to_owned(),
+        );
     }
-    let entry_off = 6 + best.0 * 16;
-    let data_size = u32::from_le_bytes([
-        ico_data[entry_off + 8],
-        ico_data[entry_off + 9],
-        ico_data[entry_off + 10],
-        ico_data[entry_off + 11],
-    ]) as usize;
-    let data_offset = u32::from_le_bytes([
-        ico_data[entry_off + 12],
-        ico_data[entry_off + 13],
-        ico_data[entry_off + 14],
-        ico_data[entry_off + 15],
-    ]) as usize;
-    let png_data = &ico_data[data_offset..data_offset + data_size];
+    let config = Config::load();
+    Ok(PairingSession {
+        code: format_pairing_code(code),
+        address: crate::settings_model::integration_address(&config.trushar.bind),
+        expires_in_seconds: trushar::server::PAIRING_CODE_TTL.as_secs(),
+    })
+}
 
-    if let Ok(img) = image::load_from_memory(png_data) {
-        let rgba = img.to_rgba8();
-        let (w, h) = rgba.dimensions();
-        return egui::IconData {
-            rgba: rgba.into_raw(),
-            width: w,
-            height: h,
-        };
+#[tauri::command]
+fn pairing_is_open() -> bool {
+    send_tray_request(WM_PAIRING_STATUS, WPARAM(0)) == Some(1)
+}
+
+#[tauri::command]
+fn cancel_pairing() {
+    cancel_pairing_window();
+}
+
+#[tauri::command]
+fn request_restart() {
+    request_tray_restart();
+}
+
+#[tauri::command]
+fn open_external(target: String) -> Result<(), String> {
+    const PROJECT_URL: &str = "https://github.com/eqlaika/stonemite";
+    const EMAIL_URL: &str = "mailto:laika@laikasoft.co";
+    if target != PROJECT_URL && target != EMAIL_URL {
+        return Err("That external destination is not allowed".to_owned());
     }
-    egui::IconData {
-        rgba: vec![0; 4],
-        width: 1,
-        height: 1,
-    }
+    webbrowser::open(&target)
+        .map(|_| ())
+        .map_err(|error| format!("Windows could not open the link: {error}"))
 }
 
-fn load_system_font() -> Option<Vec<u8>> {
-    let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".to_string());
-    let fonts_dir = std::path::Path::new(&windir).join("Fonts");
-    for filename in ["SegUIVar.ttf", "segoeui.ttf", "tahoma.ttf"] {
-        if let Ok(data) = std::fs::read(fonts_dir.join(filename)) {
-            return Some(data);
-        }
-    }
-    None
-}
-
-fn centered_position(width: f32, height: f32) -> egui::Pos2 {
-    use windows::Win32::UI::HiDpi::GetDpiForSystem;
-    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
-    unsafe {
-        let dpi = GetDpiForSystem() as f32;
-        let scale = dpi / 96.0;
-        let sw = GetSystemMetrics(SM_CXSCREEN) as f32 / scale;
-        let sh = GetSystemMetrics(SM_CYSCREEN) as f32 / scale;
-        egui::pos2((sw - width) / 2.0, (sh - height) / 2.0)
-    }
-}
-
-fn trushar_lan_enabled(bind: &str) -> bool {
-    bind.parse::<std::net::SocketAddr>()
-        .is_ok_and(|address| !address.ip().is_loopback())
-}
-
-fn integration_port(bind: &str) -> u16 {
-    bind.parse::<std::net::SocketAddr>()
-        .map_or(19_720, |address| address.port())
-}
-
-fn generate_auth_token() -> String {
-    format!(
-        "{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    )
+fn save_window_position(app_handle: &tauri::AppHandle) {
+    let Some(window) = app_handle.get_webview_window("main") else {
+        return;
+    };
+    let (Ok(position), Ok(scale_factor)) = (window.outer_position(), window.scale_factor()) else {
+        return;
+    };
+    let mut config = Config::load();
+    config.settings_position = Some([
+        position.x as f32 / scale_factor as f32,
+        position.y as f32 / scale_factor as f32,
+    ]);
+    let _ = config.save();
 }
 
 fn generate_pairing_code() -> u32 {
@@ -1454,17 +206,6 @@ fn generate_pairing_code() -> u32 {
 
 fn format_pairing_code(code: u32) -> String {
     format!("{:03} {:03}", code / 1_000, code % 1_000)
-}
-
-fn integration_address(bind: &str) -> String {
-    let hostname = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "this-pc".into());
-    let hostname = hostname.to_ascii_lowercase();
-    let hostname = if hostname.ends_with(".local") {
-        hostname
-    } else {
-        format!("{hostname}.local")
-    };
-    format!("{hostname}:{}", integration_port(bind))
 }
 
 fn send_tray_request(message: u32, wparam: WPARAM) -> Option<usize> {
@@ -1477,39 +218,23 @@ fn send_tray_request(message: u32, wparam: WPARAM) -> Option<usize> {
             wparam,
             LPARAM(0),
             SMTO_ABORTIFHUNG,
-            1_000,
+            Duration::from_secs(1).as_millis() as u32,
             Some(&mut result),
         );
         (sent.0 != 0).then_some(result)
     }
 }
 
-fn request_pairing(code: u32) -> bool {
+fn request_pairing_window(code: u32) -> bool {
     send_tray_request(WM_BEGIN_PAIRING, WPARAM(code as usize)) == Some(1)
 }
 
-fn pairing_is_open() -> bool {
-    send_tray_request(WM_PAIRING_STATUS, WPARAM(0)) == Some(1)
-}
-
-fn cancel_pairing() {
+fn cancel_pairing_window() {
     unsafe {
         if let Ok(tray) = FindWindowW(w!("StonemiteTrayClass"), w!("Stonemite")) {
             let _ = PostMessageW(tray, WM_CANCEL_PAIRING, WPARAM(0), LPARAM(0));
         }
     }
-}
-
-fn offer_restart() -> bool {
-    rfd::MessageDialog::new()
-        .set_title("Restart Stonemite?")
-        .set_description(
-            "Integration access changes take effect after restarting Stonemite. Restart now?",
-        )
-        .set_level(rfd::MessageLevel::Info)
-        .set_buttons(rfd::MessageButtons::YesNo)
-        .show()
-        == rfd::MessageDialogResult::Yes
 }
 
 fn notify_tray() {
@@ -1538,18 +263,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn integration_access_preserves_ports_and_formats_pairing_codes() {
-        assert!(!trushar_lan_enabled("127.0.0.1:19720"));
-        assert!(trushar_lan_enabled("0.0.0.0:19720"));
-        assert!(trushar_lan_enabled("192.168.1.20:12345"));
-        assert_eq!(integration_port("192.168.1.20:12345"), 12_345);
+    fn pairing_codes_keep_all_leading_zeroes() {
         assert_eq!(format_pairing_code(4_271), "004 271");
         assert_eq!(format_pairing_code(999_999), "999 999");
-    }
-
-    #[test]
-    fn mouse_clutch_capture_supports_extended_function_keys() {
-        assert_eq!(egui_key_to_config_name(&egui::Key::F13), Some("F13"));
-        assert_eq!(egui_key_to_config_name(&egui::Key::F24), Some("F24"));
     }
 }

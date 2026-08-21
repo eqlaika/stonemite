@@ -2,6 +2,8 @@
 /dist
 /streamdeck/node_modules/
 /streamdeck/dist/
+/settings-ui/node_modules/
+/settings-ui/dist/
 /streamdeck/co.laikasoft.stonemite.sdPlugin/bin/
 /streamdeck/co.laikasoft.stonemite.sdPlugin/logs/
 /streamdeck/src/render/assets.generated.ts

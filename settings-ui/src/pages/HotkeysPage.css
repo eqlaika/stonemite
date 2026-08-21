@@ -1,0 +1,17 @@
+.window-hotkey-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.window-hotkey-list .field-row {
+  min-height: 51px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+.window-hotkey-list .field-row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}

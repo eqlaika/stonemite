@@ -44,11 +44,13 @@ fn main() {
     }
     println!("cargo:rerun-if-changed={}", dll_src.display());
 
-    // Embed app icon as Windows resource (shows in taskbar, alt-tab, explorer)
-    let mut res = winres::WindowsResource::new();
-    res.set_icon("assets/app.ico");
-    // Enable ComCtl32 v6 for modern themed controls in dialogs.
-    res.set_manifest(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    // Let tauri-build generate the single Windows resource object so its ACL
+    // metadata, icon, version information, and our existing DPI manifest cannot
+    // conflict at link time.
+    let windows = tauri_build::WindowsAttributes::new()
+        .window_icon_path("assets/app.ico")
+        .app_manifest(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <dependency>
     <dependentAssembly>
@@ -62,6 +64,8 @@ fn main() {
       <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
     </windowsSettings>
   </application>
-</assembly>"#);
-    res.compile().expect("Failed to compile Windows resources");
+</assembly>"#,
+        );
+    let attributes = tauri_build::Attributes::new().windows_attributes(windows);
+    tauri_build::try_build(attributes).expect("failed to prepare Tauri settings resources");
 }

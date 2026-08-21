@@ -14,6 +14,7 @@ mod eq_windows;
 mod log_watcher;
 mod overlay;
 mod settings_dialog;
+mod settings_model;
 mod sound;
 mod tray;
 mod trusik_deploy;
@@ -139,8 +140,7 @@ fn main() {
         return;
     }
 
-    // `--settings` flag: run the settings dialog as a standalone window and exit.
-    // The tray app spawns us with this flag so eframe gets a clean main thread.
+    // `--settings` runs the Tauri settings window as an isolated subprocess.
     if args.iter().any(|arg| arg == "--settings") {
         settings_dialog::run_standalone();
         return;

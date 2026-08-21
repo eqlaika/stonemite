@@ -1,0 +1,110 @@
+.accounts-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.account-row {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.account-row + .account-row {
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.account-row fieldset {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 11px;
+  margin: 0;
+  padding: 0 0 18px;
+  border: 0;
+}
+
+.account-row legend {
+  margin: 0 0 2px;
+  padding: 0;
+  font-weight: 680;
+}
+
+.account-field {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 78px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.account-field > label {
+  font-weight: 620;
+}
+
+.account-field > .text-input,
+.account-password-control {
+  width: 100%;
+  max-width: none;
+}
+
+.account-password-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-password-control .text-input {
+  width: auto;
+  min-width: 0;
+  flex: 1;
+}
+
+.account-password-control .button {
+  min-width: 62px;
+  flex: none;
+}
+
+.account-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.account-remove {
+  color: var(--muted);
+}
+
+.account-remove:hover:not(:disabled) {
+  color: var(--error);
+  background: var(--danger-hover);
+  border-color: transparent;
+}
+
+.account-add-row {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 560px) {
+  .account-field {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}
+
+@media (forced-colors: active) {
+  .account-remove:hover:not(:disabled) {
+    color: ButtonText;
+  }
+}

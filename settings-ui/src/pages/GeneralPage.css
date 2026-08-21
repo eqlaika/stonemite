@@ -1,0 +1,182 @@
+.directory-control {
+  display: flex;
+  width: min(100%, 430px);
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.directory-control .text-input {
+  width: auto;
+  min-width: 0;
+  flex: 1;
+}
+
+.directory-control .button {
+  flex: none;
+}
+
+.general-error {
+  margin: 0;
+  padding: 9px 11px;
+  color: var(--error);
+  background: var(--error-soft);
+  border-left: 3px solid var(--error);
+  border-radius: 5px;
+  font-size: 12px;
+}
+
+.integration-access {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.integration-access legend {
+  margin-bottom: 6px;
+  padding: 0;
+  font-weight: 620;
+}
+
+.integration-access label {
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.integration-access input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.integration-access label span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.integration-access label strong {
+  font-weight: 620;
+}
+
+.integration-access label small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.integration-access:disabled,
+.general-dependent-controls:disabled {
+  opacity: 0.55;
+}
+
+.pairing-area {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 13px;
+  border-left: 3px solid var(--accent);
+}
+
+.pairing-action {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.pairing-blocked {
+  margin: 0;
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pairing-session {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 16px;
+  padding: 10px 12px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.pairing-session > span:first-child {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
+.pairing-code {
+  align-self: end;
+  color: var(--text);
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  line-height: 1.3;
+}
+
+.pairing-countdown {
+  align-self: end;
+  padding-bottom: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.general-inline-status .inline-status {
+  max-width: none;
+  margin: 0;
+}
+
+.general-dependent-controls {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+@media (max-width: 560px) {
+  .directory-control {
+    width: 100%;
+  }
+
+  .pairing-action {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .pairing-session {
+    grid-template-columns: 1fr;
+  }
+
+  .pairing-session > span:first-child {
+    grid-column: auto;
+  }
+
+  .pairing-countdown {
+    justify-self: start;
+    text-align: left;
+  }
+}
+
+@media (forced-colors: active) {
+  .pairing-area {
+    border-left-color: Highlight;
+  }
+}

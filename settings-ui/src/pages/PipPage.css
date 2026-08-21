@@ -1,0 +1,12 @@
+.pip-hotkey-control {
+  display: flex;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+@media (max-width: 560px) {
+  .pip-hotkey-control {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}

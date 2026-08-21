@@ -62,12 +62,6 @@ pub fn normalized_id(id: &str) -> &'static str {
     find(id).map_or(DEFAULT_SOUND_ID, |sound| sound.id)
 }
 
-pub fn label(id: &str) -> &'static str {
-    find(id)
-        .or_else(|| find(DEFAULT_SOUND_ID))
-        .map_or("Tell", |sound| sound.label)
-}
-
 pub fn play(id: &str) -> bool {
     let Some(sound) = find(normalized_id(id)) else {
         return false;
@@ -111,7 +105,6 @@ mod tests {
     fn invalid_sound_selection_falls_back_to_tell() {
         assert_eq!(normalized_id("not-bundled.wav"), DEFAULT_SOUND_ID);
         assert_eq!(normalized_id("TELL2.WAV"), "tell2.wav");
-        assert_eq!(label("not-bundled.wav"), "Tell");
     }
 
     #[cfg(target_os = "windows")]

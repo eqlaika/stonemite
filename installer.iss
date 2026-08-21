@@ -34,6 +34,52 @@ Name: "autostart"; Description: "Start Stonemite when Windows starts"; Flags: un
 Filename: "{app}\stonemite.exe"; Description: "Launch Stonemite"; Flags: nowait postinstall skipifsilent
 
 [Code]
+const
+  WebView2ClientKey = 'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+  WebView2BootstrapperUrl = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703';
+
+function WebView2VersionAtRoot(RootKey: Integer): Boolean;
+var
+  Version: String;
+begin
+  Result := RegQueryStringValue(RootKey, WebView2ClientKey, 'pv', Version) and
+    (Version <> '') and (CompareText(Version, '0.0.0.0') <> 0);
+end;
+
+function IsWebView2Installed(): Boolean;
+begin
+  Result := WebView2VersionAtRoot(HKCU) or WebView2VersionAtRoot(HKLM32);
+  if IsWin64 and not Result then
+    Result := WebView2VersionAtRoot(HKLM64);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  BootstrapperPath: String;
+  ResultCode: Integer;
+begin
+  Result := '';
+  if IsWebView2Installed() then
+    Exit;
+
+  try
+    BootstrapperPath := ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe');
+    ResultCode := -1;
+    DownloadTemporaryFile(
+      WebView2BootstrapperUrl,
+      'MicrosoftEdgeWebview2Setup.exe',
+      '',
+      nil);
+    if not Exec(BootstrapperPath, '/silent /install', '', SW_SHOW,
+      ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
+      Result := Format('Microsoft Edge WebView2 could not be installed (exit code %d). ' +
+        'Stonemite was not installed. Check your internet connection and try again.', [ResultCode]);
+  except
+    Result := 'Microsoft Edge WebView2 could not be downloaded. ' +
+      GetExceptionMessage + ' Check your internet connection and try again.';
+  end;
+end;
+
 function GetEqDirFromConfig(): String;
 var
   ConfigPath: String;

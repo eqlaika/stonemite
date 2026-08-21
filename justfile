@@ -8,13 +8,25 @@ zip_name := "stonemite-x86_64-pc-windows-msvc.zip"
 default:
     @just --list
 
+# Install the settings frontend dependencies when needed
+settings-ui-deps:
+    @if (-not (Test-Path "settings-ui/node_modules")) { npm --prefix settings-ui ci }
+
+# Build and test the embedded settings frontend
+settings-ui-build: settings-ui-deps
+    npm --prefix settings-ui run build
+
+settings-ui-test: settings-ui-deps
+    npm --prefix settings-ui run typecheck
+    npm --prefix settings-ui test
+
 # Build debug
-build:
+build: settings-ui-build
     cargo build -p trusik
     cargo build -p stonemite
 
 # Build release
-build-release:
+build-release: settings-ui-build
     cargo build --release -p trusik
     cargo build --release -p stonemite
 
@@ -69,3 +81,4 @@ run: quit build
 clean:
     cargo clean
     @Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
+    @Remove-Item -Recurse -Force settings-ui/dist -ErrorAction SilentlyContinue

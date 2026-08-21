@@ -1,0 +1,54 @@
+.broadcasting-inline-status .inline-status {
+  max-width: none;
+  margin: 0;
+}
+
+.mouse-clutch-control {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.mouse-clutch-control .button {
+  margin-top: 0;
+}
+
+.broadcasting-error {
+  margin: 0;
+  padding: 9px 11px;
+  color: var(--error);
+  background: var(--error-soft);
+  border-left: 3px solid var(--error);
+  border-radius: 5px;
+  font-size: 12px;
+}
+
+.filter-keys-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.filter-keys-field label {
+  font-weight: 620;
+}
+
+.filter-keys-field label span {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.filter-keys-field textarea {
+  width: 100%;
+  max-width: none;
+  resize: vertical;
+}
+
+@media (max-width: 560px) {
+  .mouse-clutch-control {
+    width: 100%;
+  }
+}

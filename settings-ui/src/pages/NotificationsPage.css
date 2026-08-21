@@ -1,0 +1,87 @@
+.notification-events {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.notification-events legend {
+  margin-bottom: 7px;
+  padding: 0;
+  font-weight: 620;
+}
+
+.notification-event-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.notification-event-list .checkbox-option {
+  min-height: 36px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+.notification-event-list .checkbox-option:last-child {
+  border-bottom: 0;
+}
+
+.notification-sound-controls {
+  min-width: 0;
+}
+
+.notification-sound-controls.is-disabled {
+  opacity: 0.55;
+}
+
+.notification-sound-picker {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.notification-sound-picker .select-input {
+  min-width: 0;
+}
+
+.notification-dependency-note {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.notification-preview-status {
+  min-height: 20px;
+  margin: -5px 0 0;
+  font-size: 12px;
+}
+
+.notification-preview-status.preview-playing {
+  color: var(--muted);
+}
+
+.notification-preview-status.preview-success {
+  color: var(--success);
+}
+
+.notification-preview-status.preview-error {
+  color: var(--error);
+}
+
+@media (max-width: 560px) {
+  .notification-sound-picker {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .notification-sound-picker .select-input {
+    flex: 1;
+  }
+
+  .notification-dependency-note {
+    text-align: left;
+  }
+}
