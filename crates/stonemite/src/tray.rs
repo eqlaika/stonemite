@@ -20,6 +20,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::broadcast;
+use crate::build_info;
 use crate::config;
 use crate::control;
 use crate::log_watcher;
@@ -27,30 +28,34 @@ use crate::overlay;
 use crate::settings_dialog;
 use crate::updater;
 
-/// Load an icon of the given size from an in-memory ICO file.
-/// Returns None if parsing fails or the size isn't found.
-unsafe fn load_icon_from_ico(
-    ico_data: &[u8],
-    desired_size: u32,
-) -> Option<windows::Win32::UI::WindowsAndMessaging::HICON> {
-    // ICO header: 2 reserved + 2 type + 2 count = 6 bytes
-    if ico_data.len() < 6 {
+#[cfg(stonemite_dev_build)]
+const TRAY_ICON_ICO: &[u8] = include_bytes!("../assets/tray-dev.ico");
+#[cfg(not(stonemite_dev_build))]
+const TRAY_ICON_ICO: &[u8] = include_bytes!("../assets/tray.ico");
+
+/// Return the image resource for a requested square size from an ICO file.
+fn icon_resource(ico_data: &[u8], desired_size: u32) -> Option<&[u8]> {
+    // ICO header: 2 reserved + 2 type + 2 count = 6 bytes.
+    if ico_data.len() < 6 || ico_data[..4] != [0, 0, 1, 0] {
         return None;
     }
     let count = u16::from_le_bytes([ico_data[4], ico_data[5]]) as usize;
 
-    // Find the entry matching desired_size
     for i in 0..count {
         let offset = 6 + i * 16;
         if offset + 16 > ico_data.len() {
             return None;
         }
-        let w = ico_data[offset] as u32;
-        let w = if w == 0 { 256 } else { w };
-        let h = ico_data[offset + 1] as u32;
-        let h = if h == 0 { 256 } else { h };
+        let width = match ico_data[offset] {
+            0 => 256,
+            value => value as u32,
+        };
+        let height = match ico_data[offset + 1] {
+            0 => 256,
+            value => value as u32,
+        };
 
-        if w == desired_size && h == desired_size {
+        if width == desired_size && height == desired_size {
             let data_size = u32::from_le_bytes([
                 ico_data[offset + 8],
                 ico_data[offset + 9],
@@ -63,23 +68,37 @@ unsafe fn load_icon_from_ico(
                 ico_data[offset + 14],
                 ico_data[offset + 15],
             ]) as usize;
-
-            if data_offset + data_size > ico_data.len() {
-                return None;
-            }
-
-            let icon = CreateIconFromResourceEx(
-                &ico_data[data_offset..data_offset + data_size],
-                true,
-                0x00030000, // version
-                desired_size as i32,
-                desired_size as i32,
-                LR_DEFAULTCOLOR,
-            );
-            return icon.ok();
+            let data_end = data_offset.checked_add(data_size)?;
+            return ico_data.get(data_offset..data_end);
         }
     }
     None
+}
+
+/// Load an icon of the given size from an in-memory ICO file.
+/// Returns None if parsing fails or the size isn't found.
+unsafe fn load_icon_from_ico(
+    ico_data: &[u8],
+    desired_size: u32,
+) -> Option<windows::Win32::UI::WindowsAndMessaging::HICON> {
+    let resource = icon_resource(ico_data, desired_size)?;
+    CreateIconFromResourceEx(
+        resource,
+        true,
+        0x00030000, // version
+        desired_size as i32,
+        desired_size as i32,
+        LR_DEFAULTCOLOR,
+    )
+    .ok()
+}
+
+fn tray_tooltip() -> String {
+    if build_info::is_development() {
+        format!("Stonemite development — v{}", build_info::version())
+    } else {
+        "Stonemite".to_owned()
+    }
 }
 
 const WM_TRAY: u32 = WM_USER + 1;
@@ -187,9 +206,9 @@ unsafe fn run_inner() {
     )
     .expect("Failed to create message window");
 
-    // Load tray icon from embedded ICO data.
-    let icon = load_icon_from_ico(include_bytes!("../assets/tray.ico"), 16)
-        .or_else(|| load_icon_from_ico(include_bytes!("../assets/tray.ico"), 32));
+    // Load the profile-specific tray icon from embedded ICO data.
+    let icon =
+        load_icon_from_ico(TRAY_ICON_ICO, 16).or_else(|| load_icon_from_ico(TRAY_ICON_ICO, 32));
 
     // Add tray icon.
     let mut nid = NOTIFYICONDATAW {
@@ -204,7 +223,7 @@ unsafe fn run_inner() {
         nid.hIcon = icon;
     }
     // Tooltip
-    let tip = "Stonemite";
+    let tip = tray_tooltip();
     for (i, ch) in tip.encode_utf16().enumerate() {
         if i >= nid.szTip.len() - 1 {
             break;
@@ -725,6 +744,47 @@ fn launch_eq(username: Option<&str>, password: Option<&str>) {
         }
         Err(e) => {
             overlay::debug_log(&format!("launch_eq: spawn failed: {e}"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PRODUCTION_APP_ICON: &[u8] = include_bytes!("../assets/app.ico");
+    const DEVELOPMENT_APP_ICON: &[u8] = include_bytes!("../assets/app-dev.ico");
+    const PRODUCTION_TRAY_ICON: &[u8] = include_bytes!("../assets/tray.ico");
+    const DEVELOPMENT_TRAY_ICON: &[u8] = include_bytes!("../assets/tray-dev.ico");
+
+    #[test]
+    fn icon_assets_contain_required_sizes() {
+        for icon in [
+            PRODUCTION_APP_ICON,
+            DEVELOPMENT_APP_ICON,
+            PRODUCTION_TRAY_ICON,
+            DEVELOPMENT_TRAY_ICON,
+        ] {
+            for size in [16, 32, 48, 256] {
+                assert!(icon_resource(icon, size).is_some(), "missing {size}px icon");
+            }
+        }
+    }
+
+    #[test]
+    fn development_icons_differ_from_production() {
+        assert_ne!(DEVELOPMENT_APP_ICON, PRODUCTION_APP_ICON);
+        assert_ne!(DEVELOPMENT_TRAY_ICON, PRODUCTION_TRAY_ICON);
+    }
+
+    #[test]
+    fn tooltip_identifies_the_selected_build_flavor() {
+        let tooltip = tray_tooltip();
+        assert!(tooltip.encode_utf16().count() < 128);
+        if build_info::is_development() {
+            assert!(tooltip.starts_with("Stonemite development — v"));
+        } else {
+            assert_eq!(tooltip, "Stonemite");
         }
     }
 }

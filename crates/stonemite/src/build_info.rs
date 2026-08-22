@@ -9,6 +9,11 @@ pub const fn version() -> &'static str {
     }
 }
 
+/// Return whether this build uses the development profile family.
+pub const fn is_development() -> bool {
+    cfg!(stonemite_dev_build)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,8 +3,19 @@ use std::path::PathBuf;
 fn main() {
     // Re-run build script when icon assets change.
     println!("cargo:rerun-if-changed=assets/app.ico");
+    println!("cargo:rerun-if-changed=assets/app-dev.ico");
     println!("cargo:rerun-if-changed=assets/tray.ico");
+    println!("cargo:rerun-if-changed=assets/tray-dev.ico");
     println!("cargo:rerun-if-env-changed=STONEMITE_BUILD_LABEL");
+
+    // Keep the executable/window and runtime tray icon on one profile-derived
+    // build flavor. Cargo reports `debug` for the dev profile family and
+    // `release` for the release profile family.
+    let development_build = std::env::var("PROFILE").as_deref() == Ok("debug");
+    println!("cargo:rustc-check-cfg=cfg(stonemite_dev_build)");
+    if development_build {
+        println!("cargo:rustc-cfg=stonemite_dev_build");
+    }
 
     // Embed the trusik input-proxy DLL (dinput8.dll) into the exe so the app
     // and its DLL can never drift out of sync. The DLL is produced by the
@@ -48,8 +59,13 @@ fn main() {
     // Let tauri-build generate the single Windows resource object so its ACL
     // metadata, icon, version information, and our existing DPI manifest cannot
     // conflict at link time.
+    let app_icon = if development_build {
+        "assets/app-dev.ico"
+    } else {
+        "assets/app.ico"
+    };
     let windows = tauri_build::WindowsAttributes::new()
-        .window_icon_path("assets/app.ico")
+        .window_icon_path(app_icon)
         .app_manifest(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
