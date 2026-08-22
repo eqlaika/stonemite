@@ -6,7 +6,7 @@ Named after the Trusik, the followers of Trushar on Taelosia, exiled to the moun
 
 ## What it does
 
-Trusik is a DLL proxy that sits in the EQ installation directory. When EQ starts, Windows loads our `dinput8.dll` instead of the system one. All DirectInput calls pass through to the real DLL untouched — no process memory access, no changes to game behavior or rendering.
+Trusik is a DLL proxy that sits in the EQ installation directory. When EQ starts, Windows loads our `dinput8.dll` instead of the system one. Calls are forwarded to the real system DLL, with narrow proxies around `IDirectInput8` and keyboard/mouse devices. Trusik does not inspect EQ process memory or alter rendering.
 
 It provides two features:
 
@@ -15,11 +15,11 @@ It provides two features:
 
 ## How it works
 
-1. **DllMain** — loads the real `dinput8.dll` from `C:\Windows\System32`, creates shared memory regions, installs IAT hook
-2. **DirectInput8Create** — pure passthrough to the real function
+1. **DllMain** — remains an empty loader-lock-safe stub
+2. **DirectInput8Create** — lazily loads the real DLL from System32, initializes shared state/hooks outside the loader lock, and wraps only the exact DirectInput A/W interfaces implemented by the proxy
 3. **CreateFileW hook** — checks if the filename matches `eqlog_*_*.txt`, parses character/server, writes to shared memory
 4. **Shared memory (character)** — `Local\Stonemite_{pid}` with a `CharacterInfo` struct (magic, pid, character, server, generation); the generation prevents mixed-field reads while identity changes
-5. **Shared memory (keys)** — `Local\DI8_{pid}` read by trusik to inject synthetic key state into DirectInput's `GetDeviceState`
+5. **Shared memory (keys)** — versioned `Local\DI8_{pid}` state with separate controller and auto-type key buffers and heartbeats; trusik combines fresh owners in `GetDeviceState` and buffered `GetDeviceData`
 
 ## Deployment
 

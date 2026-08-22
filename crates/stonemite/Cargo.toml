@@ -19,6 +19,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 rfd = "0.15"
 base64 = "0.22"
 trushar = { path = "../trushar" }
+trusik-protocol = { path = "../trusik-protocol" }
 eqlog = { path = "../eqlog" }
 futures-util = "0.3"
 notify = "8"

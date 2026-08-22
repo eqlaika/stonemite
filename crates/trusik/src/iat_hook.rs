@@ -7,11 +7,11 @@ use std::ffi::c_void;
 use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 use windows::Win32::Foundation::{BOOL, HANDLE};
-use windows::Win32::System::Memory::{
-    VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS, PAGE_READWRITE,
-};
+use windows::Win32::System::Memory::{VirtualProtect, PAGE_PROTECTION_FLAGS, PAGE_READWRITE};
 
 use crate::log;
+
+type RawProc = unsafe extern "system" fn() -> isize;
 
 // CreateFileW signature.
 type CreateFileWFn = unsafe extern "system" fn(
@@ -152,28 +152,48 @@ pub unsafe fn install() {
     // Dump kernel32 imports for diagnostics.
     dump_imports(base, b"kernel32.dll");
 
+    // Publish the real target before replacing an IAT slot. Another thread can
+    // enter an atomically replaced thunk immediately after the write.
+    let kernel32 = match windows::Win32::System::LibraryLoader::GetModuleHandleW(windows::core::w!(
+        "kernel32.dll"
+    )) {
+        Ok(module) => module,
+        Err(_) => {
+            log::write("iat_hook: kernel32.dll is not loaded");
+            return;
+        }
+    };
+    let Some(real) = windows::Win32::System::LibraryLoader::GetProcAddress(
+        kernel32,
+        windows::core::s!("CreateFileW"),
+    ) else {
+        log::write("iat_hook: could not resolve the real CreateFileW");
+        return;
+    };
+    let _ = REAL_CREATE_FILE_W.set(std::mem::transmute::<RawProc, CreateFileWFn>(real));
+
     // Try CreateFileW first (most common).
-    if let Some(real) = patch_iat(
+    if patch_iat(
         base,
         b"kernel32.dll",
         b"CreateFileW",
         hooked_create_file_w as *const c_void,
-    ) {
-        let func: CreateFileWFn = std::mem::transmute(real);
-        let _ = REAL_CREATE_FILE_W.set(func);
+    )
+    .is_some()
+    {
         log::write("iat_hook: hooked CreateFileW");
         return;
     }
 
     // Fallback: try api-ms-win-core-file-l1-1-0.dll (apiset redirect).
-    if let Some(real) = patch_iat(
+    if patch_iat(
         base,
         b"api-ms-win-core-file-l1-1-0.dll",
         b"CreateFileW",
         hooked_create_file_w as *const c_void,
-    ) {
-        let func: CreateFileWFn = std::mem::transmute(real);
-        let _ = REAL_CREATE_FILE_W.set(func);
+    )
+    .is_some()
+    {
         log::write("iat_hook: hooked CreateFileW (via api-ms-win-core-file-l1-1-0)");
         return;
     }
@@ -308,19 +328,30 @@ unsafe fn patch_iat(
                         if fn_name.to_bytes() == target_fn {
                             let original = *thunk as *const c_void;
                             let mut old_protect = PAGE_PROTECTION_FLAGS(0);
-                            let _ = VirtualProtect(
+                            if VirtualProtect(
                                 thunk as *const c_void,
                                 8,
                                 PAGE_READWRITE,
                                 &mut old_protect,
-                            );
-                            *thunk = new_fn as u64;
-                            let _ = VirtualProtect(
+                            )
+                            .is_err()
+                            {
+                                log::write(
+                                    "iat_hook: VirtualProtect failed before 64-bit IAT write",
+                                );
+                                return None;
+                            }
+                            std::ptr::write_volatile(thunk, new_fn as u64);
+                            if VirtualProtect(
                                 thunk as *const c_void,
                                 8,
                                 old_protect,
                                 &mut old_protect,
-                            );
+                            )
+                            .is_err()
+                            {
+                                log::write("iat_hook: failed to restore 64-bit IAT protection");
+                            }
                             return Some(original);
                         }
                     }
@@ -338,19 +369,30 @@ unsafe fn patch_iat(
                         if fn_name.to_bytes() == target_fn {
                             let original = *thunk as *const c_void;
                             let mut old_protect = PAGE_PROTECTION_FLAGS(0);
-                            let _ = VirtualProtect(
+                            if VirtualProtect(
                                 thunk as *const c_void,
                                 4,
                                 PAGE_READWRITE,
                                 &mut old_protect,
-                            );
-                            *thunk = new_fn as u32;
-                            let _ = VirtualProtect(
+                            )
+                            .is_err()
+                            {
+                                log::write(
+                                    "iat_hook: VirtualProtect failed before 32-bit IAT write",
+                                );
+                                return None;
+                            }
+                            std::ptr::write_volatile(thunk, new_fn as u32);
+                            if VirtualProtect(
                                 thunk as *const c_void,
                                 4,
                                 old_protect,
                                 &mut old_protect,
-                            );
+                            )
+                            .is_err()
+                            {
+                                log::write("iat_hook: failed to restore 32-bit IAT protection");
+                            }
                             return Some(original);
                         }
                     }
@@ -378,6 +420,7 @@ static REAL_ASYNC: OnceLock<GetAsyncKeyStateFn> = OnceLock::new();
 static REAL_KEYSTATE: OnceLock<GetKeyStateFn> = OnceLock::new();
 static REAL_KBSTATE: OnceLock<GetKeyboardStateFn> = OnceLock::new();
 static REAL_GETFOREGROUNDWINDOW: OnceLock<GetForegroundWindowFn> = OnceLock::new();
+static REAL_DETOURED_GFW: OnceLock<GetForegroundWindowFn> = OnceLock::new();
 static REAL_GETFOCUS: OnceLock<GetFocusFn> = OnceLock::new();
 static REAL_GETACTIVEWINDOW: OnceLock<GetActiveWindowFn> = OnceLock::new();
 
@@ -431,13 +474,16 @@ unsafe extern "system" fn hooked_get_keyboard_state(buf: *mut u8) -> BOOL {
         BOOL(0)
     };
     if !buf.is_null() {
-        for vk in 0u16..=255 {
-            let scan = windows::Win32::UI::Input::KeyboardAndMouse::MapVirtualKeyW(
-                vk as u32,
-                windows::Win32::UI::Input::KeyboardAndMouse::MAPVK_VK_TO_VSC,
-            );
-            if scan > 0 && scan < 256 && crate::key_shm::is_key_pressed(scan as u8) {
-                *buf.add(vk as usize) |= 0x80;
+        let mut keys = [0u8; 256];
+        if crate::key_shm::read_keys(&mut keys) {
+            for vk in 0u16..=255 {
+                let scan = windows::Win32::UI::Input::KeyboardAndMouse::MapVirtualKeyW(
+                    vk as u32,
+                    windows::Win32::UI::Input::KeyboardAndMouse::MAPVK_VK_TO_VSC,
+                );
+                if scan > 0 && scan < 256 && keys[scan as usize] != 0 {
+                    *buf.add(vk as usize) |= 0x80;
+                }
             }
         }
     }
@@ -462,7 +508,13 @@ unsafe extern "system" fn hooked_get_foreground_window() -> isize {
     if hwnd != 0 && active {
         return hwnd;
     }
-    if let Some(real) = REAL_GETFOREGROUNDWINDOW.get() {
+    unspoofed_foreground_window()
+}
+
+unsafe fn unspoofed_foreground_window() -> isize {
+    if let Some(real) = REAL_DETOURED_GFW.get() {
+        real()
+    } else if let Some(real) = REAL_GETFOREGROUNDWINDOW.get() {
         real()
     } else {
         0
@@ -503,44 +555,86 @@ pub unsafe fn install_keyboard_hooks() {
         }
     };
 
+    // Resolve and publish every original before any IAT slot can point at a
+    // hook. LoadLibrary is safe here because deferred initialization runs
+    // outside DllMain.
+    let user32 = match windows::Win32::System::LibraryLoader::LoadLibraryW(windows::core::w!(
+        "user32.dll"
+    )) {
+        Ok(module) => module,
+        Err(error) => {
+            log::write(&format!("iat_hook: failed to load user32.dll: {error}"));
+            return;
+        }
+    };
+    if let Some(proc) = windows::Win32::System::LibraryLoader::GetProcAddress(
+        user32,
+        windows::core::s!("GetAsyncKeyState"),
+    ) {
+        let _ = REAL_ASYNC.set(std::mem::transmute::<RawProc, GetAsyncKeyStateFn>(proc));
+    }
+    if let Some(proc) = windows::Win32::System::LibraryLoader::GetProcAddress(
+        user32,
+        windows::core::s!("GetKeyState"),
+    ) {
+        let _ = REAL_KEYSTATE.set(std::mem::transmute::<RawProc, GetKeyStateFn>(proc));
+    }
+    if let Some(proc) = windows::Win32::System::LibraryLoader::GetProcAddress(
+        user32,
+        windows::core::s!("GetKeyboardState"),
+    ) {
+        let _ = REAL_KBSTATE.set(std::mem::transmute::<RawProc, GetKeyboardStateFn>(proc));
+    }
+    if let Some(proc) = windows::Win32::System::LibraryLoader::GetProcAddress(
+        user32,
+        windows::core::s!("GetForegroundWindow"),
+    ) {
+        let _ = REAL_GETFOREGROUNDWINDOW.set(proc);
+    }
+    if let Some(proc) =
+        windows::Win32::System::LibraryLoader::GetProcAddress(user32, windows::core::s!("GetFocus"))
+    {
+        let _ = REAL_GETFOCUS.set(proc);
+    }
+    if let Some(proc) = windows::Win32::System::LibraryLoader::GetProcAddress(
+        user32,
+        windows::core::s!("GetActiveWindow"),
+    ) {
+        let _ = REAL_GETACTIVEWINDOW.set(proc);
+    }
+
     let mut hooked = 0u32;
 
-    if let Some(real) = patch_iat(
+    if let Some(_original) = patch_iat(
         base,
         b"user32.dll",
         b"GetAsyncKeyState",
         hooked_get_async_key_state as *const c_void,
     ) {
-        let func: GetAsyncKeyStateFn = std::mem::transmute(real);
-        let _ = REAL_ASYNC.set(func);
         hooked += 1;
         log::write("iat_hook: hooked GetAsyncKeyState");
     } else {
         log::write("iat_hook: FAILED GetAsyncKeyState");
     }
 
-    if let Some(real) = patch_iat(
+    if let Some(_original) = patch_iat(
         base,
         b"user32.dll",
         b"GetKeyState",
         hooked_get_key_state as *const c_void,
     ) {
-        let func: GetKeyStateFn = std::mem::transmute(real);
-        let _ = REAL_KEYSTATE.set(func);
         hooked += 1;
         log::write("iat_hook: hooked GetKeyState");
     } else {
         log::write("iat_hook: FAILED GetKeyState");
     }
 
-    if let Some(real) = patch_iat(
+    if let Some(_original) = patch_iat(
         base,
         b"user32.dll",
         b"GetKeyboardState",
         hooked_get_keyboard_state as *const c_void,
     ) {
-        let func: GetKeyboardStateFn = std::mem::transmute(real);
-        let _ = REAL_KBSTATE.set(func);
         hooked += 1;
         log::write("iat_hook: hooked GetKeyboardState");
     } else {
@@ -562,13 +656,11 @@ pub unsafe fn install_keyboard_hooks() {
             hooked_get_foreground_window as *const c_void,
         )
     });
-    if let Some(real) = fg_hook {
-        let func: GetForegroundWindowFn = std::mem::transmute(real);
-        let _ = REAL_GETFOREGROUNDWINDOW.set(func);
+    if fg_hook.is_some() {
         hooked += 1;
         log::write("iat_hook: hooked GetForegroundWindow");
     } else {
-        log::write("iat_hook: FAILED GetForegroundWindow — background input will not work");
+        log::write("iat_hook: GetForegroundWindow not imported by the main executable");
     }
 
     let focus_hook = patch_iat(
@@ -577,9 +669,7 @@ pub unsafe fn install_keyboard_hooks() {
         b"GetFocus",
         hooked_get_focus as *const c_void,
     );
-    if let Some(real) = focus_hook {
-        let func: GetFocusFn = std::mem::transmute(real);
-        let _ = REAL_GETFOCUS.set(func);
+    if focus_hook.is_some() {
         hooked += 1;
         log::write("iat_hook: hooked GetFocus");
     } else {
@@ -592,9 +682,7 @@ pub unsafe fn install_keyboard_hooks() {
         b"GetActiveWindow",
         hooked_get_active_window as *const c_void,
     );
-    if let Some(real) = active_hook {
-        let func: GetActiveWindowFn = std::mem::transmute(real);
-        let _ = REAL_GETACTIVEWINDOW.set(func);
+    if active_hook.is_some() {
         hooked += 1;
         log::write("iat_hook: hooked GetActiveWindow");
     } else {
@@ -603,141 +691,38 @@ pub unsafe fn install_keyboard_hooks() {
 
     log::write(&format!("iat_hook: {hooked} keyboard function(s) hooked"));
 
-    // The IAT hook for GetForegroundWindow may not catch calls made through
-    // delay-loaded imports or GetProcAddress.  Install an inline hook on the
-    // actual function body so every call path is intercepted.
-    install_inline_gfw_hook();
+    // EQ resolves GetForegroundWindow through a path that bypasses its main
+    // executable IAT. MinHook relocates the prologue into a trampoline and
+    // suspends peer threads while publishing the detour, avoiding the torn
+    // instruction window of the old hand-written live patch.
+    install_foreground_detour();
 }
 
-// --- Inline hook on GetForegroundWindow function body ---
-//
-// The IAT hook only intercepts calls that go through our patched IAT entry.
-// EQ may resolve GetForegroundWindow via a different import descriptor or
-// through GetProcAddress.  An inline hook patches the *function itself* so
-// every call is intercepted regardless of how it was resolved.
-//
-// We call NtUserGetForegroundWindow (from win32u.dll) as the "real"
-// implementation, which avoids the need for a classic trampoline.
-
-type NtUserGfwFn = unsafe extern "system" fn() -> isize;
-static REAL_NT_GFW: OnceLock<NtUserGfwFn> = OnceLock::new();
+unsafe fn install_foreground_detour() {
+    let Some(target) = REAL_GETFOREGROUNDWINDOW.get().copied() else {
+        log::write("gfw_detour: GetForegroundWindow was not resolved");
+        return;
+    };
+    let target_ptr = target as *const () as *mut c_void;
+    let result = std::panic::catch_unwind(|| unsafe {
+        let trampoline = minhook::MinHook::create_hook(
+            target_ptr,
+            hooked_get_foreground_window as *const () as *mut c_void,
+        )?;
+        let trampoline: GetForegroundWindowFn = std::mem::transmute(trampoline);
+        let _ = REAL_DETOURED_GFW.set(trampoline);
+        minhook::MinHook::enable_hook(target_ptr)
+    });
+    match result {
+        Ok(Ok(())) => log::write("gfw_detour: enabled safe GetForegroundWindow detour"),
+        Ok(Err(error)) => log::write(&format!("gfw_detour: MinHook failed: {error}")),
+        Err(_) => log::write("gfw_detour: MinHook panicked during installation"),
+    }
+}
 
 /// Return the unspoofed system foreground window for proxy-internal gating.
-/// Calling User32 directly is unsafe after the process-wide inline detour.
 pub unsafe fn real_foreground_window() -> isize {
-    if let Some(real) = REAL_NT_GFW.get() {
-        real()
-    } else if let Some(real) = REAL_GETFOREGROUNDWINDOW.get() {
-        real()
-    } else {
-        0
-    }
-}
-
-unsafe fn install_inline_gfw_hook() {
-    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-
-    // Resolve the real implementation from win32u.dll.
-    let win32u = match LoadLibraryW(windows::core::w!("win32u.dll")) {
-        Ok(h) => h,
-        Err(e) => {
-            log::write(&format!("inline_gfw: failed to load win32u.dll: {e}"));
-            return;
-        }
-    };
-    let nt_gfw = GetProcAddress(win32u, windows::core::s!("NtUserGetForegroundWindow"));
-    let nt_gfw = match nt_gfw {
-        Some(p) => p,
-        None => {
-            log::write("inline_gfw: NtUserGetForegroundWindow not found");
-            return;
-        }
-    };
-    let _ = REAL_NT_GFW.set(nt_gfw);
-
-    // Resolve the function we want to patch.
-    let user32 = match LoadLibraryW(windows::core::w!("user32.dll")) {
-        Ok(h) => h,
-        Err(e) => {
-            log::write(&format!("inline_gfw: failed to load user32.dll: {e}"));
-            return;
-        }
-    };
-    let gfw = GetProcAddress(user32, windows::core::s!("GetForegroundWindow"));
-    let gfw_ptr = match gfw {
-        Some(p) => p as *mut u8,
-        None => {
-            log::write("inline_gfw: GetForegroundWindow not found");
-            return;
-        }
-    };
-
-    // Detour: mov rax, <hook_addr>; jmp rax  (12 bytes)
-    let hook_addr = inline_hooked_gfw as *const () as usize as u64;
-
-    let mut old_protect = PAGE_PROTECTION_FLAGS(0);
-    if VirtualProtect(
-        gfw_ptr as *const c_void,
-        12,
-        PAGE_EXECUTE_READWRITE,
-        &mut old_protect,
-    )
-    .is_err()
-    {
-        log::write("inline_gfw: VirtualProtect failed");
-        return;
-    }
-
-    *gfw_ptr = 0x48; // REX.W
-    *gfw_ptr.add(1) = 0xB8; // MOV RAX, imm64
-    std::ptr::copy_nonoverlapping(&hook_addr as *const u64 as *const u8, gfw_ptr.add(2), 8);
-    *gfw_ptr.add(10) = 0xFF; // JMP RAX
-    *gfw_ptr.add(11) = 0xE0;
-
-    let _ = VirtualProtect(gfw_ptr as *const c_void, 12, old_protect, &mut old_protect);
-
-    // Flush instruction cache so CPU sees the new code.
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn FlushInstructionCache(process: *mut c_void, addr: *const c_void, size: usize) -> i32;
-        fn GetCurrentProcess() -> *mut c_void;
-    }
-    FlushInstructionCache(GetCurrentProcess(), gfw_ptr as *const c_void, 12);
-
-    log::write(&format!(
-        "inline_gfw: patched GetForegroundWindow at {gfw_ptr:p}"
-    ));
-}
-
-/// Inline-hook replacement for GetForegroundWindow.
-unsafe extern "system" fn inline_hooked_gfw() -> isize {
-    let hwnd = crate::device_proxy::eq_hwnd();
-    let active = crate::key_shm::is_active();
-
-    static INLINE_GFW_LOG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    static INLINE_GFW_ACTIVE_LOG: std::sync::atomic::AtomicU32 =
-        std::sync::atomic::AtomicU32::new(0);
-    let count = INLINE_GFW_LOG.fetch_add(1, Ordering::Relaxed);
-    if count < 5 {
-        crate::log::write(&format!(
-            "inline_gfw: hwnd=0x{hwnd:X} active={active} #{count}"
-        ));
-    }
-    if active {
-        let ac = INLINE_GFW_ACTIVE_LOG.fetch_add(1, Ordering::Relaxed);
-        if ac < 5 {
-            crate::log::write(&format!("inline_gfw: ACTIVE hwnd=0x{hwnd:X} #{ac}"));
-        }
-    }
-
-    if hwnd != 0 && active {
-        return hwnd;
-    }
-    if let Some(real) = REAL_NT_GFW.get() {
-        real()
-    } else {
-        0
-    }
+    unspoofed_foreground_window()
 }
 
 #[cfg(test)]

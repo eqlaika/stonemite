@@ -6,7 +6,10 @@
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::Ordering;
+use trusik_protocol::{
+    SharedKeyState, KEYBOARD_BROADCAST, KEYBOARD_TARGETED, SHARED_KEY_STATE_SIZE,
+};
 use windows::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, LPARAM, LRESULT, WAIT_TIMEOUT, WPARAM,
 };
@@ -28,32 +31,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::config::Config;
 
-/// Shared memory layout — must match crates/trusik/src/key_shm.rs exactly.
-#[repr(C)]
-struct SharedKeyState {
-    magic: u32,
-    version: u32,
-    /// Bitset of keyboard owners (Broadcast and targeted input).
-    keyboard_active: AtomicU32,
-    /// Independent Mouse Clutch activation (zero or one).
-    mouse_active: AtomicU32,
-    suppress: u32,
-    seq: u32,
-    /// DirectInput scan codes 0–254. Scan code 255 is reserved.
-    keys: [u8; 255],
-    /// Written by a compatible trusik proxy after it maps this region.
-    proxy_ready: u8,
-    /// Low 32 bits of GetTickCount64, refreshed by the controller.
-    controller_heartbeat_ms: AtomicU32,
-}
-
-const MAGIC: u32 = 0x53544D54; // "STMT"
-const VERSION: u32 = 2;
-const PROXY_READY: u8 = 0xA5;
-const SHM_SIZE: usize = std::mem::size_of::<SharedKeyState>();
-const KEYBOARD_BROADCAST: u32 = 1 << 0;
-const KEYBOARD_TARGETED: u32 = 1 << 1;
-
 /// Per-process shared memory handle.
 struct ProcessShm {
     #[allow(dead_code)] // Stored for identification/debugging.
@@ -71,9 +48,9 @@ impl Drop for ProcessShm {
     fn drop(&mut self) {
         unsafe {
             if !self.ptr.is_null() {
-                // Deactivate both input paths before unmapping.
-                (*self.ptr).keyboard_active.store(0, Ordering::Release);
-                (*self.ptr).mouse_active.store(0, Ordering::Release);
+                // Retire only controller-owned input; auto-type has an
+                // independent buffer and lease.
+                (*self.ptr).retire_controller();
                 let _ = windows::Win32::System::Memory::UnmapViewOfFile(
                     windows::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
                         Value: self.ptr as *mut c_void,
@@ -394,11 +371,11 @@ fn reconcile_hooks(s: &mut BroadcastState) -> Result<(), String> {
 unsafe fn set_keyboard_source(target: &ProcessShm, source: u32, active: bool) {
     if active {
         (*target.ptr)
-            .keyboard_active
+            .controller_keyboard_active
             .fetch_or(source, Ordering::AcqRel);
     } else {
         (*target.ptr)
-            .keyboard_active
+            .controller_keyboard_active
             .fetch_and(!source, Ordering::AcqRel);
     }
 }
@@ -407,7 +384,9 @@ unsafe fn deactivate_mouse_targets(s: &mut BroadcastState) {
     for target in s.targets.values_mut() {
         if target.mouse_selected {
             target.mouse_selected = false;
-            (*target.ptr).mouse_active.store(0, Ordering::Release);
+            (*target.ptr)
+                .controller_mouse_active
+                .store(0, Ordering::Release);
         }
     }
 }
@@ -426,7 +405,9 @@ unsafe fn activate_mouse_targets(s: &mut BroadcastState, source_pid: u32) -> boo
     for (&pid, target) in s.targets.iter_mut() {
         if pid != source_pid && s.mouse_eligible_pids.contains(&pid) && target_is_ready(target) {
             target.mouse_selected = true;
-            (*target.ptr).mouse_active.store(1, Ordering::Release);
+            (*target.ptr)
+                .controller_mouse_active
+                .store(1, Ordering::Release);
         }
     }
     for (&pid, target) in s.targets.iter_mut() {
@@ -436,7 +417,9 @@ unsafe fn activate_mouse_targets(s: &mut BroadcastState, source_pid: u32) -> boo
                 || !target_is_ready(target))
         {
             target.mouse_selected = false;
-            (*target.ptr).mouse_active.store(0, Ordering::Release);
+            (*target.ptr)
+                .controller_mouse_active
+                .store(0, Ordering::Release);
         }
     }
     true
@@ -494,19 +477,13 @@ pub fn is_target_ready(pid: u32) -> bool {
 fn refresh_controller_heartbeat(s: &BroadcastState, now_ms: u64) {
     for target in s.targets.values() {
         unsafe {
-            (*target.ptr)
-                .controller_heartbeat_ms
-                .store(now_ms as u32, Ordering::Release);
+            (*target.ptr).refresh_controller_heartbeat(now_ms as u32);
         }
     }
 }
 
 fn target_is_ready(target: &ProcessShm) -> bool {
-    unsafe {
-        std::ptr::read_volatile(&(*target.ptr).magic) == MAGIC
-            && std::ptr::read_volatile(&(*target.ptr).version) == VERSION
-            && std::ptr::read_volatile(&(*target.ptr).proxy_ready) == PROXY_READY
-    }
+    unsafe { (*target.ptr).proxy_is_ready() }
 }
 
 fn target_process_alive(target: &ProcessShm) -> bool {
@@ -592,7 +569,7 @@ pub fn update_targets(pids: &[u32], active_pid: Option<u32>) {
         s.active_pid = active_pid;
         for (&pid, shm) in s.targets.iter() {
             let suppress = if Some(pid) == active_pid { 0u32 } else { 1u32 };
-            std::ptr::write_volatile(&mut (*shm.ptr).suppress, suppress);
+            (*shm.ptr).suppress.store(suppress, Ordering::Release);
         }
     }
 }
@@ -624,7 +601,7 @@ pub fn set_active_pid(pid: u32) {
     unsafe {
         for (&target_pid, shm) in s.targets.iter() {
             let suppress = if target_pid == pid { 0u32 } else { 1u32 };
-            std::ptr::write_volatile(&mut (*shm.ptr).suppress, suppress);
+            (*shm.ptr).suppress.store(suppress, Ordering::Release);
         }
     }
 }
@@ -727,13 +704,13 @@ unsafe fn create_shm(pid: u32) -> Option<ProcessShm> {
         None,
         PAGE_READWRITE,
         0,
-        SHM_SIZE as u32,
+        SHARED_KEY_STATE_SIZE as u32,
         windows::core::PCWSTR(wide.as_ptr()),
     )
     .ok()?;
     let existed = GetLastError() == ERROR_ALREADY_EXISTS;
 
-    let view = MapViewOfFile(handle, FILE_MAP_WRITE, 0, 0, SHM_SIZE);
+    let view = MapViewOfFile(handle, FILE_MAP_WRITE, 0, 0, SHARED_KEY_STATE_SIZE);
     let ptr = view.Value as *mut SharedKeyState;
     if ptr.is_null() {
         let _ = CloseHandle(handle);
@@ -741,29 +718,18 @@ unsafe fn create_shm(pid: u32) -> Option<ProcessShm> {
     }
 
     if existed {
-        // Another live component owns this mapping. Reuse only the exact ABI;
-        // never zero or reinterpret its independently owned auto-type source.
-        let magic = std::ptr::read_volatile(&(*ptr).magic);
-        let version = std::ptr::read_volatile(&(*ptr).version);
-        if magic != MAGIC || version != VERSION {
+        // Reuse only the exact ABI and retire stale controller-owned state.
+        // The separately leased auto-type source must remain untouched.
+        if !(*ptr).is_compatible() {
             let _ = windows::Win32::System::Memory::UnmapViewOfFile(view);
             let _ = CloseHandle(handle);
             return None;
         }
-        // A new controller generation owns these sources and must not revive
-        // stale mouse/broadcast/targeted state from an unclean predecessor.
-        (*ptr)
-            .keyboard_active
-            .fetch_and(!(KEYBOARD_BROADCAST | KEYBOARD_TARGETED), Ordering::AcqRel);
-        (*ptr).mouse_active.store(0, Ordering::Release);
+        (*ptr).retire_controller();
     } else {
-        std::ptr::write_bytes(ptr, 0, 1);
-        std::ptr::write_volatile(&mut (*ptr).magic, MAGIC);
-        std::ptr::write_volatile(&mut (*ptr).version, VERSION);
+        SharedKeyState::initialize(ptr);
     }
-    (*ptr)
-        .controller_heartbeat_ms
-        .store(GetTickCount64() as u32, Ordering::Release);
+    (*ptr).refresh_controller_heartbeat(GetTickCount64() as u32);
 
     Some(ProcessShm {
         pid,
@@ -850,9 +816,7 @@ pub fn finish_targeted_input(pid: u32) {
 
 unsafe fn write_combined_key(shm: &ProcessShm, scan: usize) {
     let value = combined_key_value(shm.broadcast_keys[scan], shm.targeted_keys[scan]);
-    std::ptr::write_volatile(&mut (*shm.ptr).keys[scan], value);
-    let seq = std::ptr::read_volatile(&(*shm.ptr).seq);
-    std::ptr::write_volatile(&mut (*shm.ptr).seq, seq.wrapping_add(1));
+    (*shm.ptr).set_controller_key(scan, value);
 }
 
 fn combined_key_value(broadcast: bool, targeted: bool) -> u8 {
@@ -1026,21 +990,6 @@ mod tests {
 
     #[test]
     fn broadcast_and_targeted_sources_cannot_release_each_other() {
-        assert_eq!(VERSION, 2);
-        assert_eq!(SHM_SIZE, 284);
-        assert_eq!(std::mem::align_of::<SharedKeyState>(), 4);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, magic), 0);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, version), 4);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, keyboard_active), 8);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, mouse_active), 12);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, suppress), 16);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, seq), 20);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, keys), 24);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, proxy_ready), 279);
-        assert_eq!(
-            std::mem::offset_of!(SharedKeyState, controller_heartbeat_ms),
-            280
-        );
         assert_eq!(combined_key_value(false, false), 0x00);
         assert_eq!(combined_key_value(true, false), 0x80);
         assert_eq!(combined_key_value(false, true), 0x80);
@@ -1078,10 +1027,9 @@ mod tests {
         ));
         unsafe {
             for pid in [target_pid, other_pid] {
-                std::ptr::write_volatile(
-                    &mut (*state().as_mut().unwrap().targets[&pid].ptr).proxy_ready,
-                    PROXY_READY,
-                );
+                (*state().as_mut().unwrap().targets[&pid].ptr)
+                    .proxy_ready
+                    .store(trusik_protocol::PROXY_READY, Ordering::Release);
             }
         }
         assert!(is_target_ready(target_pid));
@@ -1099,14 +1047,27 @@ mod tests {
         let target = &broadcast_state.targets[&target_pid];
         let other = &broadcast_state.targets[&other_pid];
         unsafe {
-            assert_eq!((*target.ptr).keyboard_active.load(Ordering::Acquire), 2);
-            assert_eq!((*target.ptr).mouse_active.load(Ordering::Acquire), 0);
-            assert_eq!(std::ptr::read_volatile(&(*target.ptr).keys[0x1e]), 0x80);
-            assert_eq!(std::ptr::read_volatile(&(*target.ptr).keys[0x1f]), 0x00);
-            assert_eq!((*other.ptr).keyboard_active.load(Ordering::Acquire), 2);
-            assert_eq!((*other.ptr).mouse_active.load(Ordering::Acquire), 0);
-            assert_eq!(std::ptr::read_volatile(&(*other.ptr).keys[0x1e]), 0x00);
-            assert_eq!(std::ptr::read_volatile(&(*other.ptr).keys[0x1f]), 0x80);
+            let now = GetTickCount64() as u32;
+            let mut target_keys = [0; 256];
+            let mut other_keys = [0; 256];
+            assert_eq!(
+                (*target.ptr)
+                    .controller_keyboard_active
+                    .load(Ordering::Acquire),
+                KEYBOARD_TARGETED
+            );
+            assert_eq!(
+                (*target.ptr)
+                    .controller_mouse_active
+                    .load(Ordering::Acquire),
+                0
+            );
+            (*target.ptr).read_effective_keys(now, &mut target_keys);
+            (*other.ptr).read_effective_keys(now, &mut other_keys);
+            assert_eq!(target_keys[0x1e], 0x80);
+            assert_eq!(target_keys[0x1f], 0x00);
+            assert_eq!(other_keys[0x1e], 0x00);
+            assert_eq!(other_keys[0x1f], 0x80);
         }
 
         set_targeted_key(target_pid, 0x1e, false).unwrap();
@@ -1115,36 +1076,29 @@ mod tests {
         let target = &broadcast_state.targets[&target_pid];
         let other = &broadcast_state.targets[&other_pid];
         unsafe {
-            assert_eq!((*target.ptr).keyboard_active.load(Ordering::Acquire), 0);
-            assert_eq!((*target.ptr).mouse_active.load(Ordering::Acquire), 0);
-            assert_eq!(std::ptr::read_volatile(&(*target.ptr).keys[0x1e]), 0x00);
-            assert_eq!((*other.ptr).keyboard_active.load(Ordering::Acquire), 2);
-            assert_eq!((*other.ptr).mouse_active.load(Ordering::Acquire), 0);
-            assert_eq!(std::ptr::read_volatile(&(*other.ptr).keys[0x1f]), 0x80);
+            let now = GetTickCount64() as u32;
+            let mut target_keys = [0; 256];
+            let mut other_keys = [0; 256];
+            assert_eq!(
+                (*target.ptr)
+                    .controller_keyboard_active
+                    .load(Ordering::Acquire),
+                0
+            );
+            assert_eq!(
+                (*other.ptr)
+                    .controller_keyboard_active
+                    .load(Ordering::Acquire),
+                KEYBOARD_TARGETED
+            );
+            (*target.ptr).read_effective_keys(now, &mut target_keys);
+            (*other.ptr).read_effective_keys(now, &mut other_keys);
+            assert_eq!(target_keys[0x1e], 0x00);
+            assert_eq!(other_keys[0x1f], 0x80);
         }
         set_targeted_key(other_pid, 0x1f, false).unwrap();
         finish_targeted_input(other_pid);
         *state() = None;
-    }
-
-    #[test]
-    fn keyboard_and_mouse_shared_activation_are_independent() {
-        let shared = SharedKeyState {
-            magic: MAGIC,
-            version: VERSION,
-            keyboard_active: AtomicU32::new(0),
-            mouse_active: AtomicU32::new(0),
-            suppress: 1,
-            seq: 0,
-            keys: [0; 255],
-            proxy_ready: PROXY_READY,
-            controller_heartbeat_ms: AtomicU32::new(0),
-        };
-        shared.keyboard_active.store(1, Ordering::Release);
-        assert_eq!(shared.mouse_active.load(Ordering::Acquire), 0);
-        shared.keyboard_active.store(0, Ordering::Release);
-        shared.mouse_active.store(1, Ordering::Release);
-        assert_eq!(shared.keyboard_active.load(Ordering::Acquire), 0);
     }
 
     #[test]

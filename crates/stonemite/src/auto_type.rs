@@ -1,15 +1,17 @@
 //! Auto-type passwords into EQ login fields via trusik shared memory.
 //!
 //! Waits for DirectInput to initialize (signaled by trusik via a named event),
-//! then writes key states to the DI8 shared memory. The trusik device proxy
-//! injects these into DirectInput's keyboard buffer.
+//! then writes an independently leased key buffer. The trusik device proxy
+//! combines this owner with controller-owned broadcast input.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::Ordering;
+use trusik_protocol::{SharedKeyState, SHARED_KEY_STATE_SIZE};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows::Win32::System::Memory::{
-    CreateFileMappingW, MapViewOfFile, FILE_MAP_WRITE, PAGE_READWRITE,
+    CreateFileMappingW, MapViewOfFile, FILE_MAP_READ, FILE_MAP_WRITE, PAGE_READWRITE,
 };
+use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::{
     OpenEventW, WaitForSingleObject, SYNCHRONIZATION_SYNCHRONIZE,
 };
@@ -17,41 +19,110 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW, VkKeyScanW, MA
 
 use crate::overlay::debug_log;
 
-/// Shared memory layout — must match broadcast.rs / trusik key_shm.rs exactly.
-#[repr(C)]
-struct SharedKeyState {
-    magic: u32,
-    version: u32,
-    /// Bitset shared by independent keyboard delivery owners.
-    keyboard_active: AtomicU32,
-    /// Independent Mouse Clutch activation; auto-type never writes it.
-    mouse_active: AtomicU32,
-    suppress: u32,
-    seq: u32,
-    keys: [u8; 255],
-    proxy_ready: u8,
-    controller_heartbeat_ms: AtomicU32,
-}
-
-const MAGIC: u32 = 0x53544D54; // "STMT"
-const VERSION: u32 = 2;
-const PROXY_READY: u8 = 0xA5;
-const SHM_SIZE: usize = std::mem::size_of::<SharedKeyState>();
-const KEYBOARD_AUTO_TYPE: u32 = 1 << 2;
-
 /// How long to hold each key down.
 const KEY_DOWN_MS: u64 = 50;
 /// Delay after releasing a key before pressing the next one.
 const KEY_UP_MS: u64 = 50;
 /// Maximum time to wait for DirectInput to initialize (ms).
 const DI_WAIT_TIMEOUT_MS: u32 = 30_000;
+/// Refresh well inside the proxy's 500 ms lease timeout.
+const HEARTBEAT_REFRESH_MS: u64 = 100;
 
-/// Wrapper to send shm handles across threads.
+/// Owned mapping view and handle. The mapping may outlive this view because the
+/// target proxy also keeps it mapped.
 struct Shm {
     handle: HANDLE,
     ptr: *mut SharedKeyState,
 }
 unsafe impl Send for Shm {}
+
+impl Drop for Shm {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::System::Memory::UnmapViewOfFile(
+                windows::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
+                    Value: self.ptr as *mut c_void,
+                },
+            );
+            let _ = CloseHandle(self.handle);
+        }
+    }
+}
+
+/// Generation-checked RAII lease. A newer auto-type job can supersede this one
+/// without an older thread clearing or writing the newer owner's keys.
+struct AutoTypeSession {
+    shm: Shm,
+    generation: u32,
+}
+
+impl AutoTypeSession {
+    fn start(shm: Shm, pid: u32) -> Result<Self, String> {
+        let state = unsafe { &*shm.ptr };
+        if !state.is_compatible() || !state.proxy_is_ready() {
+            return Err(format!(
+                "incompatible trusik input mapping: magic={:#010x} version={} proxy_ready={:#04x}",
+                state.magic.load(Ordering::Acquire),
+                state.version.load(Ordering::Acquire),
+                state.proxy_ready.load(Ordering::Acquire)
+            ));
+        }
+
+        let now_ms = unsafe { GetTickCount64() as u32 };
+        let generation = state.begin_auto_type(now_ms);
+        debug_log(&format!(
+            "auto_type: shm ready pid={pid} version={} generation={generation} mouse_active={} suppress={}",
+            trusik_protocol::VERSION,
+            state.controller_mouse_active.load(Ordering::Acquire),
+            state.suppress.load(Ordering::Acquire)
+        ));
+        Ok(Self { shm, generation })
+    }
+
+    fn state(&self) -> &SharedKeyState {
+        unsafe { &*self.shm.ptr }
+    }
+
+    fn refresh_heartbeat(&self) -> Result<(), String> {
+        let now_ms = unsafe { GetTickCount64() as u32 };
+        self.state()
+            .refresh_auto_type_lease(self.generation, now_ms)
+            .then_some(())
+            .ok_or_else(|| "auto-type job was superseded".to_owned())
+    }
+
+    fn set_key(&self, scan: u8, pressed: bool) -> Result<(), String> {
+        self.state()
+            .set_auto_type_key(
+                self.generation,
+                scan as usize,
+                if pressed { 0x80 } else { 0 },
+            )
+            .then_some(())
+            .ok_or_else(|| "auto-type job was superseded".to_owned())?;
+        self.refresh_heartbeat()
+    }
+
+    fn sleep(&self, duration: std::time::Duration) -> Result<(), String> {
+        let deadline = std::time::Instant::now() + duration;
+        loop {
+            self.refresh_heartbeat()?;
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(());
+            }
+            std::thread::sleep(
+                remaining.min(std::time::Duration::from_millis(HEARTBEAT_REFRESH_MS)),
+            );
+        }
+    }
+}
+
+impl Drop for AutoTypeSession {
+    fn drop(&mut self) {
+        self.state().retire_auto_type(self.generation);
+    }
+}
 
 /// Spawn a background thread that types `password` into the EQ process with the
 /// given PID, then presses Enter to submit.
@@ -59,40 +130,37 @@ pub fn spawn(pid: u32, password: String) {
     let pw_len = password.len();
     debug_log(&format!("auto_type: spawn pid={pid} password_len={pw_len}"));
 
-    // Create the shm immediately so trusik finds it on its first try_open().
+    // Create the mapping immediately so trusik finds it on its first open.
     let shm = match open_or_create_shm(pid) {
-        Ok((handle, ptr)) => Shm { handle, ptr },
-        Err(e) => {
+        Ok(shm) => shm,
+        Err(error) => {
             debug_log(&format!(
-                "auto_type: failed to create shm for pid={pid}: {e}"
+                "auto_type: failed to create shm for pid={pid}: {error}"
             ));
             return;
         }
     };
 
     std::thread::spawn(move || {
-        // Wait for trusik to signal that DirectInput is ready.
         debug_log(&format!("auto_type: waiting for DI ready event pid={pid}"));
         if !wait_for_di_ready(pid) {
             debug_log(&format!("auto_type: DI ready timeout pid={pid}"));
-            cleanup_shm(shm);
             return;
         }
         debug_log(&format!(
             "auto_type: DI ready, starting type_password pid={pid}"
         ));
 
-        // Brief pause to let DI fully settle.
+        // Brief pause to let DI fully settle. The source is not active yet.
         std::thread::sleep(std::time::Duration::from_millis(500));
 
-        if let Err(e) = type_password(pid, &password, shm) {
-            debug_log(&format!("auto_type: ERROR pid={pid}: {e}"));
+        if let Err(error) = type_password(pid, &password, shm) {
+            debug_log(&format!("auto_type: ERROR pid={pid}: {error}"));
         }
     });
 }
 
 /// Wait for the named event `Local\Stonemite_DI_{pid}` to be signaled.
-/// Polls until the event exists, then waits on it.
 fn wait_for_di_ready(pid: u32) -> bool {
     let name = format!("Local\\Stonemite_DI_{pid}\0");
     let wide: Vec<u16> = name.encode_utf16().collect();
@@ -117,110 +185,55 @@ fn wait_for_di_ready(pid: u32) -> bool {
         };
 
         match handle {
-            Ok(h) => {
+            Ok(handle) => {
                 let remaining = timeout.saturating_sub(start.elapsed());
                 debug_log(&format!("auto_type: found DI event, waiting pid={pid}"));
-                let result = unsafe { WaitForSingleObject(h, remaining.as_millis() as u32) };
+                let result = unsafe { WaitForSingleObject(handle, remaining.as_millis() as u32) };
                 unsafe {
-                    let _ = CloseHandle(h);
+                    let _ = CloseHandle(handle);
                 }
                 return result.0 == 0; // WAIT_OBJECT_0
             }
-            Err(_) => {
-                // Event doesn't exist yet, trusik hasn't loaded.
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(100)),
         }
     }
 }
 
 fn type_password(pid: u32, password: &str, shm: Shm) -> Result<(), String> {
-    let Shm { handle, ptr } = shm;
-    unsafe {
-        let magic = std::ptr::read_volatile(&(*ptr).magic);
-        let version = std::ptr::read_volatile(&(*ptr).version);
-        let proxy_ready = std::ptr::read_volatile(&(*ptr).proxy_ready);
-        let mouse_active = (*ptr).mouse_active.load(Ordering::Acquire);
-        let suppress = std::ptr::read_volatile(&(*ptr).suppress);
-        if magic != MAGIC || version != VERSION || proxy_ready != PROXY_READY {
-            close_shm(Shm { handle, ptr });
-            return Err(format!(
-                "incompatible trusik input mapping: magic={magic:#010x} version={version} proxy_ready={proxy_ready:#04x}"
-            ));
-        }
+    let session = AutoTypeSession::start(shm, pid)?;
 
-        // Auto-login owns only keyboard activation and never changes the
-        // independent Mouse Clutch field (new mappings initialize it to zero).
-        (*ptr)
-            .keyboard_active
-            .fetch_or(KEYBOARD_AUTO_TYPE, Ordering::AcqRel);
-        debug_log(&format!(
-            "auto_type: shm ready pid={pid} magic={magic:#010x} version={version} proxy_ready={proxy_ready:#04x} keyboard_auto_type=on mouse_active={mouse_active} suppress={suppress}"
-        ));
+    // Give trusik's activation thread time to post WM_ACTIVATEAPP(1).
+    session.sleep(std::time::Duration::from_millis(200))?;
+
+    for (index, character) in password.chars().enumerate() {
+        type_char(&session, character, index, pid)?;
     }
 
-    // Give trusik's wm_activate_thread time to post WM_ACTIVATEAPP(1) and
-    // EQ time to process it.  Background windows need this message to
-    // enable keyboard_process before keystrokes arrive.
-    std::thread::sleep(std::time::Duration::from_millis(200));
-
-    // Type each character.
-    for (i, ch) in password.chars().enumerate() {
-        type_char(ptr, ch, i, pid);
-    }
-
-    // Press Enter to submit login.
     let enter_scan = vk_to_scan(0x0D);
     debug_log(&format!(
         "auto_type: pressing Enter (login) scan={enter_scan:#04x} pid={pid}"
     ));
-    press_scancode(ptr, enter_scan, false);
+    press_scancode(&session, enter_scan, false)?;
 
-    // Wait for the server select screen to appear, then press Enter
-    // repeatedly to confirm the pre-selected server.
     debug_log(&format!(
         "auto_type: waiting 2s for server select pid={pid}"
     ));
-    std::thread::sleep(std::time::Duration::from_millis(2000));
+    session.sleep(std::time::Duration::from_millis(2000))?;
 
-    for i in 0..3 {
+    for index in 0..3 {
         debug_log(&format!(
             "auto_type: pressing Enter (server select {}) pid={pid}",
-            i + 1
+            index + 1
         ));
-        press_scancode(ptr, enter_scan, false);
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+        press_scancode(&session, enter_scan, false)?;
+        session.sleep(std::time::Duration::from_millis(1000))?;
     }
 
     debug_log(&format!("auto_type: done, deactivating shm pid={pid}"));
-
-    // Deactivate and clean up.
-    cleanup_shm(Shm { handle, ptr });
-
     Ok(())
 }
 
-fn cleanup_shm(shm: Shm) {
-    unsafe {
-        (*shm.ptr)
-            .keyboard_active
-            .fetch_and(!KEYBOARD_AUTO_TYPE, Ordering::AcqRel);
-    }
-    close_shm(shm);
-}
-
-fn close_shm(shm: Shm) {
-    unsafe {
-        let _ = windows::Win32::System::Memory::UnmapViewOfFile(
-            windows::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
-                Value: shm.ptr as *mut c_void,
-            },
-        );
-        let _ = CloseHandle(shm.handle);
-    }
-}
-
-fn open_or_create_shm(pid: u32) -> Result<(HANDLE, *mut SharedKeyState), String> {
+fn open_or_create_shm(pid: u32) -> Result<Shm, String> {
     let name = format!("Local\\DI8_{pid}\0");
     let wide: Vec<u16> = name.encode_utf16().collect();
 
@@ -232,18 +245,20 @@ fn open_or_create_shm(pid: u32) -> Result<(HANDLE, *mut SharedKeyState), String>
             None,
             PAGE_READWRITE,
             0,
-            SHM_SIZE as u32,
+            SHARED_KEY_STATE_SIZE as u32,
             windows::core::PCWSTR(wide.as_ptr()),
         )
-        .map_err(|e| format!("CreateFileMappingW failed: {e}"))?;
+        .map_err(|error| format!("CreateFileMappingW failed: {error}"))?;
 
-        let last_error = windows::Win32::Foundation::GetLastError();
-        let existed = last_error == windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
-        debug_log(&format!(
-            "auto_type: CreateFileMappingW ok, existed={existed}"
-        ));
-
-        let view = MapViewOfFile(handle, FILE_MAP_WRITE, 0, 0, SHM_SIZE);
+        let existed = windows::Win32::Foundation::GetLastError()
+            == windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
+        let view = MapViewOfFile(
+            handle,
+            FILE_MAP_READ | FILE_MAP_WRITE,
+            0,
+            0,
+            SHARED_KEY_STATE_SIZE,
+        );
         let ptr = view.Value as *mut SharedKeyState;
         if ptr.is_null() {
             let _ = CloseHandle(handle);
@@ -251,11 +266,9 @@ fn open_or_create_shm(pid: u32) -> Result<(HANDLE, *mut SharedKeyState), String>
         }
 
         if existed {
-            // Preserve a live compatible mapping. Never zero shared state owned
-            // by the broadcast controller or reinterpret an older ABI.
-            let magic = std::ptr::read_volatile(&(*ptr).magic);
-            let version = std::ptr::read_volatile(&(*ptr).version);
-            if magic != MAGIC || version != VERSION {
+            if !(*ptr).is_compatible() {
+                let magic = (*ptr).magic.load(Ordering::Acquire);
+                let version = (*ptr).version.load(Ordering::Acquire);
                 let _ = windows::Win32::System::Memory::UnmapViewOfFile(view);
                 let _ = CloseHandle(handle);
                 return Err(format!(
@@ -264,13 +277,11 @@ fn open_or_create_shm(pid: u32) -> Result<(HANDLE, *mut SharedKeyState), String>
             }
             debug_log("auto_type: reusing compatible shm from broadcast engine");
         } else {
-            debug_log("auto_type: initializing new shm");
-            std::ptr::write_bytes(ptr, 0, 1);
-            std::ptr::write_volatile(&mut (*ptr).magic, MAGIC);
-            std::ptr::write_volatile(&mut (*ptr).version, VERSION);
+            SharedKeyState::initialize(ptr);
+            debug_log("auto_type: initialized new input mapping");
         }
 
-        Ok((handle, ptr))
+        Ok(Shm { handle, ptr })
     }
 }
 
@@ -280,13 +291,18 @@ fn vk_to_scan(vk: u32) -> u8 {
 }
 
 /// Type a single character by resolving it to VK + shift state.
-fn type_char(ptr: *mut SharedKeyState, ch: char, index: usize, pid: u32) {
-    let result = unsafe { VkKeyScanW(ch as u16) };
+fn type_char(
+    session: &AutoTypeSession,
+    character: char,
+    index: usize,
+    pid: u32,
+) -> Result<(), String> {
+    let result = unsafe { VkKeyScanW(character as u16) };
     if result == -1i16 {
         debug_log(&format!(
-            "auto_type: no VK mapping for char[{index}]='{ch}' pid={pid}"
+            "auto_type: no VK mapping for char[{index}]='{character}' pid={pid}"
         ));
-        return;
+        return Ok(());
     }
     let vk = (result & 0xFF) as u32;
     let shift_state = ((result >> 8) & 0xFF) as u8;
@@ -294,119 +310,72 @@ fn type_char(ptr: *mut SharedKeyState, ch: char, index: usize, pid: u32) {
     let scan = vk_to_scan(vk);
     if !is_usable_scan_code(scan) {
         debug_log(&format!(
-            "auto_type: no usable scan code for char[{index}]='{ch}' vk={vk:#04x} pid={pid}"
+            "auto_type: no usable scan code for char[{index}]='{character}' vk={vk:#04x} pid={pid}"
         ));
-        return;
+        return Ok(());
     }
 
     debug_log(&format!(
         "auto_type: char[{index}] vk={vk:#04x} scan={scan:#04x} shift={needs_shift} pid={pid}"
     ));
-    press_scancode(ptr, scan, needs_shift);
+    press_scancode(session, scan, needs_shift)
 }
 
 /// Press and release a scan code, optionally with Shift held.
-fn press_scancode(ptr: *mut SharedKeyState, scan: u8, shift: bool) {
+fn press_scancode(session: &AutoTypeSession, scan: u8, shift: bool) -> Result<(), String> {
     if !is_usable_scan_code(scan) {
-        return;
+        return Ok(());
     }
     let shift_scan = vk_to_scan(0x10); // VK_SHIFT
     if shift && !is_usable_scan_code(shift_scan) {
-        return;
+        return Ok(());
     }
 
-    unsafe {
-        // Press Shift if needed.
-        if shift {
-            std::ptr::write_volatile(&mut (*ptr).keys[shift_scan as usize], 0x80);
-            bump_seq(ptr);
-        }
-
-        // Press key.
-        std::ptr::write_volatile(&mut (*ptr).keys[scan as usize], 0x80);
-        bump_seq(ptr);
-
-        let seq = std::ptr::read_volatile(&(*ptr).seq);
-        debug_log(&format!("auto_type: key down scan={scan:#04x} seq={seq}"));
-
-        std::thread::sleep(std::time::Duration::from_millis(KEY_DOWN_MS));
-
-        // Release key.
-        std::ptr::write_volatile(&mut (*ptr).keys[scan as usize], 0x00);
-        bump_seq(ptr);
-
-        // Release Shift.
-        if shift {
-            std::ptr::write_volatile(&mut (*ptr).keys[shift_scan as usize], 0x00);
-            bump_seq(ptr);
-        }
-
-        // Give EQ time to see the release before the next key press.
-        // Without this, repeated characters (same scan code) can be missed
-        // if EQ doesn't poll between the release and re-press.
-        std::thread::sleep(std::time::Duration::from_millis(KEY_UP_MS));
+    if shift {
+        session.set_key(shift_scan, true)?;
     }
+    session.set_key(scan, true)?;
+    debug_log(&format!("auto_type: key down scan={scan:#04x}"));
+    session.sleep(std::time::Duration::from_millis(KEY_DOWN_MS))?;
+
+    session.set_key(scan, false)?;
+    if shift {
+        session.set_key(shift_scan, false)?;
+    }
+    session.sleep(std::time::Duration::from_millis(KEY_UP_MS))
 }
 
 fn is_usable_scan_code(scan: u8) -> bool {
     (1..=254).contains(&scan)
 }
 
-unsafe fn bump_seq(ptr: *mut SharedKeyState) {
-    let seq = std::ptr::read_volatile(&(*ptr).seq);
-    std::ptr::write_volatile(&mut (*ptr).seq, seq.wrapping_add(1));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn shared_memory_layout_matches_version_two_abi() {
-        assert_eq!(VERSION, 2);
-        assert_eq!(SHM_SIZE, 284);
-        assert_eq!(std::mem::align_of::<SharedKeyState>(), 4);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, magic), 0);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, version), 4);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, keyboard_active), 8);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, mouse_active), 12);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, suppress), 16);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, seq), 20);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, keys), 24);
-        assert_eq!(std::mem::offset_of!(SharedKeyState, proxy_ready), 279);
-        assert_eq!(
-            std::mem::offset_of!(SharedKeyState, controller_heartbeat_ms),
-            280
-        );
+    fn state() -> SharedKeyState {
+        let mut state = std::mem::MaybeUninit::<SharedKeyState>::uninit();
+        unsafe {
+            SharedKeyState::initialize(state.as_mut_ptr());
+            state.assume_init()
+        }
     }
 
     #[test]
-    fn auto_login_activation_keeps_mouse_off() {
-        let shared = SharedKeyState {
-            magic: MAGIC,
-            version: VERSION,
-            keyboard_active: AtomicU32::new(0),
-            mouse_active: AtomicU32::new(0),
-            suppress: 0,
-            seq: 0,
-            keys: [0; 255],
-            proxy_ready: PROXY_READY,
-            controller_heartbeat_ms: AtomicU32::new(0),
-        };
+    fn newer_auto_type_generation_cannot_be_cleared_by_the_old_job() {
+        let shared = state();
+        let old = shared.begin_auto_type(100);
+        assert!(shared.set_auto_type_key(old, 0x1e, 0x80));
+        let new = shared.begin_auto_type(101);
+        assert_ne!(old, new);
+        assert!(shared.set_auto_type_key(new, 0x30, 0x80));
+        assert!(!shared.set_auto_type_key(old, 0x1e, 0));
+        shared.retire_auto_type(old);
 
-        // Simulate an independently active keyboard-broadcast source.
-        shared.keyboard_active.store(1, Ordering::Release);
-        shared
-            .keyboard_active
-            .fetch_or(KEYBOARD_AUTO_TYPE, Ordering::AcqRel);
-        assert_eq!(shared.keyboard_active.load(Ordering::Acquire), 5);
-        assert_eq!(shared.mouse_active.load(Ordering::Acquire), 0);
-
-        shared
-            .keyboard_active
-            .fetch_and(!KEYBOARD_AUTO_TYPE, Ordering::AcqRel);
-        assert_eq!(shared.keyboard_active.load(Ordering::Acquire), 1);
-        assert_eq!(shared.mouse_active.load(Ordering::Acquire), 0);
+        let mut keys = [0; 256];
+        assert!(shared.read_effective_keys(101, &mut keys));
+        assert_eq!(keys[0x1e], 0);
+        assert_eq!(keys[0x30], 0x80);
     }
 
     #[test]

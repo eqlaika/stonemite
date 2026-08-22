@@ -4,6 +4,7 @@ members = [
     "crates/stonemite",
     "crates/trushar",
     "crates/trusik",
+    "crates/trusik-protocol",
 ]
 exclude = ["tools/mkicon"]
 resolver = "2"

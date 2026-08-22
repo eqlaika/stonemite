@@ -18,7 +18,17 @@ pub fn deploy(eq_dir: &Path) -> std::io::Result<()> {
     }
 
     let dst = eq_dir.join("dinput8.dll");
-    std::fs::write(&dst, TRUSIK_DLL)?;
+    deploy_bytes(&dst, TRUSIK_DLL)
+}
+
+fn deploy_bytes(dst: &Path, dll: &[u8]) -> std::io::Result<()> {
+    // Loaded DLLs are locked against replacement on Windows. Avoid touching an
+    // already-current file so launching additional clients remains possible,
+    // while still retrying a previously blocked upgrade before the next launch.
+    if std::fs::read(dst).is_ok_and(|current| current == dll) {
+        return Ok(());
+    }
+    std::fs::write(dst, dll)?;
     eprintln!("trusik: deployed embedded dinput8.dll -> {}", dst.display());
     Ok(())
 }
@@ -35,4 +45,36 @@ pub fn remove(eq_dir: &Path) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&log);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[allow(clippy::permissions_set_readonly_false)] // This binary is Windows-only.
+    fn identical_locked_proxy_does_not_need_replacement() {
+        let directory = std::env::temp_dir().join(format!(
+            "stonemite-trusik-deploy-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("dinput8.dll");
+        std::fs::write(&path, b"current proxy").unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions).unwrap();
+
+        assert!(deploy_bytes(&path, b"current proxy").is_ok());
+        assert!(deploy_bytes(&path, b"different proxy").is_err());
+
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

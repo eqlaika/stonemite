@@ -699,6 +699,17 @@ fn launch_eq(username: Option<&str>, password: Option<&str>) {
         username,
         password.is_some()
     ));
+    if cfg.trusik {
+        if let Err(error) = crate::trusik_deploy::deploy(&eq_dir) {
+            overlay::debug_log(&format!(
+                "launch_eq: input proxy update failed before spawn: {error}"
+            ));
+            overlay::show_toast(
+                "Input proxy update failed. Close all EverQuest clients and try again.",
+            );
+            return;
+        }
+    }
     let mut cmd = std::process::Command::new(&exe);
     cmd.arg("patchme").current_dir(&eq_dir);
     if let Some(user) = username {

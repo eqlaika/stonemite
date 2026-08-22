@@ -4,8 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 name = "dinput8"
+
+[dependencies]
+trusik-protocol = { path = "../trusik-protocol" }
+
+[target.'cfg(windows)'.dependencies]
+minhook = "0.9"
 
 [dependencies.windows]
 version = "0.58"
