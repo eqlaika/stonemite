@@ -6,10 +6,10 @@
 
 EverQuest multiboxing tool for Windows. Requires Windows 10 or later.
 
-Stonemite makes multiboxing EQ easy: PiP overlays with click-to-swap, swap hotkeys, filtered key broadcasting, hold-to-broadcast Mouse Clutch, character login, automatic character nameplates, optional Stream Deck controls, a drag-and-drop layout editor, and more. Stonemite is free and open source.
+Stonemite makes multiboxing EQ easy: PiP overlays with click-to-swap, swap hotkeys, keyboard key broadcasting, hold-to-broadcast Mouse Clutch, character login, automatic character window labels, optional Stream Deck controls, drag-and-drop layout editor, and more. Stonemite is hi-DPI aware, works out of the box with no dependencies or configuration wizards, and is free and open source.
 
 > [!WARNING]
-> **Stonemite is not an automation tool.** Every gameplay input must originate from an immediate physical user action; Stonemite never decides when a gameplay action should occur. Input sequences, loops, and game-state reactions that control EQ are intentionally unsupported. Passive log observation may drive UI telemetry, notifications, and display-only timers, but those features cannot inject input or invoke gameplay controls. Pull requests that add unattended gameplay will not be accepted. Stonemite is designed to comply fully with EverQuest's Terms of Service and EULA.
+> **Stonemite is not an automation tool.** Every gameplay input must originate from an immediate physical user action; Stonemite never decides when a gameplay action should occur. Input sequences, loops, and game-state reactions that control EQ are intentionally unsupported. Passive log observation can drive UI notifications and display-only timers, but those features cannot inject input or invoke gameplay controls. Pull requests that add unattended gameplay will not be accepted. Stonemite is designed to comply fully with EverQuest's Terms of Service and EULA.
 
 ## Install
 
@@ -19,12 +19,6 @@ Download the latest release from [GitHub Releases](https://github.com/eqlaika/st
 - **Portable** (`stonemite-x86_64-pc-windows-msvc.zip`) — extract and run anywhere
 
 A system tray icon appears with access to all settings. Check for updates from the tray menu.
-
-## Mouse Clutch
-
-Mouse Clutch sends the complete physical mouse—movement, buttons, and wheel—from the foreground EQ client to input-ready background clients while you hold one key. It defaults to F13 and supports F13–F24 and keyboard-emulating foot pedals.
-
-Mouse Clutch requires the DirectInput proxy (`trusik = true` in `config.toml`) and a restart of both Stonemite and EQ. Configure its key under **Settings > Broadcasting**. To keep pointer coordinates aligned, Stonemite includes only clients whose window position, client size, and DPI match the active client. Focus or client loss cancels the clutch safely, and the overlay and tray show its active or releasing state.
 
 ## Stream Deck
 
@@ -73,13 +67,11 @@ The app checks for updates against [eqlaika/stonemite](https://github.com/eqlaik
 | **Resource usage** | ~5 MB single exe | Inner Space + ISBoxer addon |
 | **Updates** | One-click from system tray | Manual download through Inner Space |
 
-**When to use Stonemite:** You want multiboxing that just works — PiP overlays, swap hotkeys, filtered key broadcasting, hold-to-broadcast mouse input, auto-login, character detection, and optional Stream Deck controls. Launch it and go.
-
-**When to use ISBoxer:** You need round-robin input, more complex input or layout configuration, or you're already comfortable with the Inner Space ecosystem.
+Stonemite should replace ISBoxer for all but the most arcane usecases.
 
 ## Account login
 
-Stonemite can launch your EQ accounts and log them in for you: no patcher, no typing passwords, no clicking through server select. Add your accounts in Settings > Accounts, and Stonemite handles the rest.
+Stonemite can launch your EQ accounts and log them in for you: no patcher, no typing passwords, no clicking through server select. Add your accounts and preferred server in settings, and Stonemite handles the rest.
 
 ### Password security
 
