@@ -1,0 +1,363 @@
+.box-order-empty {
+  display: grid;
+  gap: 3px;
+  padding: 16px 0;
+  color: var(--muted);
+  border-block: 1px solid var(--line);
+}
+
+.box-order-empty strong {
+  color: var(--text);
+  font-weight: 680;
+}
+
+.box-order-empty p,
+.box-order-known-control label,
+.box-order-manual label,
+.box-order-error {
+  margin: 0;
+  font-size: 12px;
+}
+
+.box-order-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border-block: 1px solid var(--line);
+  list-style: none;
+}
+
+.box-order-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 18px 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 7px 3px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  transition:
+    background-color 120ms ease-out,
+    opacity 120ms ease-out;
+}
+
+.box-order-row:last-child {
+  border-bottom: 0;
+}
+
+.box-order-row.dragging {
+  opacity: 0.5;
+}
+
+.box-order-row.drop-target:not(.dragging) {
+  background: var(--accent-soft);
+}
+
+.box-order-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--quiet);
+  cursor: grab;
+}
+
+.box-order-row:active .box-order-grip {
+  cursor: grabbing;
+}
+
+.box-order-number {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 720;
+  font-variant-numeric: tabular-nums;
+}
+
+.box-order-identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.box-order-identity strong,
+.box-order-identity span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.box-order-identity strong {
+  font-weight: 680;
+}
+
+.box-order-identity span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.box-order-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.box-order-action.button {
+  width: 30px;
+  min-height: 30px;
+  padding: 0;
+}
+
+.box-order-remove {
+  color: var(--muted);
+}
+
+.box-order-remove:hover:not(:disabled) {
+  color: var(--error);
+  background: var(--danger-hover);
+  border-color: transparent;
+}
+
+.box-order-known-control {
+  display: grid;
+  gap: 6px;
+}
+
+.box-order-known-control > label,
+.box-order-manual label {
+  font-weight: 620;
+}
+
+.box-order-add-row {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+}
+
+.character-combobox {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+}
+
+.character-combobox-input-wrap {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.character-combobox-input-wrap > svg {
+  position: absolute;
+  left: 10px;
+  z-index: 1;
+  color: var(--quiet);
+  pointer-events: none;
+}
+
+.character-combobox-input.text-input {
+  width: 100%;
+  max-width: none;
+  padding-inline: 32px 34px;
+}
+
+.character-combobox-toggle {
+  position: absolute;
+  right: 2px;
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+}
+
+.character-combobox-toggle:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.character-combobox-listbox {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 5px);
+  right: 0;
+  left: 0;
+  max-height: 270px;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+
+.character-combobox-heading {
+  padding: 7px 8px 4px;
+  color: var(--quiet);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.character-combobox-listbox [role="group"] + [role="group"] {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--line);
+}
+
+.character-combobox-option {
+  display: grid;
+  width: 100%;
+  min-height: 42px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  text-align: left;
+}
+
+.character-combobox-option:hover,
+.character-combobox-option.active {
+  background: var(--accent-soft);
+}
+
+.character-combobox-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.character-combobox-copy strong,
+.character-combobox-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.character-combobox-copy strong {
+  font-weight: 680;
+}
+
+.character-combobox-copy span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.character-combobox-status {
+  padding: 2px 7px;
+  color: var(--accent);
+  background: var(--surface);
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 680;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.character-combobox-empty {
+  margin: 0;
+  padding: 13px 9px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.box-order-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--quiet);
+  font-size: 11px;
+}
+
+.box-order-divider::before,
+.box-order-divider::after {
+  height: 1px;
+  flex: 1;
+  content: "";
+  background: var(--line);
+}
+
+.box-order-manual {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.box-order-manual > div {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.box-order-manual .text-input {
+  width: 100%;
+}
+
+.box-order-error {
+  color: var(--error);
+}
+
+.box-order-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 560px) {
+  .box-order-row {
+    grid-template-columns: 16px 28px minmax(0, 1fr);
+  }
+
+  .box-order-actions {
+    grid-column: 2 / -1;
+    justify-content: flex-end;
+  }
+
+  .box-order-manual {
+    grid-template-columns: 1fr;
+  }
+
+  .box-order-manual .button {
+    justify-self: start;
+  }
+}
+
+@media (forced-colors: active) {
+  .box-order-number,
+  .character-combobox-status {
+    border: 1px solid ButtonText;
+  }
+
+  .character-combobox-option.active {
+    outline: 1px solid Highlight;
+  }
+}

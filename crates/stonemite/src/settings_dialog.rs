@@ -1,8 +1,13 @@
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use serde::Serialize;
 use tauri::{LogicalPosition, Manager, Position, RunEvent};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::{header, HeaderValue};
+use tokio_tungstenite::tungstenite::Message;
 use windows::core::w;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -10,7 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::config::Config;
-use crate::settings_model::{SaveOutcome, SettingsDraft, SettingsPayload};
+use crate::settings_model::{RunningCharacter, SaveOutcome, SettingsDraft, SettingsPayload};
 
 /// Custom message posted to the tray window after settings are saved.
 pub const WM_SETTINGS_CHANGED: u32 = WM_USER + 100;
@@ -77,6 +82,7 @@ pub fn run_standalone() {
         })
         .invoke_handler(tauri::generate_handler![
             load_settings,
+            load_running_characters,
             save_settings,
             choose_eq_directory,
             preview_notification_sound,
@@ -117,6 +123,119 @@ pub fn run_standalone() {
 #[tauri::command]
 fn load_settings() -> Result<SettingsPayload, String> {
     SettingsPayload::load()
+}
+
+#[tauri::command]
+async fn load_running_characters() -> Vec<RunningCharacter> {
+    running_characters_from_control()
+        .await
+        .unwrap_or_else(discover_running_characters)
+}
+
+async fn running_characters_from_control() -> Option<Vec<RunningCharacter>> {
+    let config = Config::load();
+    if !config.trushar.enabled {
+        return None;
+    }
+    let port = config
+        .trushar
+        .bind
+        .parse::<std::net::SocketAddr>()
+        .ok()?
+        .port();
+    let mut request = format!("ws://127.0.0.1:{port}/trushar/v1")
+        .into_client_request()
+        .ok()?;
+    if let Some(token) = config
+        .trushar
+        .auth_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+    {
+        request.headers_mut().insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}")).ok()?,
+        );
+    }
+
+    let (mut socket, _) = tokio::time::timeout(
+        Duration::from_secs(1),
+        tokio_tungstenite::connect_async(request),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let next = tokio::time::timeout(Duration::from_secs(1), socket.next())
+        .await
+        .ok()?;
+    let frame = next?.ok()?;
+    let Message::Text(text) = frame else {
+        return None;
+    };
+    let trushar::protocol::ServerMessage::State { state, .. } =
+        serde_json::from_str(text.as_str()).ok()?
+    else {
+        return None;
+    };
+    Some(running_characters_from_clients(state.clients))
+}
+
+fn running_characters_from_clients(
+    clients: Vec<trushar::protocol::WireClient>,
+) -> Vec<RunningCharacter> {
+    let mut characters: Vec<_> = clients
+        .into_iter()
+        .filter_map(|client| {
+            Some(RunningCharacter {
+                server: client.server?,
+                character: client.character?,
+                window_number: Some(client.window_number),
+            })
+        })
+        .collect();
+    sort_and_deduplicate_running(&mut characters);
+    characters
+}
+
+fn discover_running_characters() -> Vec<RunningCharacter> {
+    let mut characters: Vec<_> = crate::eq_windows::find_eq_windows()
+        .into_iter()
+        .filter_map(|window| {
+            let (character, server) = crate::trusik_shm::read_character(window.pid)?;
+            Some(RunningCharacter {
+                server,
+                character,
+                window_number: None,
+            })
+        })
+        .collect();
+    sort_and_deduplicate_running(&mut characters);
+    characters
+}
+
+fn sort_and_deduplicate_running(characters: &mut Vec<RunningCharacter>) {
+    characters.sort_by(|left, right| {
+        left.window_number
+            .unwrap_or(usize::MAX)
+            .cmp(&right.window_number.unwrap_or(usize::MAX))
+            .then_with(|| {
+                left.character
+                    .to_ascii_lowercase()
+                    .cmp(&right.character.to_ascii_lowercase())
+            })
+            .then_with(|| {
+                left.server
+                    .to_ascii_lowercase()
+                    .cmp(&right.server.to_ascii_lowercase())
+            })
+    });
+    let mut seen = HashSet::with_capacity(characters.len());
+    characters.retain(|identity| {
+        seen.insert((
+            identity.server.to_ascii_lowercase(),
+            identity.character.to_ascii_lowercase(),
+        ))
+    });
 }
 
 #[tauri::command]
@@ -266,5 +385,42 @@ mod tests {
     fn pairing_codes_keep_all_leading_zeroes() {
         assert_eq!(format_pairing_code(4_271), "004 271");
         assert_eq!(format_pairing_code(999_999), "999 999");
+    }
+
+    #[test]
+    fn running_characters_use_window_order_and_require_complete_identities() {
+        let client = |window_number, character: Option<&str>, server: Option<&str>| {
+            trushar::protocol::WireClient {
+                id: format!("client-{window_number}"),
+                character: character.map(str::to_owned),
+                server: server.map(str::to_owned),
+                class_code: None,
+                window_number,
+                active: false,
+                activatable: true,
+                input_ready: false,
+            }
+        };
+        let characters = running_characters_from_clients(vec![
+            client(3, Some("Kafka"), Some("Xegony")),
+            client(1, Some("Laika"), Some("Xegony")),
+            client(2, None, Some("Xegony")),
+        ]);
+
+        assert_eq!(
+            characters,
+            vec![
+                RunningCharacter {
+                    server: "Xegony".into(),
+                    character: "Laika".into(),
+                    window_number: Some(1),
+                },
+                RunningCharacter {
+                    server: "Xegony".into(),
+                    character: "Kafka".into(),
+                    window_number: Some(3),
+                },
+            ]
+        );
     }
 }

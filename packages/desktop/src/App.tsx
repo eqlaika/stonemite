@@ -4,6 +4,7 @@ import {
   Gamepad2,
   Info,
   Keyboard,
+  ListOrdered,
   MonitorUp,
   Radio,
   RefreshCw,
@@ -17,6 +18,7 @@ import { useEffect, useState } from "react";
 import { Button, InlineStatus } from "./components/Controls";
 import { AboutPage } from "./pages/AboutPage";
 import { AccountsPage } from "./pages/AccountsPage";
+import { BoxOrderPage } from "./pages/BoxOrderPage";
 import { BroadcastingPage } from "./pages/BroadcastingPage";
 import { GeneralPage } from "./pages/GeneralPage";
 import { HotkeysPage } from "./pages/HotkeysPage";
@@ -28,6 +30,7 @@ import { useSettings } from "./settings/SettingsContext";
 type PageId =
   | "general"
   | "accounts"
+  | "boxOrder"
   | "pip"
   | "notifications"
   | "hotkeys"
@@ -43,6 +46,7 @@ interface NavigationItem {
 const navigation: NavigationItem[] = [
   { id: "general", label: "General", icon: Gamepad2 },
   { id: "accounts", label: "Accounts", icon: UserRound },
+  { id: "boxOrder", label: "Box order", icon: ListOrdered },
   { id: "pip", label: "PiP overlay", icon: MonitorUp },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "hotkeys", label: "Hotkeys", icon: Keyboard },
@@ -56,6 +60,8 @@ function CurrentPage({ page }: { page: PageId }) {
       return <GeneralPage />;
     case "accounts":
       return <AccountsPage />;
+    case "boxOrder":
+      return <BoxOrderPage />;
     case "pip":
       return <PipPage />;
     case "notifications":

@@ -84,6 +84,19 @@ fn default_trushar_bind() -> String {
     trushar::server::DEFAULT_BIND.to_owned()
 }
 
+/// A durable EverQuest character identity used for preferred box ordering.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BoxIdentity {
+    pub server: String,
+    pub character: String,
+}
+
+impl BoxIdentity {
+    pub fn matches(&self, server: &str, character: &str) -> bool {
+        self.server.eq_ignore_ascii_case(server) && self.character.eq_ignore_ascii_case(character)
+    }
+}
+
 /// Top-level configuration persisted to %APPDATA%\Stonemite\config.toml.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -114,6 +127,9 @@ pub struct Config {
     /// Automatically order PiP windows by slot number in auto layout mode.
     #[serde(default = "default_auto_order")]
     pub auto_order: bool,
+    /// Preferred global box order, matched by full character/server identity.
+    #[serde(default)]
+    pub box_order: Vec<BoxIdentity>,
     /// Hide background EQ windows from Alt-Tab (active window stays visible).
     #[serde(default = "default_hide_from_alt_tab")]
     pub hide_from_alt_tab: bool,
@@ -263,6 +279,7 @@ impl Default for Config {
             pip_label_height: None,
             pip_label_opacity: None,
             auto_order: default_auto_order(),
+            box_order: Vec::new(),
             hide_from_alt_tab: default_hide_from_alt_tab(),
             trusik: false,
             swap_hotkeys: default_swap_hotkeys(),
@@ -637,9 +654,42 @@ mod tests {
         assert!(config.notify_raid_invites);
         assert!(config.notify_resurrections);
         assert!(config.notify_deaths);
+        assert!(config.box_order.is_empty());
         assert!(config.trushar.enabled);
         assert_eq!(config.trushar.bind, "127.0.0.1:19720");
         assert_eq!(config.trushar.auth_token, None);
+    }
+
+    #[test]
+    fn box_order_round_trips_full_identities() {
+        let config: Config = toml::from_str(
+            r#"
+box_order = [
+    { server = "xegony", character = "Laika" },
+    { server = "bristlebane", character = "Foo" },
+]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.box_order,
+            vec![
+                BoxIdentity {
+                    server: "xegony".into(),
+                    character: "Laika".into(),
+                },
+                BoxIdentity {
+                    server: "bristlebane".into(),
+                    character: "Foo".into(),
+                },
+            ]
+        );
+        assert!(config.box_order[0].matches("XEGONY", "laika"));
+
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let reparsed: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.box_order, config.box_order);
     }
 
     #[test]

@@ -11,6 +11,15 @@ export interface AccountDraft {
   password: string;
 }
 
+export interface BoxIdentity {
+  server: string;
+  character: string;
+}
+
+export interface RunningCharacter extends BoxIdentity {
+  windowNumber: number | null;
+}
+
 export interface IntegrationSettings {
   enabled: boolean;
   lanEnabled: boolean;
@@ -73,6 +82,7 @@ export interface BroadcastingSettings {
 export interface SettingsDraft {
   general: GeneralSettings;
   accounts: AccountsSettings;
+  boxOrder: BoxIdentity[];
   pip: PipSettings;
   notifications: NotificationSettings;
   hotkeys: HotkeySettings;
@@ -81,6 +91,7 @@ export interface SettingsDraft {
 
 export interface SettingsOptions {
   servers: OptionItem[];
+  knownCharacters: BoxIdentity[];
   pipEdges: OptionItem<PipEdge>[];
   notificationSounds: OptionItem[];
   filterModes: OptionItem<BroadcastFilterMode>[];

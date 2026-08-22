@@ -29,6 +29,14 @@ pip_edge = "right"
 # Automatically order PiP windows by slot number (default true)
 # auto_order = true
 
+# Preferred global box order. Character/server matching is case-insensitive;
+# missing entries are skipped and unlisted characters follow the configured list.
+# box_order = [
+#   { server = "xegony", character = "Laika" },
+#   { server = "xegony", character = "Bilka" },
+#   { server = "bristlebane", character = "Foo" },
+# ]
+
 # Hide background EQ windows from Alt-Tab (active window stays visible)
 # hide_from_alt_tab = true
 

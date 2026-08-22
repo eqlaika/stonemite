@@ -9,6 +9,9 @@ interface TauriConfig {
     devUrl?: string;
     frontendDist?: string;
   };
+  app: {
+    windows: Array<{ dragDropEnabled?: boolean }>;
+  };
 }
 
 const config = JSON.parse(
@@ -22,5 +25,9 @@ describe("Tauri settings assets", () => {
       "npm --prefix ../../packages/desktop run build",
     );
     expect(config.build.frontendDist).toBe("../../packages/desktop/dist");
+  });
+
+  it("leaves HTML drag and drop available on Windows", () => {
+    expect(config.app.windows[0]?.dragDropEnabled).toBe(false);
   });
 });

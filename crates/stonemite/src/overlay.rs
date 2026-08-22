@@ -214,6 +214,8 @@ struct OverlayState {
     eq_windows: Vec<EqWindow>,
     /// PIDs in PiP strip order. Positions are fixed; on swap, two PIDs exchange.
     pip_order: Vec<u32>,
+    /// Durable identity priority used to restore stable window numbers.
+    preferred_box_order: Vec<config::BoxIdentity>,
     /// PID of the currently active (foreground) window.
     active_pid: Option<u32>,
     /// Floating label window for the active (foreground) EQ window.
@@ -397,6 +399,48 @@ fn next_available_number(eq_windows: &[EqWindow]) -> usize {
         n += 1;
     }
     n
+}
+
+/// Assign contiguous window numbers from the configured identity priority.
+/// Unlisted and not-yet-identified clients follow in their current relative order.
+fn apply_preferred_box_order(
+    eq_windows: &mut [EqWindow],
+    preferred: &[config::BoxIdentity],
+) -> bool {
+    if preferred.is_empty() || eq_windows.is_empty() {
+        return false;
+    }
+
+    let mut ordered: Vec<(u32, usize, Option<usize>)> = eq_windows
+        .iter()
+        .map(|window| {
+            let rank = window
+                .server
+                .as_deref()
+                .zip(window.character.as_deref())
+                .and_then(|(server, character)| {
+                    preferred
+                        .iter()
+                        .position(|identity| identity.matches(server, character))
+                });
+            (window.pid, window.number, rank)
+        })
+        .collect();
+    ordered.sort_by_key(|(pid, number, rank)| {
+        (rank.is_none(), rank.unwrap_or(*number), *number, *pid)
+    });
+
+    let mut changed = false;
+    for (index, (pid, _, _)) in ordered.into_iter().enumerate() {
+        let desired_number = index + 1;
+        if let Some(window) = eq_windows.iter_mut().find(|window| window.pid == pid) {
+            if window.number != desired_number {
+                window.number = desired_number;
+                changed = true;
+            }
+        }
+    }
+    changed
 }
 
 /// Exchange the stable window numbers of two loaded clients.
@@ -1080,6 +1124,7 @@ unsafe fn init_inner() -> HWND {
         pip_windows: Vec::new(),
         eq_windows: Vec::new(),
         pip_order: Vec::new(),
+        preferred_box_order: cfg.box_order.clone(),
         active_pid: None,
         active_label_hwnd: label_hwnd,
         active_label_text: String::new(),
@@ -1323,6 +1368,7 @@ unsafe fn poll_inner_guarded() {
     crate::broadcast::update_targets(&pids, s.active_pid);
     sync_mouse_eligibility(s);
 
+    apply_preferred_box_order(&mut s.eq_windows, &s.preferred_box_order);
     if config::Config::load().auto_order {
         apply_auto_order(s);
     }
@@ -1343,10 +1389,26 @@ fn trusik_poll_characters(s: &mut OverlayState) {
                 .character_cache
                 .get_class(&server, &name)
                 .map(String::from);
-            changed |= reconcile_trusik_identity(&mut s.trusik_identities, ew, name, server, class);
+            let identity_changed = reconcile_trusik_identity(
+                &mut s.trusik_identities,
+                ew,
+                name.clone(),
+                server.clone(),
+                class,
+            );
+            if identity_changed {
+                s.character_cache.remember(&server, &name);
+                changed = true;
+            }
         }
     }
     if changed {
+        s.character_cache.save();
+        if apply_preferred_box_order(&mut s.eq_windows, &s.preferred_box_order)
+            && config::Config::load().auto_order
+        {
+            apply_auto_order(s);
+        }
         unsafe { rebuild_thumbnails(s) };
     }
 }
@@ -2784,7 +2846,15 @@ unsafe fn handle_char_assign(s: &mut OverlayState, cmd_id: u32) {
         w.character = Some(candidate.character.clone());
         w.server = Some(candidate.server.clone());
     }
+    s.character_cache
+        .remember(&candidate.server, &candidate.character);
+    s.character_cache.save();
 
+    if apply_preferred_box_order(&mut s.eq_windows, &s.preferred_box_order)
+        && config::Config::load().auto_order
+    {
+        apply_auto_order(s);
+    }
     publish_log_sources_inner(s);
     rebuild_thumbnails(s);
     publish_control_state(s);
@@ -4740,6 +4810,11 @@ pub fn force_rebuild() {
         let Some(s) = state().as_mut() else { return };
         let cfg = config::Config::load();
         s.pip_edge = cfg.pip_edge;
+        s.preferred_box_order = cfg.box_order.clone();
+        apply_preferred_box_order(&mut s.eq_windows, &s.preferred_box_order);
+        if cfg.auto_order {
+            apply_auto_order(s);
+        }
         s.custom_strip_width = cfg.pip_strip_width.map(|v| v as i32);
         s.has_custom_positions = !cfg.pip_positions.is_empty();
         s.snap_grid = cfg.snap_grid as i32;
@@ -4851,6 +4926,80 @@ mod tests {
             server: None,
             class: None,
         }
+    }
+
+    fn identified_window(pid: u32, number: usize, server: &str, character: &str) -> EqWindow {
+        let mut window = window(pid);
+        window.number = number;
+        window.server = Some(server.into());
+        window.character = Some(character.into());
+        window
+    }
+
+    #[test]
+    fn preferred_box_order_is_global_case_insensitive_and_compacts_missing_entries() {
+        let preferred = vec![
+            config::BoxIdentity {
+                server: "xegony".into(),
+                character: "Laika".into(),
+            },
+            config::BoxIdentity {
+                server: "bristlebane".into(),
+                character: "Foo".into(),
+            },
+            config::BoxIdentity {
+                server: "xegony".into(),
+                character: "Kafka".into(),
+            },
+        ];
+        let mut windows = vec![
+            identified_window(10, 1, "XEGONY", "Kafka"),
+            identified_window(20, 2, "Bristlebane", "foo"),
+            identified_window(30, 3, "Xegony", "Unlisted"),
+        ];
+
+        assert!(apply_preferred_box_order(&mut windows, &preferred));
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| (window.pid, window.number))
+                .collect::<Vec<_>>(),
+            vec![(10, 2), (20, 1), (30, 3)]
+        );
+        assert!(!apply_preferred_box_order(&mut windows, &preferred));
+    }
+
+    #[test]
+    fn unlisted_windows_retain_their_relative_order_after_ranked_windows() {
+        let preferred = vec![config::BoxIdentity {
+            server: "xegony".into(),
+            character: "Laika".into(),
+        }];
+        let mut windows = vec![
+            identified_window(10, 4, "Xegony", "UnknownOne"),
+            identified_window(20, 2, "Xegony", "Laika"),
+            identified_window(30, 3, "Teek", "UnknownTwo"),
+        ];
+
+        assert!(apply_preferred_box_order(&mut windows, &preferred));
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| (window.pid, window.number))
+                .collect::<Vec<_>>(),
+            vec![(10, 3), (20, 1), (30, 2)]
+        );
+    }
+
+    #[test]
+    fn empty_preference_preserves_existing_window_numbers() {
+        let mut windows = vec![window(10), window(20)];
+        windows[0].number = 4;
+        windows[1].number = 2;
+
+        assert!(!apply_preferred_box_order(&mut windows, &[]));
+        assert_eq!(windows[0].number, 4);
+        assert_eq!(windows[1].number, 2);
     }
 
     #[test]

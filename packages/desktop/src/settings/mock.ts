@@ -1,4 +1,9 @@
-import type { PairingSession, SaveOutcome, SettingsPayload } from "./types";
+import type {
+  PairingSession,
+  RunningCharacter,
+  SaveOutcome,
+  SettingsPayload,
+} from "./types";
 
 const mockPayload: SettingsPayload = {
   draft: {
@@ -17,6 +22,11 @@ const mockPayload: SettingsPayload = {
         { username: "laika_box", password: "preview-password" },
       ],
     },
+    boxOrder: [
+      { server: "xegony", character: "Laika" },
+      { server: "xegony", character: "Bilka" },
+      { server: "bristlebane", character: "Foo" },
+    ],
     pip: {
       edge: "right",
       labelHeight: 48,
@@ -57,6 +67,13 @@ const mockPayload: SettingsPayload = {
       { value: "Teek", label: "Teek" },
       { value: "Xegony - Druzzil Ro", label: "Xegony - Druzzil Ro" },
     ],
+    knownCharacters: [
+      { server: "bristlebane", character: "Foo" },
+      { server: "teek", character: "Orlov" },
+      { server: "xegony", character: "Bilka" },
+      { server: "xegony", character: "Kafka" },
+      { server: "xegony", character: "Laika" },
+    ],
     pipEdges: [
       { value: "right", label: "Right" },
       { value: "left", label: "Left" },
@@ -82,6 +99,14 @@ const mockPayload: SettingsPayload = {
 
 export function loadMockSettings(): Promise<SettingsPayload> {
   return Promise.resolve(structuredClone(mockPayload));
+}
+
+export function loadMockRunningCharacters(): Promise<RunningCharacter[]> {
+  return Promise.resolve([
+    { server: "xegony", character: "Laika", windowNumber: 1 },
+    { server: "xegony", character: "Bilka", windowNumber: 2 },
+    { server: "xegony", character: "Kafka", windowNumber: 3 },
+  ]);
 }
 
 export function saveMockSettings(): Promise<SaveOutcome> {

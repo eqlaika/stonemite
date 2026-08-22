@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added configurable character/server box ordering that restores stable window numbers across random launch order, process restarts, and mixed-server rosters
 - Added a dedicated hold-to-broadcast Stream Deck Mouse Clutch action with authoritative ready, active, releasing, compatibility, and failure states
 - Added connection-scoped, renewable Trushar Mouse Clutch holds with independent physical/deck ownership, bounded lease expiry, and automatic cleanup on disconnect
 

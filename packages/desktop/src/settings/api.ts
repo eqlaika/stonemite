@@ -1,9 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-import { beginMockPairing, loadMockSettings, saveMockSettings } from "./mock";
+import {
+  beginMockPairing,
+  loadMockRunningCharacters,
+  loadMockSettings,
+  saveMockSettings,
+} from "./mock";
 import type {
   PairingSession,
+  RunningCharacter,
   SaveOutcome,
   SettingsDraft,
   SettingsPayload,
@@ -16,6 +22,12 @@ export function loadSettings(): Promise<SettingsPayload> {
   return browserPreview
     ? loadMockSettings()
     : invoke<SettingsPayload>("load_settings");
+}
+
+export function loadRunningCharacters(): Promise<RunningCharacter[]> {
+  return browserPreview
+    ? loadMockRunningCharacters()
+    : invoke<RunningCharacter[]>("load_running_characters");
 }
 
 export function saveSettings(draft: SettingsDraft): Promise<SaveOutcome> {

@@ -9,6 +9,9 @@ use crate::config::Config;
 struct CharacterEntry {
     server: String,
     name: String,
+    /// True only after this identity was assigned to a live local EQ process.
+    #[serde(default, skip_serializing_if = "is_false")]
+    owned: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -19,6 +22,10 @@ struct CharacterEntry {
 struct CacheFile {
     #[serde(default)]
     characters: Vec<CharacterEntry>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 pub struct CharacterCache {
@@ -60,6 +67,23 @@ impl CharacterCache {
             let _ = std::fs::write(path, contents);
         }
         self.dirty = false;
+    }
+
+    /// Identities confirmed as characters logged into a local EQ process.
+    /// Metadata learned about other players (for example from /who) is excluded.
+    pub fn identities(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.owned)
+            .map(|entry| (entry.server.as_str(), entry.name.as_str()))
+    }
+
+    pub fn remember(&mut self, server: &str, name: &str) {
+        let idx = self.upsert(server, name);
+        if !self.entries[idx].owned {
+            self.entries[idx].owned = true;
+            self.dirty = true;
+        }
     }
 
     pub fn get_class(&self, server: &str, name: &str) -> Option<&str> {
@@ -104,10 +128,12 @@ impl CharacterCache {
         self.entries.push(CharacterEntry {
             server: server.to_string(),
             name: name.to_string(),
+            owned: false,
             class: None,
             pet: None,
         });
         self.by_key.insert(key, idx);
+        self.dirty = true;
         idx
     }
 
@@ -131,5 +157,48 @@ impl CharacterCache {
 
     fn path() -> Option<PathBuf> {
         Config::dir().map(|d| d.join("characters.toml"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_cache() -> CharacterCache {
+        CharacterCache {
+            entries: Vec::new(),
+            by_key: HashMap::new(),
+            pet_to_owner: HashMap::new(),
+            dirty: false,
+        }
+    }
+
+    #[test]
+    fn observed_metadata_does_not_make_an_identity_owned() {
+        let mut cache = empty_cache();
+        cache.set_class("xegony", "SomeoneElse", "CLR");
+
+        assert!(cache.identities().next().is_none());
+
+        cache.remember("Xegony", "someoneelse");
+        assert_eq!(
+            cache.identities().collect::<Vec<_>>(),
+            vec![("xegony", "SomeoneElse")]
+        );
+    }
+
+    #[test]
+    fn legacy_entries_default_to_not_owned() {
+        let file: CacheFile = toml::from_str(
+            r#"
+[[characters]]
+server = "xegony"
+name = "WhoResult"
+class = "WAR"
+"#,
+        )
+        .unwrap();
+
+        assert!(!file.characters[0].owned);
     }
 }

@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Account, Config, PipEdge, TrusharConfig};
+use crate::config::{Account, BoxIdentity, Config, PipEdge, TrusharConfig};
 use crate::crypt;
 
 const SERVER_OPTIONS: &[&str] = &[
@@ -44,6 +46,7 @@ pub struct SettingsPayload {
 #[serde(rename_all = "camelCase")]
 pub struct SettingsOptions {
     pub servers: Vec<OptionItem>,
+    pub known_characters: Vec<BoxIdentity>,
     pub pip_edges: Vec<OptionItem>,
     pub notification_sounds: Vec<OptionItem>,
     pub filter_modes: Vec<OptionItem>,
@@ -63,11 +66,20 @@ pub struct SettingsRuntime {
     pub integration_address: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RunningCharacter {
+    pub server: String,
+    pub character: String,
+    pub window_number: Option<usize>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsDraft {
     pub general: GeneralSettings,
     pub accounts: AccountsSettings,
+    pub box_order: Vec<BoxIdentity>,
     pub pip: PipSettings,
     pub notifications: NotificationSettings,
     pub hotkeys: HotkeySettings,
@@ -173,8 +185,18 @@ impl SettingsPayload {
     pub fn load() -> Result<Self, String> {
         let config = Config::load();
         let draft = SettingsDraft::from_config(&config)?;
+        let mut known_characters = config.box_order.clone();
+        known_characters.extend(
+            crate::character_cache::CharacterCache::load()
+                .identities()
+                .map(|(server, character)| BoxIdentity {
+                    server: server.to_owned(),
+                    character: character.to_owned(),
+                }),
+        );
+        normalize_known_characters(&mut known_characters);
         Ok(Self {
-            options: SettingsOptions::new(),
+            options: SettingsOptions::new(known_characters),
             runtime: SettingsRuntime {
                 version: crate::build_info::version().to_owned(),
                 trusik_enabled: config.trusik,
@@ -186,7 +208,7 @@ impl SettingsPayload {
 }
 
 impl SettingsOptions {
-    fn new() -> Self {
+    fn new(known_characters: Vec<BoxIdentity>) -> Self {
         Self {
             servers: SERVER_OPTIONS
                 .iter()
@@ -199,6 +221,7 @@ impl SettingsOptions {
                     },
                 })
                 .collect(),
+            known_characters,
             pip_edges: [
                 ("right", "Right"),
                 ("left", "Left"),
@@ -274,6 +297,7 @@ impl SettingsDraft {
                 },
             },
             accounts: AccountsSettings { server, accounts },
+            box_order: config.box_order.clone(),
             pip: PipSettings {
                 edge: config.pip_edge,
                 label_height: config.pip_label_height.unwrap_or(48),
@@ -340,6 +364,15 @@ impl SettingsDraft {
                 trushar.auth_token.clone(),
             );
 
+        let box_order = self
+            .box_order
+            .into_iter()
+            .map(|identity| BoxIdentity {
+                server: identity.server.trim().to_owned(),
+                character: identity.character.trim().to_owned(),
+            })
+            .collect();
+
         let accounts = self
             .accounts
             .accounts
@@ -389,6 +422,7 @@ impl SettingsDraft {
             pip_label_height: Some(self.pip.label_height),
             pip_label_opacity: Some(self.pip.label_opacity),
             auto_order: self.pip.auto_order,
+            box_order,
             hide_from_alt_tab: self.general.hide_from_alt_tab,
             toast_enabled: self.general.toast.enabled,
             toast_height: Some(self.general.toast.height),
@@ -420,8 +454,46 @@ impl SettingsDraft {
             &self.broadcasting.toggle_hotkey,
             &self.hotkeys.swap_hotkeys,
         )?;
+        let mut identities = HashSet::with_capacity(self.box_order.len());
+        for (index, identity) in self.box_order.iter().enumerate() {
+            let server = identity.server.trim();
+            let character = identity.character.trim();
+            if server.is_empty() || character.is_empty() {
+                return Err(format!(
+                    "Box order entry {} requires both a character and server",
+                    index + 1
+                ));
+            }
+            if server.len() > 128 || character.len() > 128 {
+                return Err(format!(
+                    "Box order entry {} character and server must be at most 128 bytes",
+                    index + 1
+                ));
+            }
+            let key = (server.to_ascii_lowercase(), character.to_ascii_lowercase());
+            if !identities.insert(key) {
+                return Err(format!(
+                    "{} on {} appears more than once in box order",
+                    character, server
+                ));
+            }
+        }
         Ok(())
     }
+}
+
+fn normalize_known_characters(characters: &mut Vec<BoxIdentity>) {
+    characters.sort_by(|left, right| {
+        left.server
+            .to_ascii_lowercase()
+            .cmp(&right.server.to_ascii_lowercase())
+            .then_with(|| {
+                left.character
+                    .to_ascii_lowercase()
+                    .cmp(&right.character.to_ascii_lowercase())
+            })
+    });
+    characters.dedup_by(|right, left| left.matches(&right.server, &right.character));
 }
 
 fn normalized_swap_hotkeys(configured: &[String]) -> Vec<String> {
@@ -510,6 +582,7 @@ mod tests {
     fn draft_uses_stable_defaults_and_six_hotkeys() {
         let draft = SettingsDraft::from_config(&Config::default()).unwrap();
         assert_eq!(draft.hotkeys.swap_hotkeys.len(), 6);
+        assert!(draft.box_order.is_empty());
         assert_eq!(draft.pip.edge, PipEdge::Right);
         assert_eq!(draft.general.toast.duration_seconds, 2.0);
     }
@@ -541,8 +614,63 @@ mod tests {
     }
 
     #[test]
+    fn box_order_is_trimmed_and_duplicate_identities_are_rejected() {
+        let mut draft = SettingsDraft::from_config(&Config::default()).unwrap();
+        draft.box_order = vec![BoxIdentity {
+            server: " Xegony ".into(),
+            character: " Laika ".into(),
+        }];
+        let (config, _) = draft.into_config(Config::default()).unwrap();
+        assert_eq!(
+            config.box_order,
+            vec![BoxIdentity {
+                server: "Xegony".into(),
+                character: "Laika".into(),
+            }]
+        );
+
+        let mut duplicate = SettingsDraft::from_config(&Config::default()).unwrap();
+        duplicate.box_order = vec![
+            BoxIdentity {
+                server: "xegony".into(),
+                character: "Laika".into(),
+            },
+            BoxIdentity {
+                server: "XEGONY".into(),
+                character: "laika".into(),
+            },
+        ];
+        assert_eq!(
+            duplicate.validate(),
+            Err("laika on XEGONY appears more than once in box order".into())
+        );
+    }
+
+    #[test]
+    fn known_characters_are_sorted_and_deduplicated_case_insensitively() {
+        let mut characters = vec![
+            BoxIdentity {
+                server: "Xegony".into(),
+                character: "Laika".into(),
+            },
+            BoxIdentity {
+                server: "bristlebane".into(),
+                character: "Foo".into(),
+            },
+            BoxIdentity {
+                server: "xegony".into(),
+                character: "laika".into(),
+            },
+        ];
+        normalize_known_characters(&mut characters);
+        assert_eq!(characters.len(), 2);
+        assert_eq!(characters[0].character, "Foo");
+        assert_eq!(characters[1].character, "Laika");
+    }
+
+    #[test]
     fn payload_option_values_match_serialized_enums() {
-        let options = SettingsOptions::new();
+        let options = SettingsOptions::new(Vec::new());
         assert_eq!(options.pip_edges[0].value, "right");
         assert_eq!(options.filter_modes[0].value, "blacklist");
     }
