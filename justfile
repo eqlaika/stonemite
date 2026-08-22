@@ -48,8 +48,7 @@ bump new_version:
 package: build-release
     @New-Item -ItemType Directory -Force -Path dist | Out-Null
     @Copy-Item target/release/stonemite.exe dist/
-    @Copy-Item THIRD_PARTY_NOTICES.md dist/
-    @python -c "import zipfile; z=zipfile.ZipFile('dist/{{zip_name}}','w',zipfile.ZIP_STORED); z.write('dist/stonemite.exe','stonemite.exe'); z.write('dist/THIRD_PARTY_NOTICES.md','THIRD_PARTY_NOTICES.md'); z.close()"
+    @python -c "import zipfile; z=zipfile.ZipFile('dist/{{zip_name}}','w',zipfile.ZIP_STORED); z.write('dist/stonemite.exe','stonemite.exe'); z.close()"
     @Write-Host "`nPackage ready: dist/{{zip_name}}"
 
 # Build Inno Setup installer (requires Inno Setup 6)
@@ -60,8 +59,7 @@ installer: build-release
 release new_version: (bump new_version) build-release
     @New-Item -ItemType Directory -Force -Path dist | Out-Null
     @Copy-Item target/release/stonemite.exe dist/
-    @Copy-Item THIRD_PARTY_NOTICES.md dist/
-    @python -c "import zipfile; z=zipfile.ZipFile('dist/{{zip_name}}','w',zipfile.ZIP_STORED); z.write('dist/stonemite.exe','stonemite.exe'); z.write('dist/THIRD_PARTY_NOTICES.md','THIRD_PARTY_NOTICES.md'); z.close()"
+    @python -c "import zipfile; z=zipfile.ZipFile('dist/{{zip_name}}','w',zipfile.ZIP_STORED); z.write('dist/stonemite.exe','stonemite.exe'); z.close()"
     @$iscc = (Get-Command "ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source); if (-not $iscc) { $iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" }; if (-not (Test-Path $iscc)) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }; & $iscc /DAppVersion="{{new_version}}" installer.iss
     @$notes = @(); $capture = $false; foreach ($line in (Get-Content CHANGELOG.md)) { if ($line -match '^## v{{new_version}}') { $capture = $true; continue } elseif ($capture -and $line -match '^## ') { break } elseif ($capture) { $notes += $line } }; ($notes -join "`n").Trim() | Set-Content dist/release-notes.md -NoNewline
     @Write-Host "`nRelease v{{new_version}} packaged:"

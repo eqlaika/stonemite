@@ -1,7 +1,7 @@
 //! PiP notification state, animation geometry, Lucide icon drawing, and presentation.
 //!
-//! Static icon geometry is adapted from the normal Lucide/Lucide Animated
-//! frames already used by the Stream Deck integration; see `THIRD_PARTY_NOTICES.md`.
+//! Static icon geometry is adapted from the Lucide and Lucide Animated frames
+//! already used by the Stream Deck integration.
 
 use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT, SIZE};

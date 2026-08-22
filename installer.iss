@@ -21,7 +21,6 @@ DisableProgramGroupPage=yes
 [Files]
 Source: "target\release\stonemite.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "config\example.toml"; DestDir: "{app}"; DestName: "example.toml"; Flags: ignoreversion
-Source: "THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Stonemite"; Filename: "{app}\stonemite.exe"
