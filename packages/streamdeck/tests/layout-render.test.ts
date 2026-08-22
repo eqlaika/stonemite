@@ -228,7 +228,7 @@ describe("dashboard layout", () => {
     expect(readySvg).toContain(
       'data-icon="mouse-pointer-2" data-icon-set="lucide"',
     );
-    expect(readySvg).toContain('transform="translate(18 5.5) scale(1.5)"');
+    expect(readySvg).toContain('transform="translate(18 8.5) scale(1.5)"');
     expect(readySvg).not.toContain(">HOLD</text>");
     expect(readySvg).not.toContain(">Clutch</text>");
     expect(readySvg).toContain(">Mouse</text>");
