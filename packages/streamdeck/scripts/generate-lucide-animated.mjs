@@ -16,6 +16,7 @@ import { chromium } from "playwright";
 
 const execFileAsync = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const workspaceRoot = path.resolve(root, "../..");
 const outputPath = path.join(root, "src/render/lucide-animated.generated.ts");
 const inspectorOutputPath = path.join(
   root,
@@ -65,7 +66,10 @@ try {
     platform: "browser",
     jsx: "automatic",
     alias: { "@/lib/utils": utilityStubPath, "@": sourceRoot },
-    nodePaths: [path.join(root, "node_modules")],
+    nodePaths: [
+      path.join(root, "node_modules"),
+      path.join(workspaceRoot, "node_modules"),
+    ],
     logLevel: "warning",
   });
   await writeFile(

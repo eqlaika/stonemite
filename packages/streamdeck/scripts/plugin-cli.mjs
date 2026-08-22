@@ -12,7 +12,9 @@ if (command !== "validate" && command !== "pack") {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pluginName = "co.laikasoft.stonemite.sdPlugin";
 const source = path.join(root, pluginName);
-const cli = path.join(root, "node_modules/@elgato/cli/bin/streamdeck.mjs");
+const cli = fileURLToPath(
+  import.meta.resolve("@elgato/cli/bin/streamdeck.mjs"),
+);
 const temporaryRoot = await mkdtemp(
   path.join(os.tmpdir(), "streamdeck-plugin-"),
 );

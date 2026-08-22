@@ -8,31 +8,31 @@ zip_name := "stonemite-x86_64-pc-windows-msvc.zip"
 default:
     @just --list
 
-# Install frontend dependencies when npm is available; native Windows SSH
-# builds may instead consume settings-ui/dist built on the development host.
-settings-ui-deps:
-    @$npm = Get-Command npm -ErrorAction SilentlyContinue; if ($npm) { if (-not (Test-Path "settings-ui/node_modules")) { npm --prefix settings-ui ci } } elseif (-not (Test-Path "settings-ui/dist/index.html")) { throw "npm is unavailable and settings-ui/dist is not prebuilt" }
+# Install desktop dependencies when npm is available; native Windows SSH
+# builds may instead consume packages/desktop/dist built on the development host.
+desktop-deps:
+    @$npm = Get-Command npm -ErrorAction SilentlyContinue; if ($npm) { if (-not (Test-Path "node_modules/@stonemite/desktop")) { npm ci --workspace "@stonemite/desktop" } } elseif (-not (Test-Path "packages/desktop/dist/index.html")) { throw "npm is unavailable and packages/desktop/dist is not prebuilt" }
 
-# Build the embedded frontend, or verify the locally prebuilt mirror on Windows.
-settings-ui-build: settings-ui-deps
-    @$npm = Get-Command npm -ErrorAction SilentlyContinue; if ($npm) { npm --prefix settings-ui run build } elseif (-not (Test-Path "settings-ui/dist/index.html")) { throw "settings-ui/dist is not prebuilt" } else { Write-Host "Using prebuilt settings-ui/dist (npm is unavailable)." }
+# Build the embedded desktop frontend, or verify the locally prebuilt mirror on Windows.
+desktop-build: desktop-deps
+    @$npm = Get-Command npm -ErrorAction SilentlyContinue; if ($npm) { npm run build --workspace "@stonemite/desktop" } elseif (-not (Test-Path "packages/desktop/dist/index.html")) { throw "packages/desktop/dist is not prebuilt" } else { Write-Host "Using prebuilt packages/desktop/dist (npm is unavailable)." }
 
-settings-ui-test:
-    @if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw "npm is required for settings UI tests" }
-    npm --prefix settings-ui run typecheck
-    npm --prefix settings-ui test
+desktop-test:
+    @if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw "npm is required for desktop frontend tests" }
+    npm run typecheck --workspace "@stonemite/desktop"
+    npm test --workspace "@stonemite/desktop"
 
 # Verify canonical and internal version metadata agree
 version-check:
     python scripts/version.py check
 
 # Build debug
-build: version-check settings-ui-build
+build: version-check desktop-build
     cargo build -p trusik
     cargo build -p stonemite
 
 # Build release
-build-release: version-check settings-ui-build
+build-release: version-check desktop-build
     cargo build --release -p trusik
     cargo build --release -p stonemite
 
@@ -91,4 +91,4 @@ deploy-dev:
 clean:
     cargo clean
     @Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
-    @Remove-Item -Recurse -Force settings-ui/dist -ErrorAction SilentlyContinue
+    @Remove-Item -Recurse -Force packages/desktop/dist -ErrorAction SilentlyContinue

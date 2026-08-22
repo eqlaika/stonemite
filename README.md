@@ -24,11 +24,11 @@ A system tray icon appears with access to all settings. Check for updates from t
 
 The separately packaged **Stonemite · EQ boxing** plugin shows a live six-client roster and provides exact-client activation, broadcast control, window-number Swap, and configurable mapped Hotkey actions for all loaded, active, background, or selected boxes. Multi-step behavior stays in user-authored EverQuest socials. Same-PC installations connect automatically over loopback; running Stream Deck Desktop on another computer requires one-time LAN pairing.
 
-The plugin requires Stream Deck Desktop 7.4+ on macOS 12+ or Windows 10+. It is not bundled with the Stonemite installer or portable ZIP. See [`streamdeck/README.md`](streamdeck/README.md) for setup, development, and packaging details.
+The plugin requires Stream Deck Desktop 7.4+ on macOS 12+ or Windows 10+. It is not bundled with the Stonemite installer or portable ZIP. See [`packages/streamdeck/README.md`](packages/streamdeck/README.md) for setup, development, and packaging details.
 
 ## Build from source
 
-Requires Rust (MSVC toolchain) and [just](https://github.com/casey/just).
+Requires Rust (MSVC toolchain), Node.js 24+, and [just](https://github.com/casey/just). The JavaScript packages are managed together from the repository-root npm workspace.
 
 ```
 just build           # debug build

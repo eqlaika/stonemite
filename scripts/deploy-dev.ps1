@@ -73,15 +73,15 @@ try {
     # installed on the Windows host. General source mirroring excludes dist folders
     # so release artifacts survive, then this one embedded dist is mirrored
     # explicitly.
-    $settingsDistSource = Join-Path $stageRoot 'settings-ui\dist'
-    $settingsDistDestination = Join-Path $RepoPath 'settings-ui\dist'
-    if (-not (Test-Path -LiteralPath (Join-Path $settingsDistSource 'index.html'))) {
-        throw 'The deployment archive does not contain a built settings frontend'
+    $desktopDistSource = Join-Path $stageRoot 'packages\desktop\dist'
+    $desktopDistDestination = Join-Path $RepoPath 'packages\desktop\dist'
+    if (-not (Test-Path -LiteralPath (Join-Path $desktopDistSource 'index.html'))) {
+        throw 'The deployment archive does not contain a built desktop frontend'
     }
-    & robocopy.exe $settingsDistSource $settingsDistDestination /MIR /IS /IT /R:2 /W:1 /FFT /NFL /NDL /NJH /NJS /NP
-    $settingsMirrorExitCode = $LASTEXITCODE
-    if ($settingsMirrorExitCode -ge 8) {
-        throw "Settings frontend mirror failed with robocopy exit code $settingsMirrorExitCode"
+    & robocopy.exe $desktopDistSource $desktopDistDestination /MIR /IS /IT /R:2 /W:1 /FFT /NFL /NDL /NJH /NJS /NP
+    $desktopMirrorExitCode = $LASTEXITCODE
+    if ($desktopMirrorExitCode -ge 8) {
+        throw "Desktop frontend mirror failed with robocopy exit code $desktopMirrorExitCode"
     }
 
     $buildTarget = Join-Path $RepoPath 'target\dev-build'

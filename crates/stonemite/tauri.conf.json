@@ -4,8 +4,8 @@
   "version": "2026.8.2200",
   "identifier": "co.laikasoft.stonemite",
   "build": {
-    "beforeBuildCommand": "npm --prefix ../../settings-ui run build",
-    "frontendDist": "../../settings-ui/dist"
+    "beforeBuildCommand": "npm --prefix ../../packages/desktop run build",
+    "frontendDist": "../../packages/desktop/dist"
   },
   "app": {
     "windows": [

@@ -27,23 +27,24 @@ If the Stonemite setup key keeps showing **Connecting**, open **Stonemite settin
 
 ## Develop
 
-From `streamdeck/`:
+From the repository root:
 
 ```sh
-npm install
-npm run format:check
-npm run lint
-npm run typecheck
-npm test
-npm run build
-npm run validate
+npm ci
+npm run format:check --workspace @stonemite/streamdeck
+npm run lint --workspace @stonemite/streamdeck
+npm run typecheck --workspace @stonemite/streamdeck
+npm test --workspace @stonemite/streamdeck
+npm run build --workspace @stonemite/streamdeck
+npm run validate --workspace @stonemite/streamdeck
 ```
 
-The asset step generates data URLs from `../crates/stonemite/assets/app.png` and `../crates/stonemite/assets/class_icons/`; the generated TypeScript file is intentionally ignored. Action tiles use vendored Lucide Animated geometry and never fetch icons at runtime; licenses ship in `co.laikasoft.stonemite.sdPlugin/THIRD_PARTY_NOTICES.md`. The complete configurable-icon catalog is pinned to the commit recorded in `src/render/lucide-animated.generated.ts`. Maintainers update it deliberately with `npx playwright install chromium` followed by `npm run icons`; ordinary builds consume the checked-in frames. The Stream Deck bundle is written to `co.laikasoft.stonemite.sdPlugin/bin/`.
+The asset step generates data URLs from `crates/stonemite/assets/app.png` and `crates/stonemite/assets/class_icons/`; the generated TypeScript file is intentionally ignored. Action tiles use vendored Lucide Animated geometry and never fetch icons at runtime; licenses ship in `co.laikasoft.stonemite.sdPlugin/THIRD_PARTY_NOTICES.md`. The complete configurable-icon catalog is pinned to the commit recorded in `src/render/lucide-animated.generated.ts`. Maintainers update it deliberately with `npx playwright install chromium` followed by `npm run icons`; ordinary builds consume the checked-in frames. The Stream Deck bundle is written to `co.laikasoft.stonemite.sdPlugin/bin/`.
 
 To link a development build after validation:
 
 ```sh
+cd packages/streamdeck
 npx streamdeck dev
 npx streamdeck link co.laikasoft.stonemite.sdPlugin
 npm run watch
@@ -94,10 +95,10 @@ If the `.local` address does not resolve from the Stream Deck computer, use the 
 ## Package
 
 ```sh
-npm run pack
+npm run pack --workspace @stonemite/streamdeck
 ```
 
-The command builds, validates with the current Elgato CLI schema, and writes `streamdeck/dist/co.laikasoft.stonemite.streamDeckPlugin`.
+The command builds, validates with the current Elgato CLI schema, and writes `packages/streamdeck/dist/co.laikasoft.stonemite.streamDeckPlugin`.
 
 The manifest uses `imgs/plugin/icon.png` and its `@2x` variant for the 256px and 512px plugin icons. Upload the separate 288px `marketplace/icon.png` as the app icon in Maker Console; Marketplace-only media is intentionally kept outside the plugin bundle.
 
