@@ -4,8 +4,6 @@
   "version": "0.5.0",
   "identifier": "co.laikasoft.stonemite",
   "build": {
-    "beforeDevCommand": "npm --prefix ../../settings-ui run dev",
-    "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm --prefix ../../settings-ui run build",
     "frontendDist": "../../settings-ui/dist"
   },
