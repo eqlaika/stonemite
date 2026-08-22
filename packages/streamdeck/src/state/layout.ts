@@ -3,7 +3,7 @@ import type { TrusharClient, TrusharState } from "../types/trushar";
 
 export type CharacterSlot = 1 | 2 | 3 | 4 | 5 | 6;
 export type DashboardKey =
-  `character-${CharacterSlot}` | "broadcast" | "swap" | "logo";
+  `character-${CharacterSlot}` | "broadcast" | "mouse-clutch" | "swap" | "logo";
 
 export const SLOT_COLORS = [
   "#4a86d4",
@@ -38,6 +38,12 @@ export type KeyCell =
       type: "broadcast";
       available: boolean;
       enabled: boolean;
+    }
+  | {
+      type: "mouse-clutch";
+      available: boolean;
+      phase: "inactive" | "active" | "releasing";
+      status: string;
     }
   | {
       type: "swap";
@@ -139,6 +145,33 @@ export function buildKey(
           Boolean(view.snapshot?.broadcast.available),
         enabled: Boolean(view.snapshot?.broadcast.enabled),
       };
+    case "mouse-clutch": {
+      const clutch = view.snapshot?.mouse_clutch;
+      const supported = Boolean(view.snapshot?.capabilities.set_mouse_clutch);
+      const phase = clutch?.phase ?? "inactive";
+      let status: string;
+      if (view.connection.state !== "connected") status = "OFFLINE";
+      else if (!supported || clutch?.availability === "unsupported")
+        status = "UPDATE";
+      else if (phase === "active") status = "ACTIVE";
+      else if (phase === "releasing") status = "RELEASING";
+      else if (clutch?.availability === "no_active_client")
+        status = "NO ACTIVE";
+      else if (clutch?.availability === "no_compatible_targets")
+        status = "NO MATCH";
+      else if (clutch?.availability === "input_unavailable")
+        status = "UNAVAILABLE";
+      else status = "";
+      return {
+        type: "mouse-clutch",
+        available:
+          view.connection.state === "connected" &&
+          supported &&
+          clutch?.availability === "ready",
+        phase,
+        status,
+      };
+    }
     case "swap": {
       const plan = buildSwapPlan(view);
       return {

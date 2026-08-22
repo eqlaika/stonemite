@@ -1,7 +1,8 @@
 use crate::control::{
     validate_key_strokes, validate_text_input, ActivationStatus, ClientId, ClientTarget,
     CommandOutcome, ControlError, EqAction, EqActionTargets, EqMappingName, InputKind, KeyCode,
-    KeyStroke, StateSnapshot, DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_PAUSE_MS,
+    KeyStroke, MouseClutchAvailability, MouseClutchPhase, MouseClutchState, StateSnapshot,
+    DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_PAUSE_MS,
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +31,21 @@ pub enum ClientMessage {
         version: u16,
         request_id: String,
         enabled: bool,
+    },
+    BeginMouseClutch {
+        version: u16,
+        request_id: String,
+        hold_id: String,
+    },
+    RenewMouseClutch {
+        version: u16,
+        request_id: String,
+        hold_id: String,
+    },
+    EndMouseClutch {
+        version: u16,
+        request_id: String,
+        hold_id: String,
     },
     SendText {
         version: u16,
@@ -73,6 +89,9 @@ impl ClientMessage {
             | Self::Activate { version, .. }
             | Self::SwapWindowNumbers { version, .. }
             | Self::SetBroadcast { version, .. }
+            | Self::BeginMouseClutch { version, .. }
+            | Self::RenewMouseClutch { version, .. }
+            | Self::EndMouseClutch { version, .. }
             | Self::SendText { version, .. }
             | Self::SendKeys { version, .. }
             | Self::SendEqAction { version, .. }
@@ -87,6 +106,9 @@ impl ClientMessage {
             | Self::Activate { request_id, .. }
             | Self::SwapWindowNumbers { request_id, .. }
             | Self::SetBroadcast { request_id, .. }
+            | Self::BeginMouseClutch { request_id, .. }
+            | Self::RenewMouseClutch { request_id, .. }
+            | Self::EndMouseClutch { request_id, .. }
             | Self::SendText { request_id, .. }
             | Self::SendKeys { request_id, .. }
             | Self::SendEqAction { request_id, .. }
@@ -117,6 +139,16 @@ impl ClientMessage {
             target.validate()?;
         }
         match self {
+            Self::BeginMouseClutch { hold_id, .. }
+            | Self::RenewMouseClutch { hold_id, .. }
+            | Self::EndMouseClutch { hold_id, .. } => {
+                if hold_id.is_empty() || hold_id.len() > MAX_REQUEST_ID_SIZE {
+                    return Err(ControlError::new(
+                        crate::control::ErrorCode::InvalidArgument,
+                        "hold_id must contain 1 to 128 bytes",
+                    ));
+                }
+            }
             Self::SendText {
                 client_id, text, ..
             } => {
@@ -432,6 +464,9 @@ pub enum Success {
     BroadcastSet {
         enabled: bool,
     },
+    MouseClutchHoldUpdated {
+        held: bool,
+    },
     InputDelivered {
         input: WireInputKind,
         strokes: usize,
@@ -469,6 +504,9 @@ impl From<CommandOutcome> for Success {
                 selected_previous_number,
             },
             CommandOutcome::BroadcastSet { enabled } => Self::BroadcastSet { enabled },
+            CommandOutcome::MouseClutchHoldUpdated { held } => {
+                Self::MouseClutchHoldUpdated { held }
+            }
             CommandOutcome::InputDelivered { kind, strokes } => Self::InputDelivered {
                 input: kind.into(),
                 strokes,
@@ -537,6 +575,8 @@ pub struct WireState {
     pub clients: Vec<WireClient>,
     pub active_client_id: Option<String>,
     pub broadcast: WireBroadcast,
+    #[serde(default)]
+    pub mouse_clutch: WireMouseClutch,
     pub capabilities: WireCapabilities,
 }
 
@@ -554,10 +594,12 @@ impl From<&StateSnapshot> for WireState {
                 available: value.broadcast.available,
                 enabled: value.broadcast.enabled,
             },
+            mouse_clutch: value.mouse_clutch.into(),
             capabilities: WireCapabilities {
                 activate: value.capabilities.activate,
                 swap_window_numbers: value.capabilities.swap_window_numbers,
                 set_broadcast: value.capabilities.set_broadcast,
+                set_mouse_clutch: value.capabilities.set_mouse_clutch,
                 send_text: value.capabilities.send_text,
                 send_keys: value.capabilities.send_keys,
                 eq_actions: WireEqActionCapabilities {
@@ -611,6 +653,61 @@ pub struct WireBroadcast {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WireMouseClutch {
+    pub phase: WireMouseClutchPhase,
+    pub availability: WireMouseClutchAvailability,
+}
+
+impl From<MouseClutchState> for WireMouseClutch {
+    fn from(value: MouseClutchState) -> Self {
+        Self {
+            phase: value.phase.into(),
+            availability: value.availability.into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireMouseClutchPhase {
+    #[default]
+    Inactive,
+    Active,
+    Releasing,
+}
+
+impl From<MouseClutchPhase> for WireMouseClutchPhase {
+    fn from(value: MouseClutchPhase) -> Self {
+        match value {
+            MouseClutchPhase::Inactive => Self::Inactive,
+            MouseClutchPhase::Active => Self::Active,
+            MouseClutchPhase::Releasing => Self::Releasing,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireMouseClutchAvailability {
+    Ready,
+    NoActiveClient,
+    NoCompatibleTargets,
+    #[default]
+    InputUnavailable,
+}
+
+impl From<MouseClutchAvailability> for WireMouseClutchAvailability {
+    fn from(value: MouseClutchAvailability) -> Self {
+        match value {
+            MouseClutchAvailability::Ready => Self::Ready,
+            MouseClutchAvailability::NoActiveClient => Self::NoActiveClient,
+            MouseClutchAvailability::NoCompatibleTargets => Self::NoCompatibleTargets,
+            MouseClutchAvailability::InputUnavailable => Self::InputUnavailable,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WireEqActionCapabilities {
     #[serde(default)]
     pub use_center_screen: bool,
@@ -632,6 +729,8 @@ pub struct WireCapabilities {
     #[serde(default)]
     pub swap_window_numbers: bool,
     pub set_broadcast: bool,
+    #[serde(default)]
+    pub set_mouse_clutch: bool,
     pub send_text: bool,
     pub send_keys: bool,
     #[serde(default)]
@@ -798,6 +897,21 @@ mod tests {
                 request_id: "six".into(),
                 enabled: true,
             },
+            ClientMessage::BeginMouseClutch {
+                version: 1,
+                request_id: "clutch-down".into(),
+                hold_id: "hold-1".into(),
+            },
+            ClientMessage::RenewMouseClutch {
+                version: 1,
+                request_id: "clutch-renew".into(),
+                hold_id: "hold-1".into(),
+            },
+            ClientMessage::EndMouseClutch {
+                version: 1,
+                request_id: "clutch-up".into(),
+                hold_id: "hold-1".into(),
+            },
             ClientMessage::SendText {
                 version: 1,
                 request_id: "seven".into(),
@@ -880,10 +994,15 @@ mod tests {
                 available: true,
                 enabled: false,
             },
+            mouse_clutch: MouseClutchState {
+                phase: MouseClutchPhase::Active,
+                availability: MouseClutchAvailability::Ready,
+            },
             capabilities: Capabilities {
                 activate: true,
                 swap_window_numbers: true,
                 set_broadcast: true,
+                set_mouse_clutch: true,
                 send_text: true,
                 send_keys: true,
                 eq_actions: crate::control::EqActionCapabilities::available(true),
@@ -911,6 +1030,11 @@ mod tests {
             ServerMessage::success(
                 "four".into(),
                 Success::BroadcastSet { enabled: false },
+                &snapshot,
+            ),
+            ServerMessage::success(
+                "clutch".into(),
+                Success::MouseClutchHoldUpdated { held: true },
                 &snapshot,
             ),
             ServerMessage::success(
@@ -977,6 +1101,7 @@ mod tests {
         )
         .unwrap();
         assert!(!capabilities.swap_window_numbers);
+        assert!(!capabilities.set_mouse_clutch);
         assert_eq!(capabilities.eq_actions, WireEqActionCapabilities::default());
         assert!(!capabilities.eq_actions.keymap_actions);
     }
@@ -1013,6 +1138,12 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(zero.error.code, ErrorCode::InvalidArgument);
+
+        let empty_hold = decode_client_message(
+            r#"{"type":"begin_mouse_clutch","version":1,"request_id":"x","hold_id":""}"#,
+        )
+        .unwrap_err();
+        assert_eq!(empty_hold.error.code, ErrorCode::InvalidArgument);
 
         let control_text = decode_client_message(
             "{\"type\":\"send_text\",\"version\":1,\"request_id\":\"x\",\"client_id\":\"client-1\",\"text\":\"bad\\ntext\"}",

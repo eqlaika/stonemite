@@ -1,7 +1,8 @@
 use trushar::control::{
     ActivationStatus, BroadcastState, ClientTarget, CommandOutcome, Controller, EqAction,
-    EqActionTargets, ErrorCode, InMemoryController, InputKind, KeyCode, KeyStroke, RecordedInput,
-    SnapshotMapper, SourceClient,
+    EqActionTargets, ErrorCode, InMemoryController, InputKind, KeyCode, KeyStroke,
+    MouseClutchOperation, MouseClutchOwner, MouseClutchPhase, RecordedInput, SnapshotMapper,
+    SourceClient,
 };
 
 fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
@@ -316,6 +317,84 @@ fn broadcast_unavailable_disabled_enabled_and_failure_are_distinct() {
     assert!(control.snapshot().broadcast.enabled);
     assert!(block_on(control.set_broadcast_enabled(false)).is_ok());
     assert!(!control.snapshot().broadcast.enabled);
+}
+
+#[test]
+fn mouse_clutch_holds_are_connection_scoped_and_release_after_every_owner() {
+    let control = InMemoryController::new(available(false));
+    control.add_client(1, Some("One"), None, None, true, true);
+    control.add_client(2, Some("Two"), None, None, false, true);
+    let first = MouseClutchOwner::new(10, "same-hold").unwrap();
+    let second = MouseClutchOwner::new(20, "same-hold").unwrap();
+
+    assert_eq!(
+        block_on(control.update_mouse_clutch_hold(first.clone(), MouseClutchOperation::Begin, 1,))
+            .unwrap(),
+        CommandOutcome::MouseClutchHoldUpdated { held: true }
+    );
+    assert_eq!(
+        block_on(control.update_mouse_clutch_hold(second.clone(), MouseClutchOperation::Begin, 1,))
+            .unwrap(),
+        CommandOutcome::MouseClutchHoldUpdated { held: true }
+    );
+    assert_eq!(
+        control.snapshot().mouse_clutch.phase,
+        MouseClutchPhase::Active
+    );
+
+    block_on(control.update_mouse_clutch_hold(first, MouseClutchOperation::End, 2)).unwrap();
+    assert_eq!(
+        control.snapshot().mouse_clutch.phase,
+        MouseClutchPhase::Active
+    );
+
+    block_on(control.end_mouse_clutch_session(20, 2)).unwrap();
+    assert_eq!(
+        control.snapshot().mouse_clutch.phase,
+        MouseClutchPhase::Inactive
+    );
+
+    let stale = block_on(control.update_mouse_clutch_hold(second, MouseClutchOperation::Begin, 1))
+        .unwrap_err();
+    assert_eq!(stale.code, ErrorCode::MouseClutchHoldExpired);
+}
+
+#[test]
+fn mouse_clutch_sequences_do_not_suppress_another_hold_on_the_same_connection() {
+    let control = InMemoryController::new(available(false));
+    control.add_client(1, Some("One"), None, None, true, true);
+    control.add_client(2, Some("Two"), None, None, false, true);
+    let first = MouseClutchOwner::new(25, "press-1").unwrap();
+    let second = MouseClutchOwner::new(25, "press-2").unwrap();
+
+    block_on(control.update_mouse_clutch_hold(second, MouseClutchOperation::Begin, 2)).unwrap();
+    block_on(control.update_mouse_clutch_hold(first, MouseClutchOperation::Begin, 1)).unwrap();
+    assert_eq!(
+        control.snapshot().mouse_clutch.phase,
+        MouseClutchPhase::Active
+    );
+
+    block_on(control.end_mouse_clutch_session(25, 3)).unwrap();
+    assert_eq!(
+        control.snapshot().mouse_clutch.phase,
+        MouseClutchPhase::Inactive
+    );
+}
+
+#[test]
+fn mouse_clutch_renew_cannot_rearm_an_ended_hold() {
+    let control = InMemoryController::new(available(false));
+    control.add_client(1, Some("One"), None, None, true, true);
+    control.add_client(2, Some("Two"), None, None, false, true);
+    let owner = MouseClutchOwner::new(30, "press-1").unwrap();
+
+    block_on(control.update_mouse_clutch_hold(owner.clone(), MouseClutchOperation::Begin, 1))
+        .unwrap();
+    block_on(control.update_mouse_clutch_hold(owner.clone(), MouseClutchOperation::End, 2))
+        .unwrap();
+    let error = block_on(control.update_mouse_clutch_hold(owner, MouseClutchOperation::Renew, 3))
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::MouseClutchHoldExpired);
 }
 
 #[test]

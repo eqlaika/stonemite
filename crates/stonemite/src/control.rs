@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use trushar::control::{
     BroadcastState, ClientId, ClientTarget, CommandOutcome, ControlError, Controller, EqAction,
-    EqActionTargets, EqMappingName, ErrorCode, InputKind, KeyStroke, SnapshotMapper, SourceClient,
-    StateHub, StateSnapshot, DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_PAUSE_MS, EQ_KEYMAP_PAGE_SIZE,
+    EqActionTargets, EqMappingName, ErrorCode, InputKind, KeyStroke, MouseClutchOperation,
+    MouseClutchOwner, MouseClutchState, SnapshotMapper, SourceClient, StateHub, StateSnapshot,
+    DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_PAUSE_MS, EQ_KEYMAP_PAGE_SIZE,
 };
 use trushar::server::{ServerConfig, ServerHandle};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -39,6 +40,17 @@ enum UiCommand {
     SetBroadcast {
         enabled: bool,
         reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
+    },
+    UpdateMouseClutchHold {
+        owner: MouseClutchOwner,
+        operation: MouseClutchOperation,
+        sequence: u64,
+        reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
+    },
+    EndMouseClutchSession {
+        session_id: u64,
+        sequence: u64,
+        reply: oneshot::Sender<Result<(), ControlError>>,
     },
     SendText {
         client_id: ClientId,
@@ -143,11 +155,11 @@ struct ProductionController {
 }
 
 impl ProductionController {
-    fn enqueue(
+    fn enqueue<T: Send + 'static>(
         &self,
         timeout: Duration,
-        make_command: impl FnOnce(oneshot::Sender<Result<CommandOutcome, ControlError>>) -> UiCommand,
-    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>> {
+        make_command: impl FnOnce(oneshot::Sender<Result<T, ControlError>>) -> UiCommand,
+    ) -> BoxFuture<'static, Result<T, ControlError>> {
         let (reply, receiver) = oneshot::channel();
         if self.sender.try_send(make_command(reply)).is_err() {
             return Box::pin(async {
@@ -225,6 +237,36 @@ impl Controller for ProductionController {
         self.enqueue(COMMAND_TIMEOUT, move |reply| UiCommand::SetBroadcast {
             enabled,
             reply,
+        })
+    }
+
+    fn update_mouse_clutch_hold(
+        &self,
+        owner: MouseClutchOwner,
+        operation: MouseClutchOperation,
+        sequence: u64,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>> {
+        self.enqueue(COMMAND_TIMEOUT, move |reply| {
+            UiCommand::UpdateMouseClutchHold {
+                owner,
+                operation,
+                sequence,
+                reply,
+            }
+        })
+    }
+
+    fn end_mouse_clutch_session(
+        &self,
+        session_id: u64,
+        sequence: u64,
+    ) -> BoxFuture<'static, Result<(), ControlError>> {
+        self.enqueue(COMMAND_TIMEOUT, move |reply| {
+            UiCommand::EndMouseClutchSession {
+                session_id,
+                sequence,
+                reply,
+            }
         })
     }
 
@@ -424,6 +466,23 @@ pub fn drain_commands() {
                 let result = set_broadcast_on_ui(enabled, true);
                 let _ = reply.send(result);
             }
+            UiCommand::UpdateMouseClutchHold {
+                owner,
+                operation,
+                sequence,
+                reply,
+            } => {
+                let result = update_mouse_clutch_hold_on_ui(owner, operation, sequence);
+                let _ = reply.send(result);
+            }
+            UiCommand::EndMouseClutchSession {
+                session_id,
+                sequence,
+                reply,
+            } => {
+                let result = end_mouse_clutch_session_on_ui(session_id, sequence);
+                let _ = reply.send(result);
+            }
             UiCommand::SendText {
                 client_id,
                 text,
@@ -546,6 +605,43 @@ pub fn set_broadcast_on_ui(
 
 pub fn toggle_broadcast_on_ui(show_notification: bool) {
     let _ = set_broadcast_on_ui(!crate::broadcast::is_active(), show_notification);
+}
+
+fn update_mouse_clutch_hold_on_ui(
+    owner: MouseClutchOwner,
+    operation: MouseClutchOperation,
+    sequence: u64,
+) -> Result<CommandOutcome, ControlError> {
+    let held = crate::broadcast::update_remote_mouse_clutch_hold(owner, operation, sequence)
+        .map_err(map_mouse_clutch_error)?;
+    crate::overlay::refresh_broadcast_label();
+    crate::overlay::publish_control_snapshot();
+    Ok(CommandOutcome::MouseClutchHoldUpdated { held })
+}
+
+fn end_mouse_clutch_session_on_ui(session_id: u64, sequence: u64) -> Result<(), ControlError> {
+    crate::broadcast::end_remote_mouse_clutch_session(session_id, sequence);
+    crate::overlay::refresh_broadcast_label();
+    crate::overlay::publish_control_snapshot();
+    Ok(())
+}
+
+fn map_mouse_clutch_error(error: crate::broadcast::MouseClutchControlError) -> ControlError {
+    let (code, message) = match error {
+        crate::broadcast::MouseClutchControlError::Unavailable(message) => {
+            (ErrorCode::MouseClutchUnavailable, message)
+        }
+        crate::broadcast::MouseClutchControlError::NotReady(message) => {
+            (ErrorCode::MouseClutchNotReady, message)
+        }
+        crate::broadcast::MouseClutchControlError::HoldExpired(message) => {
+            (ErrorCode::MouseClutchHoldExpired, message)
+        }
+        crate::broadcast::MouseClutchControlError::OperationFailed(message) => {
+            (ErrorCode::MouseClutchOperationFailed, message)
+        }
+    };
+    ControlError::new(code, message)
 }
 
 fn resolve_local_eq_action(pid: u32, action: &EqAction) -> Result<ResolvedStroke, ControlError> {
@@ -1578,9 +1674,15 @@ fn finish_input(
 }
 
 /// Publish owner-thread state after any known local or remote change.
-pub fn publish(sources: Vec<SourceClient>, broadcast: BroadcastState) {
+pub fn publish(
+    sources: Vec<SourceClient>,
+    broadcast: BroadcastState,
+    mouse_clutch: MouseClutchState,
+) {
     let Some(state) = ui().as_mut() else { return };
-    let data = state.mapper.map(&sources, broadcast);
+    let mut data = state.mapper.map(&sources, broadcast);
+    data.mouse_clutch = mouse_clutch;
+    data.capabilities.set_mouse_clutch = crate::broadcast::is_available();
     state.latest_sources = sources;
     state.hub.publish(data);
 }

@@ -4,9 +4,10 @@
 //! trusik DLL reads to inject synthetic keystrokes into background EQ clients.
 
 use std::cell::UnsafeCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
 use std::sync::atomic::Ordering;
+use trushar::control::{MouseClutchOperation, MouseClutchOwner};
 use trusik_protocol::{
     SharedKeyState, KEYBOARD_BROADCAST, KEYBOARD_TARGETED, SHARED_KEY_STATE_SIZE,
 };
@@ -80,6 +81,8 @@ const MOUSE_X1: u8 = 1 << 3;
 const MOUSE_X2: u8 = 1 << 4;
 /// Three background polls at the measured 33–36 Hz, with a small margin.
 const MOUSE_DRAIN_MS: u64 = 90;
+/// Remote controls renew every 500 ms; expire quickly after a lost connection.
+pub const REMOTE_MOUSE_CLUTCH_LEASE_MS: u64 = 2_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ClutchPhase {
@@ -97,6 +100,22 @@ pub enum MouseClutchStatus {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MouseClutchAvailability {
+    Ready,
+    NoActiveClient,
+    NoCompatibleTargets,
+    InputUnavailable,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum MouseClutchControlError {
+    Unavailable(String),
+    NotReady(String),
+    HoldExpired(String),
+    OperationFailed(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ClutchKeyEffect {
     Pass,
     Swallow,
@@ -108,6 +127,7 @@ struct MouseClutch {
     phase: ClutchPhase,
     buttons: u8,
     swallowed_vk: Option<u32>,
+    local_owner_active: bool,
     source_pid: Option<u32>,
     drain_deadline_ms: u64,
 }
@@ -118,6 +138,7 @@ impl MouseClutch {
             phase: ClutchPhase::Inactive,
             buttons,
             swallowed_vk: None,
+            local_owner_active: false,
             source_pid: None,
             drain_deadline_ms: 0,
         }
@@ -136,28 +157,45 @@ impl MouseClutch {
             return ClutchKeyEffect::Swallow;
         }
         self.swallowed_vk = Some(vk);
-        if self.buttons != 0 || !has_targets {
+        if !self.activate(source_pid, has_targets) {
             return ClutchKeyEffect::Swallow;
         }
-        self.phase = ClutchPhase::Active;
-        self.source_pid = Some(source_pid);
-        self.drain_deadline_ms = 0;
+        self.local_owner_active = true;
         ClutchKeyEffect::Activate
     }
 
-    fn on_key_up(&mut self, vk: u32, now_ms: u64) -> ClutchKeyEffect {
+    fn on_key_up(&mut self, vk: u32, now_ms: u64, remote_owner_active: bool) -> ClutchKeyEffect {
         if self.swallowed_vk != Some(vk) {
             return ClutchKeyEffect::Pass;
         }
         self.swallowed_vk = None;
-        if self.phase == ClutchPhase::Active {
-            if self.buttons == 0 {
-                self.begin_drain(now_ms);
-            } else {
-                self.phase = ClutchPhase::Releasing;
-            }
-        }
+        self.local_owner_active = false;
+        self.release_if_unowned(now_ms, remote_owner_active);
         ClutchKeyEffect::Swallow
+    }
+
+    fn activate(&mut self, source_pid: u32, has_targets: bool) -> bool {
+        if self.phase == ClutchPhase::Active {
+            return self.source_pid == Some(source_pid);
+        }
+        if self.buttons != 0 || !has_targets {
+            return false;
+        }
+        self.phase = ClutchPhase::Active;
+        self.source_pid = Some(source_pid);
+        self.drain_deadline_ms = 0;
+        true
+    }
+
+    fn release_if_unowned(&mut self, now_ms: u64, remote_owner_active: bool) {
+        if self.local_owner_active || remote_owner_active || self.phase != ClutchPhase::Active {
+            return;
+        }
+        if self.buttons == 0 {
+            self.begin_drain(now_ms);
+        } else {
+            self.phase = ClutchPhase::Releasing;
+        }
     }
 
     fn set_button(&mut self, button: u8, pressed: bool, now_ms: u64) {
@@ -172,6 +210,7 @@ impl MouseClutch {
     }
 
     fn cancel_bounded(&mut self, now_ms: u64) {
+        self.local_owner_active = false;
         if matches!(self.phase, ClutchPhase::Active | ClutchPhase::Releasing) {
             self.begin_drain(now_ms);
         }
@@ -192,9 +231,16 @@ impl MouseClutch {
 
     fn force_inactive(&mut self) {
         self.phase = ClutchPhase::Inactive;
+        self.local_owner_active = false;
         self.source_pid = None;
         self.drain_deadline_ms = 0;
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RemoteMouseHold {
+    source_pid: u32,
+    deadline_ms: u64,
 }
 
 /// All broadcast state, accessed only from the main (tray message loop) thread.
@@ -210,6 +256,10 @@ struct BroadcastState {
     pending_clutch_binding: Option<Option<u32>>,
     clutch_key_is_down: bool,
     clutch: MouseClutch,
+    remote_mouse_holds: HashMap<MouseClutchOwner, RemoteMouseHold>,
+    remote_mouse_sequences: HashMap<MouseClutchOwner, u64>,
+    closed_remote_sessions: HashMap<u64, u64>,
+    closed_remote_session_order: VecDeque<u64>,
     clutch_status_dirty: bool,
     clutch_error: Option<String>,
     eq_pids: Vec<u32>,
@@ -246,6 +296,10 @@ pub fn init() {
         pending_clutch_binding: None,
         clutch_key_is_down: clutch_binding_vk.is_some_and(key_is_down),
         clutch: MouseClutch::new(sample_mouse_buttons()),
+        remote_mouse_holds: HashMap::new(),
+        remote_mouse_sequences: HashMap::new(),
+        closed_remote_sessions: HashMap::new(),
+        closed_remote_session_order: VecDeque::new(),
         clutch_status_dirty: false,
         clutch_error,
         eq_pids: Vec::new(),
@@ -328,6 +382,7 @@ fn keyboard_hook_needed(s: &BroadcastState) -> bool {
 fn mouse_hook_needed(s: &BroadcastState) -> bool {
     s.clutch_binding_vk.is_some()
         || s.pending_clutch_binding.is_some()
+        || !s.remote_mouse_holds.is_empty()
         || s.clutch.phase != ClutchPhase::Inactive
 }
 
@@ -391,12 +446,23 @@ unsafe fn deactivate_mouse_targets(s: &mut BroadcastState) {
     }
 }
 
-unsafe fn activate_mouse_targets(s: &mut BroadcastState, source_pid: u32) -> bool {
-    let has_targets = s.mouse_eligible_pids.contains(&source_pid)
+fn has_ready_mouse_targets(s: &BroadcastState, source_pid: u32) -> bool {
+    s.mouse_eligible_pids.contains(&source_pid)
         && s.targets.iter().any(|(&pid, target)| {
             pid != source_pid && s.mouse_eligible_pids.contains(&pid) && target_is_ready(target)
-        });
-    if !has_targets {
+        })
+}
+
+fn cancel_all_clutch_owners(s: &mut BroadcastState, now_ms: u64) {
+    if !s.remote_mouse_holds.is_empty() {
+        s.remote_mouse_holds.clear();
+    }
+    s.clutch.cancel_bounded(now_ms);
+    s.clutch_status_dirty = true;
+}
+
+unsafe fn activate_mouse_targets(s: &mut BroadcastState, source_pid: u32) -> bool {
+    if !has_ready_mouse_targets(s, source_pid) {
         return false;
     }
 
@@ -430,6 +496,7 @@ pub fn cleanup() {
     let _ = set_active(false);
     if let Some(s) = state().as_mut() {
         unsafe { deactivate_mouse_targets(s) };
+        s.remote_mouse_holds.clear();
         s.clutch.force_inactive();
         s.clutch.swallowed_vk = None;
         s.clutch_binding_vk = None;
@@ -464,6 +531,162 @@ pub fn mouse_clutch_status() -> MouseClutchStatus {
 
 pub fn mouse_clutch_error() -> Option<String> {
     state().as_ref().and_then(|s| s.clutch_error.clone())
+}
+
+fn mouse_clutch_availability_for(s: &BroadcastState) -> MouseClutchAvailability {
+    let Some(source_pid) =
+        real_foreground_pid().filter(|pid| s.active_pid == Some(*pid) && s.eq_pids.contains(pid))
+    else {
+        return MouseClutchAvailability::NoActiveClient;
+    };
+    if has_ready_mouse_targets(s, source_pid) {
+        MouseClutchAvailability::Ready
+    } else {
+        MouseClutchAvailability::NoCompatibleTargets
+    }
+}
+
+pub fn mouse_clutch_availability() -> MouseClutchAvailability {
+    state().as_ref().map_or(
+        MouseClutchAvailability::InputUnavailable,
+        mouse_clutch_availability_for,
+    )
+}
+
+pub fn update_remote_mouse_clutch_hold(
+    owner: MouseClutchOwner,
+    operation: MouseClutchOperation,
+    sequence: u64,
+) -> Result<bool, MouseClutchControlError> {
+    let Some(s) = state().as_mut() else {
+        return Err(MouseClutchControlError::Unavailable(
+            "Mouse Clutch is unavailable because trusik is disabled".to_owned(),
+        ));
+    };
+    let session_id = owner.session_id();
+    if s.closed_remote_sessions.contains_key(&session_id) {
+        return Err(MouseClutchControlError::HoldExpired(
+            "the Mouse Clutch connection is no longer active".to_owned(),
+        ));
+    }
+    let previous_sequence = s.remote_mouse_sequences.get(&owner).copied().unwrap_or(0);
+    if sequence <= previous_sequence {
+        return Ok(s.remote_mouse_holds.contains_key(&owner));
+    }
+    s.remote_mouse_sequences.insert(owner.clone(), sequence);
+
+    let now_ms = unsafe { GetTickCount64() };
+    match operation {
+        MouseClutchOperation::Begin => {
+            if let Some(hold) = s.remote_mouse_holds.get_mut(&owner) {
+                hold.deadline_ms = now_ms.saturating_add(REMOTE_MOUSE_CLUTCH_LEASE_MS);
+                return Ok(true);
+            }
+            let source_pid = match mouse_clutch_availability_for(s) {
+                MouseClutchAvailability::Ready => real_foreground_pid().expect("ready source"),
+                MouseClutchAvailability::InputUnavailable => {
+                    return Err(MouseClutchControlError::Unavailable(
+                        "Mouse Clutch is unavailable because trusik is disabled".to_owned(),
+                    ));
+                }
+                MouseClutchAvailability::NoActiveClient => {
+                    return Err(MouseClutchControlError::NotReady(
+                        "Mouse Clutch needs a foreground EverQuest client".to_owned(),
+                    ));
+                }
+                MouseClutchAvailability::NoCompatibleTargets => {
+                    return Err(MouseClutchControlError::NotReady(
+                        "Mouse Clutch needs a compatible input-ready background client".to_owned(),
+                    ));
+                }
+            };
+            let resuming_active_source =
+                s.clutch.phase == ClutchPhase::Active && s.clutch.source_pid == Some(source_pid);
+            s.remote_mouse_holds.insert(
+                owner.clone(),
+                RemoteMouseHold {
+                    source_pid,
+                    deadline_ms: now_ms.saturating_add(REMOTE_MOUSE_CLUTCH_LEASE_MS),
+                },
+            );
+            if let Err(error) = reconcile_hooks(s) {
+                s.remote_mouse_holds.remove(&owner);
+                let _ = reconcile_hooks(s);
+                return Err(MouseClutchControlError::OperationFailed(error));
+            }
+            if !resuming_active_source {
+                s.clutch.buttons = sample_mouse_buttons();
+                if !s.clutch.activate(source_pid, true) {
+                    s.remote_mouse_holds.remove(&owner);
+                    let _ = reconcile_hooks(s);
+                    return Err(MouseClutchControlError::NotReady(
+                        "release every mouse button before engaging Mouse Clutch".to_owned(),
+                    ));
+                }
+                if !unsafe { activate_mouse_targets(s, source_pid) } {
+                    s.remote_mouse_holds.remove(&owner);
+                    s.clutch.release_if_unowned(now_ms, false);
+                    let _ = reconcile_hooks(s);
+                    return Err(MouseClutchControlError::NotReady(
+                        "Mouse Clutch has no compatible input-ready background target".to_owned(),
+                    ));
+                }
+            }
+            s.clutch_status_dirty = true;
+            Ok(true)
+        }
+        MouseClutchOperation::Renew => {
+            let Some(hold) = s.remote_mouse_holds.get_mut(&owner) else {
+                return Err(MouseClutchControlError::HoldExpired(
+                    "the Mouse Clutch hold is no longer active".to_owned(),
+                ));
+            };
+            if s.clutch.phase != ClutchPhase::Active || s.clutch.source_pid != Some(hold.source_pid)
+            {
+                s.remote_mouse_holds.remove(&owner);
+                return Err(MouseClutchControlError::HoldExpired(
+                    "the Mouse Clutch hold was canceled".to_owned(),
+                ));
+            }
+            hold.deadline_ms = now_ms.saturating_add(REMOTE_MOUSE_CLUTCH_LEASE_MS);
+            Ok(true)
+        }
+        MouseClutchOperation::End => {
+            let removed = s.remote_mouse_holds.remove(&owner).is_some();
+            if removed {
+                let remote_owner_active = !s.remote_mouse_holds.is_empty();
+                s.clutch.release_if_unowned(now_ms, remote_owner_active);
+                s.clutch_status_dirty = true;
+                let _ = reconcile_hooks(s);
+            }
+            Ok(false)
+        }
+    }
+}
+
+pub fn end_remote_mouse_clutch_session(session_id: u64, sequence: u64) {
+    let Some(s) = state().as_mut() else { return };
+    if !s.closed_remote_sessions.contains_key(&session_id) {
+        s.closed_remote_session_order.push_back(session_id);
+    }
+    s.closed_remote_sessions.insert(session_id, sequence);
+    let before = s.remote_mouse_holds.len();
+    s.remote_mouse_holds
+        .retain(|owner, _| owner.session_id() != session_id);
+    s.remote_mouse_sequences
+        .retain(|owner, _| owner.session_id() != session_id);
+    while s.closed_remote_session_order.len() > 256 {
+        if let Some(expired) = s.closed_remote_session_order.pop_front() {
+            s.closed_remote_sessions.remove(&expired);
+        }
+    }
+    if s.remote_mouse_holds.len() != before {
+        let now_ms = unsafe { GetTickCount64() };
+        let remote_owner_active = !s.remote_mouse_holds.is_empty();
+        s.clutch.release_if_unowned(now_ms, remote_owner_active);
+        s.clutch_status_dirty = true;
+        let _ = reconcile_hooks(s);
+    }
 }
 
 /// Returns whether the target process has acknowledged a compatible trusik proxy.
@@ -541,8 +764,7 @@ pub fn update_targets(pids: &[u32], active_pid: Option<u32>) {
             .iter()
             .any(|(pid, target)| target.mouse_selected && !pids.contains(pid));
         if source_disappeared || selected_target_disappeared {
-            s.clutch.cancel_bounded(GetTickCount64());
-            s.clutch_status_dirty = true;
+            cancel_all_clutch_owners(s, GetTickCount64());
         }
 
         // Update EQ PIDs for the LL hook foreground check.
@@ -585,8 +807,7 @@ pub fn update_mouse_eligible_pids(pids: &[u32]) {
     s.mouse_eligible_pids.clear();
     s.mouse_eligible_pids.extend_from_slice(pids);
     if selected_became_ineligible {
-        s.clutch.cancel_bounded(unsafe { GetTickCount64() });
-        s.clutch_status_dirty = true;
+        cancel_all_clutch_owners(s, unsafe { GetTickCount64() });
     }
 }
 
@@ -594,8 +815,7 @@ pub fn update_mouse_eligible_pids(pids: &[u32]) {
 pub fn set_active_pid(pid: u32) {
     let Some(s) = state().as_mut() else { return };
     if s.clutch.source_pid.is_some_and(|source| source != pid) {
-        s.clutch.cancel_bounded(unsafe { GetTickCount64() });
-        s.clutch_status_dirty = true;
+        cancel_all_clutch_owners(s, unsafe { GetTickCount64() });
     }
     s.active_pid = Some(pid);
     unsafe {
@@ -643,6 +863,15 @@ pub fn tick() -> bool {
     refresh_controller_heartbeat(s, now_ms);
     let before = s.clutch.status();
 
+    let hold_count = s.remote_mouse_holds.len();
+    s.remote_mouse_holds
+        .retain(|_, hold| now_ms < hold.deadline_ms);
+    if s.remote_mouse_holds.len() != hold_count {
+        let remote_owner_active = !s.remote_mouse_holds.is_empty();
+        s.clutch.release_if_unowned(now_ms, remote_owner_active);
+        s.clutch_status_dirty = true;
+    }
+
     if s.clutch.phase != ClutchPhase::Inactive {
         let source_is_foreground = s.clutch.source_pid.is_some()
             && s.clutch.source_pid == real_foreground_pid()
@@ -656,7 +885,7 @@ pub fn tick() -> bool {
             .all(|target| target_is_ready(target) && target_process_alive(target));
         let has_selected_target = s.targets.values().any(|target| target.mouse_selected);
         if !source_is_foreground || !selected_targets_ready || !has_selected_target {
-            s.clutch.cancel_bounded(now_ms);
+            cancel_all_clutch_owners(s, now_ms);
         }
     }
 
@@ -664,6 +893,9 @@ pub fn tick() -> bool {
         unsafe { deactivate_mouse_targets(s) };
     }
     apply_pending_clutch_binding(s);
+    if let Err(error) = reconcile_hooks(s) {
+        s.clutch_error = Some(error);
+    }
 
     let dirty = s.clutch_status_dirty || before != s.clutch.status();
     s.clutch_status_dirty = false;
@@ -690,8 +922,7 @@ pub fn on_settings_changed() {
         }
     };
     s.pending_clutch_binding = Some(new_binding);
-    s.clutch.cancel_bounded(unsafe { GetTickCount64() });
-    s.clutch_status_dirty = true;
+    cancel_all_clutch_owners(s, unsafe { GetTickCount64() });
     apply_pending_clutch_binding(s);
 }
 
@@ -895,7 +1126,10 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
         if key_up && s.clutch.swallowed_vk == Some(kb.vkCode) {
             s.clutch_key_is_down = false;
             let before = s.clutch.status();
-            let _ = s.clutch.on_key_up(kb.vkCode, GetTickCount64());
+            let remote_owner_active = !s.remote_mouse_holds.is_empty();
+            let _ = s
+                .clutch
+                .on_key_up(kb.vkCode, GetTickCount64(), remote_owner_active);
             s.clutch_status_dirty |= before != s.clutch.status();
             return LRESULT(1);
         }
@@ -913,12 +1147,7 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
             s.clutch_key_is_down = true;
             if eq_is_foreground {
                 let source_pid = foreground_pid.unwrap_or_default();
-                let has_targets = s.mouse_eligible_pids.contains(&source_pid)
-                    && s.targets.iter().any(|(&pid, target)| {
-                        pid != source_pid
-                            && s.mouse_eligible_pids.contains(&pid)
-                            && target_is_ready(target)
-                    });
+                let has_targets = has_ready_mouse_targets(s, source_pid);
                 let before = s.clutch.status();
                 if s.clutch.on_key_down(kb.vkCode, source_pid, has_targets)
                     == ClutchKeyEffect::Activate
@@ -1010,6 +1239,10 @@ mod tests {
             pending_clutch_binding: None,
             clutch_key_is_down: false,
             clutch: MouseClutch::new(0),
+            remote_mouse_holds: HashMap::new(),
+            remote_mouse_sequences: HashMap::new(),
+            closed_remote_sessions: HashMap::new(),
+            closed_remote_session_order: VecDeque::new(),
             clutch_status_dirty: false,
             clutch_error: None,
             eq_pids: Vec::new(),
@@ -1112,7 +1345,7 @@ mod tests {
         assert_eq!(clutch.on_key_down(0x7c, 10, true), ClutchKeyEffect::Swallow);
         assert_eq!(clutch.phase, ClutchPhase::Active);
 
-        assert_eq!(clutch.on_key_up(0x7c, 100), ClutchKeyEffect::Swallow);
+        assert_eq!(clutch.on_key_up(0x7c, 100, false), ClutchKeyEffect::Swallow);
         assert_eq!(clutch.phase, ClutchPhase::Draining);
         assert!(!clutch.finish_drain_if_due(100 + MOUSE_DRAIN_MS - 1));
         assert!(clutch.finish_drain_if_due(100 + MOUSE_DRAIN_MS));
@@ -1120,11 +1353,25 @@ mod tests {
     }
 
     #[test]
+    fn local_release_keeps_an_overlapping_remote_owner_active() {
+        let mut clutch = MouseClutch::new(0);
+        assert_eq!(
+            clutch.on_key_down(0x7c, 10, true),
+            ClutchKeyEffect::Activate
+        );
+        assert_eq!(clutch.on_key_up(0x7c, 100, true), ClutchKeyEffect::Swallow);
+        assert_eq!(clutch.phase, ClutchPhase::Active);
+
+        clutch.release_if_unowned(120, false);
+        assert_eq!(clutch.phase, ClutchPhase::Draining);
+    }
+
+    #[test]
     fn preheld_mouse_button_rejects_press_and_swallows_matching_up() {
         let mut clutch = MouseClutch::new(MOUSE_LEFT);
         assert_eq!(clutch.on_key_down(0x7c, 10, true), ClutchKeyEffect::Swallow);
         assert_eq!(clutch.phase, ClutchPhase::Inactive);
-        assert_eq!(clutch.on_key_up(0x7c, 50), ClutchKeyEffect::Swallow);
+        assert_eq!(clutch.on_key_up(0x7c, 50, false), ClutchKeyEffect::Swallow);
         assert_eq!(clutch.phase, ClutchPhase::Inactive);
     }
 
@@ -1136,7 +1383,7 @@ mod tests {
             ClutchKeyEffect::Activate
         );
         clutch.set_button(MOUSE_LEFT, true, 10);
-        assert_eq!(clutch.on_key_up(0x7c, 20), ClutchKeyEffect::Swallow);
+        assert_eq!(clutch.on_key_up(0x7c, 20, false), ClutchKeyEffect::Swallow);
         assert_eq!(clutch.phase, ClutchPhase::Releasing);
         assert!(!clutch.finish_drain_if_due(10_000));
 
@@ -1153,7 +1400,7 @@ mod tests {
             clutch.on_key_down(0x7c, 10, true),
             ClutchKeyEffect::Activate
         );
-        assert_eq!(clutch.on_key_up(0x7c, 20), ClutchKeyEffect::Swallow);
+        assert_eq!(clutch.on_key_up(0x7c, 20, false), ClutchKeyEffect::Swallow);
         assert_eq!(clutch.phase, ClutchPhase::Draining);
 
         clutch.set_button(MOUSE_LEFT, true, 30);
@@ -1168,7 +1415,7 @@ mod tests {
             clutch.on_key_down(0x7c, 10, true),
             ClutchKeyEffect::Activate
         );
-        assert_eq!(clutch.on_key_up(0x7c, 20), ClutchKeyEffect::Swallow);
+        assert_eq!(clutch.on_key_up(0x7c, 20, false), ClutchKeyEffect::Swallow);
         assert_eq!(clutch.phase, ClutchPhase::Draining);
         assert_eq!(
             clutch.on_key_down(0x7c, 10, true),
@@ -1189,7 +1436,7 @@ mod tests {
             clutch.set_button(MOUSE_RIGHT, true, 5);
             clutch.cancel_bounded(40);
             assert_eq!(clutch.phase, ClutchPhase::Draining);
-            assert_eq!(clutch.on_key_up(0x7c, 50), ClutchKeyEffect::Swallow);
+            assert_eq!(clutch.on_key_up(0x7c, 50, false), ClutchKeyEffect::Swallow);
             assert_eq!(clutch.swallowed_vk, None);
             assert!(clutch.finish_drain_if_due(40 + MOUSE_DRAIN_MS));
             assert_eq!(clutch.phase, ClutchPhase::Inactive);

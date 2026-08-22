@@ -189,6 +189,55 @@ describe("dashboard layout", () => {
     expect(decodeSvg(renderCell(unavailable))).toContain("UNAVAILABLE");
   });
 
+  it("renders authoritative Mouse Clutch phases and readiness", () => {
+    const ready = buildKey(view({ snapshot: stateFixture() }), "mouse-clutch");
+    const active = buildKey(
+      view({
+        snapshot: stateFixture({
+          mouse_clutch: { phase: "active", availability: "ready" },
+        }),
+      }),
+      "mouse-clutch",
+    );
+    const releasing = buildKey(
+      view({
+        snapshot: stateFixture({
+          mouse_clutch: { phase: "releasing", availability: "ready" },
+        }),
+      }),
+      "mouse-clutch",
+    );
+    const noMatch = buildKey(
+      view({
+        snapshot: stateFixture({
+          mouse_clutch: {
+            phase: "inactive",
+            availability: "no_compatible_targets",
+          },
+        }),
+      }),
+      "mouse-clutch",
+    );
+
+    expect(ready).toMatchObject({
+      type: "mouse-clutch",
+      available: true,
+      status: "",
+    });
+    const readySvg = decodeSvg(renderCell(ready));
+    expect(readySvg).toContain(
+      'data-icon="mouse-pointer-2" data-icon-set="lucide"',
+    );
+    expect(readySvg).toContain('transform="translate(18 5.5) scale(1.5)"');
+    expect(readySvg).not.toContain(">HOLD</text>");
+    expect(readySvg).not.toContain(">Clutch</text>");
+    expect(readySvg).toContain(">Mouse</text>");
+    expect(decodeSvg(renderCell(active))).toContain("#58c8a8");
+    expect(decodeSvg(renderCell(active))).toContain(">ACTIVE</text>");
+    expect(decodeSvg(renderCell(releasing))).toContain(">RELEASING</text>");
+    expect(decodeSvg(renderCell(noMatch))).toContain(">NO MATCH</text>");
+  });
+
   it("renders connection state on Setup", () => {
     expect(
       decodeSvg(

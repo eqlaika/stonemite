@@ -12,15 +12,28 @@ export interface TrusharClient {
   input_ready: boolean;
 }
 
+export type MouseClutchPhase = "inactive" | "active" | "releasing";
+export type MouseClutchAvailability =
+  | "ready"
+  | "no_active_client"
+  | "no_compatible_targets"
+  | "input_unavailable"
+  | "unsupported";
+
 export interface TrusharState {
   revision: number;
   clients: TrusharClient[];
   active_client_id: string | null;
   broadcast: { available: boolean; enabled: boolean };
+  mouse_clutch: {
+    phase: MouseClutchPhase;
+    availability: MouseClutchAvailability;
+  };
   capabilities: {
     activate: boolean;
     swap_window_numbers: boolean;
     set_broadcast: boolean;
+    set_mouse_clutch: boolean;
     send_text: boolean;
     send_keys: boolean;
     eq_actions: EqActionCapabilities;
@@ -69,6 +82,7 @@ export type Success =
       selected_previous_number: number;
     }
   | { type: "broadcast_set"; enabled: boolean }
+  | { type: "mouse_clutch_hold_updated"; held: boolean }
   | { type: "input_delivered"; input: "text" | "keys"; strokes: number }
   | { type: "eq_action_delivered"; action: EqAction }
   | {
@@ -116,6 +130,12 @@ export type ClientMessage =
       target: { type: "client_id"; client_id: string };
     }
   | { type: "set_broadcast"; version: 1; request_id: string; enabled: boolean }
+  | {
+      type: "begin_mouse_clutch" | "renew_mouse_clutch" | "end_mouse_clutch";
+      version: 1;
+      request_id: string;
+      hold_id: string;
+    }
   | {
       type: "send_text";
       version: 1;
@@ -260,6 +280,11 @@ export function parseSuccess(value: unknown): Success {
         throw new ProtocolError("Broadcast result is malformed.");
       }
       return { type: "broadcast_set", enabled: value.enabled };
+    case "mouse_clutch_hold_updated":
+      if (!isBoolean(value.held)) {
+        throw new ProtocolError("Mouse Clutch result is malformed.");
+      }
+      return { type: "mouse_clutch_hold_updated", held: value.held };
     case "input_delivered":
       if (
         (value.input !== "text" && value.input !== "keys") ||
@@ -356,16 +381,42 @@ export function parseState(value: unknown): TrusharState {
       available: value.broadcast.available as boolean,
       enabled: value.broadcast.enabled as boolean,
     },
+    mouse_clutch: parseMouseClutch(value.mouse_clutch),
     capabilities: {
       activate: value.capabilities.activate as boolean,
       swap_window_numbers: isBoolean(value.capabilities.swap_window_numbers)
         ? value.capabilities.swap_window_numbers
         : false,
       set_broadcast: value.capabilities.set_broadcast as boolean,
+      set_mouse_clutch: isBoolean(value.capabilities.set_mouse_clutch)
+        ? value.capabilities.set_mouse_clutch
+        : false,
       send_text: value.capabilities.send_text as boolean,
       send_keys: value.capabilities.send_keys as boolean,
       eq_actions: parseEqActionCapabilities(value.capabilities.eq_actions),
     },
+  };
+}
+
+function parseMouseClutch(value: unknown): TrusharState["mouse_clutch"] {
+  if (value === undefined) {
+    return { phase: "inactive", availability: "unsupported" };
+  }
+  if (
+    !isRecord(value) ||
+    (value.phase !== "inactive" &&
+      value.phase !== "active" &&
+      value.phase !== "releasing") ||
+    (value.availability !== "ready" &&
+      value.availability !== "no_active_client" &&
+      value.availability !== "no_compatible_targets" &&
+      value.availability !== "input_unavailable")
+  ) {
+    throw new ProtocolError("Mouse Clutch state is malformed.");
+  }
+  return {
+    phase: value.phase,
+    availability: value.availability,
   };
 }
 

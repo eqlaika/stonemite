@@ -19,10 +19,12 @@ export function stateFixture(
     ],
     active_client_id: "client-1",
     broadcast: { available: true, enabled: false },
+    mouse_clutch: { phase: "inactive", availability: "ready" },
     capabilities: {
       activate: true,
       swap_window_numbers: true,
       set_broadcast: true,
+      set_mouse_clutch: true,
       send_text: true,
       send_keys: true,
       eq_actions: {

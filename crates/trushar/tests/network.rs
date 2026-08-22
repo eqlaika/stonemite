@@ -364,6 +364,65 @@ async fn real_network_listener_upgrade_commands_fanout_reconnect_and_shutdown() 
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn mouse_clutch_holds_are_revoked_when_the_owning_connection_closes() {
+    let control = InMemoryController::new(BroadcastState {
+        available: true,
+        enabled: false,
+    });
+    control.add_client(1, Some("One"), None, None, true, true);
+    control.add_client(2, Some("Two"), None, None, false, true);
+    let server = ServerHandle::start(
+        ServerConfig::loopback("127.0.0.1:0".parse().unwrap()),
+        Arc::new(control),
+    )
+    .unwrap();
+    let address = server.local_addr();
+
+    let mut owner = connect(address, None, None).await.unwrap();
+    let mut observer = connect(address, None, None).await.unwrap();
+    let _ = receive(&mut owner).await;
+    let _ = receive(&mut observer).await;
+
+    send(
+        &mut owner,
+        ClientMessage::BeginMouseClutch {
+            version: 1,
+            request_id: "clutch-down".into(),
+            hold_id: "press-1".into(),
+        },
+    )
+    .await;
+    assert!(matches!(
+        receive_result(&mut owner, "clutch-down").await,
+        ServerMessage::Result {
+            result: Success::MouseClutchHoldUpdated { held: true },
+            ref state,
+            ..
+        } if state.mouse_clutch.phase == trushar::protocol::WireMouseClutchPhase::Active
+    ));
+    let active = receive_state_where(&mut observer, |state| {
+        state.mouse_clutch.phase == trushar::protocol::WireMouseClutchPhase::Active
+    })
+    .await;
+    assert_eq!(
+        active.mouse_clutch.availability,
+        trushar::protocol::WireMouseClutchAvailability::Ready
+    );
+
+    owner.close(None).await.unwrap();
+    let inactive = receive_state_where(&mut observer, |state| {
+        state.mouse_clutch.phase == trushar::protocol::WireMouseClutchPhase::Inactive
+    })
+    .await;
+    assert_eq!(
+        inactive.mouse_clutch.phase,
+        trushar::protocol::WireMouseClutchPhase::Inactive
+    );
+
+    server.shutdown();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn malformed_binary_and_disconnected_slow_client_do_not_affect_healthy_client() {
     let control = InMemoryController::new(BroadcastState::UNAVAILABLE);
     let server = ServerHandle::start(

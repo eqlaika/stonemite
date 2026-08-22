@@ -65,6 +65,89 @@ describe("DashboardController", () => {
     expect(client.setBroadcast).toHaveBeenCalledWith(true);
   });
 
+  it("holds and renews independent duplicate Mouse Clutch actions until key-up", async () => {
+    vi.useFakeTimers();
+    const store = connectedStore();
+    const client = fakeClient();
+    client.beginMouseClutch.mockResolvedValue(clutchResult(true, "active"));
+    client.renewMouseClutch.mockResolvedValue(clutchResult(true, "active"));
+    client.endMouseClutch.mockResolvedValue(clutchResult(false, "releasing"));
+    const controller = new DashboardController(store, client as never);
+    const first = fakeKey("clutch-first", "mouse-clutch");
+    const second = fakeKey("clutch-second", "mouse-clutch");
+
+    await controller.onWillAppear({ action: first } as never);
+    await controller.onWillAppear({ action: second } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+    await controller.onKeyDown({ action: first } as never);
+    await controller.onKeyDown({ action: first } as never);
+    await controller.onKeyDown({ action: second } as never);
+
+    expect(client.beginMouseClutch).toHaveBeenCalledTimes(2);
+    const firstHold = client.beginMouseClutch.mock.calls[0]?.[0] as string;
+    const secondHold = client.beginMouseClutch.mock.calls[1]?.[0] as string;
+    expect(firstHold).not.toBe(secondHold);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(client.renewMouseClutch).toHaveBeenCalledTimes(2);
+
+    await controller.onKeyUp({ action: first } as never);
+    expect(client.endMouseClutch).toHaveBeenCalledWith(firstHold);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(client.renewMouseClutch.mock.calls.at(-1)?.[0]).toBe(secondHold);
+
+    controller.onWillDisappear({ action: second } as never);
+    expect(client.endMouseClutch).toHaveBeenCalledWith(secondHold);
+  });
+
+  it("releases Mouse Clutch when key-up races a pending begin", async () => {
+    vi.useFakeTimers();
+    const store = connectedStore();
+    const begin = deferred<ReturnType<typeof clutchResult>>();
+    const client = fakeClient();
+    client.beginMouseClutch.mockReturnValue(begin.promise);
+    client.endMouseClutch.mockResolvedValue(clutchResult(false, "releasing"));
+    const controller = new DashboardController(store, client as never);
+    const clutch = fakeKey("clutch", "mouse-clutch");
+
+    await controller.onWillAppear({ action: clutch } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+    const keyDown = controller.onKeyDown({ action: clutch } as never);
+    await controller.onKeyUp({ action: clutch } as never);
+    const holdId = client.beginMouseClutch.mock.calls[0]?.[0] as string;
+    expect(client.endMouseClutch).toHaveBeenCalledWith(holdId);
+
+    begin.resolve(clutchResult(true, "active"));
+    await keyDown;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(client.renewMouseClutch).not.toHaveBeenCalled();
+  });
+
+  it("does not renew or re-arm Mouse Clutch after disconnect", async () => {
+    vi.useFakeTimers();
+    const store = connectedStore();
+    const client = fakeClient();
+    client.beginMouseClutch.mockResolvedValue(clutchResult(true, "active"));
+    client.renewMouseClutch.mockResolvedValue(clutchResult(true, "active"));
+    const controller = new DashboardController(store, client as never);
+    const clutch = fakeKey("clutch", "mouse-clutch");
+
+    await controller.onWillAppear({ action: clutch } as never);
+    await vi.advanceTimersByTimeAsync(1_100);
+    await controller.onKeyDown({ action: clutch } as never);
+    await vi.advanceTimersByTimeAsync(0);
+    store.setConnection({
+      state: "reconnecting",
+      title: "Reconnecting",
+      detail: "Retrying",
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(client.renewMouseClutch).not.toHaveBeenCalled();
+    await controller.onKeyUp({ action: clutch } as never);
+    expect(client.endMouseClutch).not.toHaveBeenCalled();
+  });
+
   it("keeps duplicate character actions synchronized without duplicate commands", async () => {
     vi.useFakeTimers();
     const store = connectedStore();
@@ -406,6 +489,9 @@ function fakeClient() {
     activate: vi.fn(),
     swapWindowNumbers: vi.fn(),
     setBroadcast: vi.fn(),
+    beginMouseClutch: vi.fn(),
+    renewMouseClutch: vi.fn(),
+    endMouseClutch: vi.fn(),
     pair: vi.fn(),
     configure: vi.fn(),
     reconnect: vi.fn(),
@@ -462,6 +548,21 @@ function swapResult() {
       selected_previous_number: 2,
     },
     state: stateFixture(),
+  };
+}
+
+function clutchResult(
+  held: boolean,
+  phase: "inactive" | "active" | "releasing",
+) {
+  return {
+    type: "result" as const,
+    version: 1 as const,
+    request_id: "clutch-1",
+    result: { type: "mouse_clutch_hold_updated" as const, held },
+    state: stateFixture({
+      mouse_clutch: { phase, availability: "ready" },
+    }),
   };
 }
 

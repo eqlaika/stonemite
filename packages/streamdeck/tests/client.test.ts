@@ -208,6 +208,57 @@ describe("local and LAN connections", () => {
     expect(normalSocket?.readyState).toBe(1);
   });
 
+  it("sends connection-scoped Mouse Clutch hold operations", async () => {
+    const server = await startServer();
+    const requests: Array<Record<string, unknown>> = [];
+    server.wss.on("connection", (socket) => {
+      socket.send(
+        JSON.stringify({ type: "state", version: 1, state: stateFixture() }),
+      );
+      socket.on("message", (raw) => {
+        const request = JSON.parse(raw.toString()) as Record<string, unknown>;
+        requests.push(request);
+        socket.send(
+          JSON.stringify({
+            type: "result",
+            version: 1,
+            request_id: request.request_id,
+            result: {
+              type: "mouse_clutch_hold_updated",
+              held: request.type !== "end_mouse_clutch",
+            },
+            state: stateFixture({
+              revision: 5 + requests.length,
+              mouse_clutch: {
+                phase:
+                  request.type === "end_mouse_clutch" ? "releasing" : "active",
+                availability: "ready",
+              },
+            }),
+          }),
+        );
+      });
+    });
+    const client = new TrusharClient({
+      onState: () => undefined,
+      onStatus: () => undefined,
+    });
+    cleanups.push(() => client.disconnect());
+    client.configure({ address: `127.0.0.1:${server.port}` });
+    await vi.waitFor(() => expect(server.wss.clients.size).toBe(1));
+
+    await client.beginMouseClutch("press-1");
+    await client.renewMouseClutch("press-1");
+    await client.endMouseClutch("press-1");
+
+    expect(requests.map(({ type }) => type)).toEqual([
+      "begin_mouse_clutch",
+      "renew_mouse_clutch",
+      "end_mouse_clutch",
+    ]);
+    expect(requests.every(({ hold_id }) => hold_id === "press-1")).toBe(true);
+  });
+
   it("sends swaps, mapped-action discovery, and dynamic batches", async () => {
     const server = await startServer();
     const requests: Array<Record<string, unknown>> = [];

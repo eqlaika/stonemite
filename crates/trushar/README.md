@@ -1,6 +1,6 @@
 # trushar WebSocket protocol
 
-`trushar` is Stonemite's generic semantic control/state interface. It provides current EQ-client state, pushed changes, exact activation, active-to-selected window-number swaps, explicit broadcast enable/disable operations, bounded input delivery, and keybinding-independent EverQuest actions for one exact loaded client. It has no client-hardware, layout, icon, button, or vendor protocol model. A future device-specific integration can use it as one ordinary client.
+`trushar` is Stonemite's generic semantic control/state interface. It provides current EQ-client state, pushed changes, exact activation, active-to-selected window-number swaps, explicit broadcast enable/disable operations, leased hold-to-broadcast Mouse Clutch control, bounded input delivery, and keybinding-independent EverQuest actions for one exact loaded client. It has no client-hardware, layout, icon, button, or vendor protocol model. A device-specific integration uses it as one ordinary client.
 
 ## Endpoint and security
 
@@ -89,10 +89,12 @@ The server sends a complete `state` message immediately after a successful upgra
     ],
     "active_client_id": "client-0000000000000001",
     "broadcast": { "available": true, "enabled": false },
+    "mouse_clutch": { "phase": "inactive", "availability": "ready" },
     "capabilities": {
       "activate": true,
       "swap_window_numbers": true,
       "set_broadcast": true,
+      "set_mouse_clutch": true,
       "send_text": true,
       "send_keys": true,
       "eq_actions": {
@@ -115,6 +117,8 @@ The server sends a complete `state` message immediately after a successful upgra
 `character`, `server`, and `class_code` are omitted when unknown. Character/server identity can appear after initial process discovery and can change when trusik observes the same EQ process open a different character log after camping or changing servers. `class_code` is the actual abbreviation Stonemite learned (for example `SHK` or `SHM`), not a fabricated full class name. Log-file assignment candidates are not exposed as loaded clients.
 
 `broadcast.available` is false when trusik/broadcast support was not initialized. In that state `enabled` is false, `set_broadcast` capability is false, and mutation requests return `broadcast_unavailable`.
+
+`mouse_clutch.phase` is `inactive`, `active`, or `releasing`. `availability` is `ready`, `no_active_client`, `no_compatible_targets`, or `input_unavailable`; it describes whether a fresh remote hold can start, while command-time foreground, button, process, and target checks remain authoritative. `set_mouse_clutch` advertises the leased remote-hold commands. Older version-1 servers omit both additions, which clients must treat as unsupported.
 
 `swap_window_numbers` is true when the server supports exchanging the active client's stable window number with one selected client without changing the foreground client. `send_text`, `send_keys`, and the typed delivery ranges under `eq_actions` are available when at least one loaded client has `input_ready: true`. They require `trusik = true` but do not depend on whether broadcasting is enabled. `eq_actions.hotbars`, `hotbar_buttons`, and `spell_gems` are zero when unavailable; otherwise they advertise the supported one-based ranges. `keymap_actions` advertises generic mapping discovery and batch-target preflight and remains true while no input channel is currently ready, so clients can distinguish temporary readiness from an older server. Consumers must still check the selected client's `input_ready`; command-time validation is authoritative because readiness, identity, and effective keymaps can change after a snapshot. Clients talking to older servers must treat missing `eq_actions` fields as unsupported.
 
@@ -171,6 +175,16 @@ Set broadcast state explicitly (there is no required read-modify-write toggle):
   "enabled": true
 }
 ```
+
+Hold Mouse Clutch with a caller-generated `hold_id` that is unique for one physical press:
+
+```json
+{"type":"begin_mouse_clutch","version":1,"request_id":"clutch-down-1","hold_id":"press-7f3a"}
+{"type":"renew_mouse_clutch","version":1,"request_id":"clutch-renew-1","hold_id":"press-7f3a"}
+{"type":"end_mouse_clutch","version":1,"request_id":"clutch-up-1","hold_id":"press-7f3a"}
+```
+
+`hold_id` contains 1–128 bytes and is scoped to its WebSocket connection, so equal IDs on different connections cannot release one another. Begin and end are idempotent. Renew extends only a live hold and never re-arms one canceled by focus, source, target, settings, lease, or process loss. Clients should renew every 500 ms; Stonemite expires a hold after two seconds without renewal and revokes every hold owned by a connection when it closes. A final owner release uses the same held-button-aware release and drain as the local Mouse Clutch key. Successful commands return `{"type":"mouse_clutch_hold_updated","held":true|false}` plus authoritative state. Stable errors include `mouse_clutch_unavailable`, `mouse_clutch_not_ready`, `mouse_clutch_hold_expired`, and `mouse_clutch_operation_failed`.
 
 Type text into exactly one current opaque client ID, optionally followed by Enter:
 
@@ -307,10 +321,12 @@ Every successful request returns the authoritative current snapshot as well as a
     "clients": [],
     "active_client_id": null,
     "broadcast": { "available": false, "enabled": false },
+    "mouse_clutch": { "phase": "inactive", "availability": "input_unavailable" },
     "capabilities": {
       "activate": true,
       "swap_window_numbers": true,
       "set_broadcast": false,
+      "set_mouse_clutch": false,
       "send_text": false,
       "send_keys": false,
       "eq_actions": {

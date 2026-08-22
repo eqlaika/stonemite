@@ -50,9 +50,16 @@ describe("trushar parser", () => {
     delete raw.clients[1]!.input_ready;
     const capabilities = raw.capabilities as Record<string, unknown>;
     delete capabilities.swap_window_numbers;
+    delete capabilities.set_mouse_clutch;
     delete capabilities.eq_actions;
+    delete (raw as Record<string, unknown>).mouse_clutch;
     const parsed = parseState(raw);
     expect(parsed.capabilities.swap_window_numbers).toBe(false);
+    expect(parsed.capabilities.set_mouse_clutch).toBe(false);
+    expect(parsed.mouse_clutch).toEqual({
+      phase: "inactive",
+      availability: "unsupported",
+    });
     expect(parsed.capabilities.eq_actions).toEqual({
       use_center_screen: false,
       invite_follow: false,
@@ -103,6 +110,23 @@ describe("trushar parser", () => {
     ).toMatchObject({
       type: "result",
       result: { type: "window_numbers_swapped" },
+    });
+    expect(
+      parseServerMessage(
+        JSON.stringify({
+          type: "result",
+          version: 1,
+          request_id: "clutch",
+          result: {
+            type: "mouse_clutch_hold_updated",
+            held: true,
+          },
+          state,
+        }),
+      ),
+    ).toMatchObject({
+      type: "result",
+      result: { type: "mouse_clutch_hold_updated", held: true },
     });
     expect(
       parseServerMessage(
@@ -252,6 +276,29 @@ describe("trushar parser", () => {
         request_id: "x",
         result: { type: "broadcast_set", enabled: "yes" },
         state: stateFixture(),
+      }),
+    ],
+    [
+      "malformed Mouse Clutch result",
+      JSON.stringify({
+        type: "result",
+        version: 1,
+        request_id: "x",
+        result: { type: "mouse_clutch_hold_updated", held: "yes" },
+        state: stateFixture(),
+      }),
+    ],
+    [
+      "malformed Mouse Clutch state",
+      JSON.stringify({
+        type: "state",
+        version: 1,
+        state: stateFixture({
+          mouse_clutch: {
+            phase: "stuck" as "inactive",
+            availability: "ready",
+          },
+        }),
       }),
     ],
     [

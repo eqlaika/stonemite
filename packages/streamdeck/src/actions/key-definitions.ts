@@ -30,6 +30,13 @@ export const DASHBOARD_ACTION_DEFINITIONS = [
     uuid: `${UUID_PREFIX}.broadcast`,
   },
   {
+    key: "mouse-clutch",
+    name: "Mouse Clutch",
+    tooltip:
+      "Hold to send the foreground EQ client's physical mouse to compatible background boxes.",
+    uuid: `${UUID_PREFIX}.mouse-clutch`,
+  },
+  {
     key: "swap",
     name: "Swap",
     tooltip: "Arm a window-number swap, then choose a character slot.",

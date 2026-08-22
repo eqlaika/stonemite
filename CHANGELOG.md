@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- Added a dedicated hold-to-broadcast Stream Deck Mouse Clutch action with authoritative ready, active, releasing, compatibility, and failure states
+- Added connection-scoped, renewable Trushar Mouse Clutch holds with independent physical/deck ownership, bounded lease expiry, and automatic cleanup on disconnect
+
+### Changed
+
+- Pushed Mouse Clutch phase and readiness changes through Trushar so every deck tile reflects physical-key, duplicate-tile, focus-cancellation, and release-drain transitions
+
 ## v2026.08.22
 
 ### Added

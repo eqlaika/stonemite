@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import streamDeck, {
   type KeyAction,
   type KeyDownEvent,
+  type KeyUpEvent,
   type SendToPluginEvent,
   type WillAppearEvent,
   type WillDisappearEvent,
@@ -20,6 +22,7 @@ import { keyForManifestId } from "./key-definitions";
 
 const SWAP_TILE_FRAME_MS = 125;
 const SWAP_TILE_FRAME_COUNT = 8;
+const MOUSE_CLUTCH_RENEW_MS = 500;
 
 export interface PluginSettings extends JsonObject {
   address?: string;
@@ -30,6 +33,12 @@ export interface VisibleKey {
   action: KeyAction;
   key: DashboardKey;
   lastImage?: string;
+}
+
+interface ClutchHold {
+  holdId: string;
+  accepted: boolean;
+  renewTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export class DashboardController {
@@ -43,6 +52,7 @@ export class DashboardController {
   #bootStarted = false;
   #credentialEpoch = 0;
   readonly #activationsInFlight = new Set<string>();
+  readonly #clutchHolds = new Map<string, ClutchHold>();
   #broadcastInFlight = false;
   #swapArmed = false;
   #swapInFlight = false;
@@ -52,6 +62,7 @@ export class DashboardController {
     this.#client = client;
     this.#store.subscribe((view) => {
       if (!buildSwapPlan(view).available) this.#swapArmed = false;
+      if (view.connection.state !== "connected") this.#forgetClutchHolds();
       this.#queueRender();
     });
   }
@@ -66,6 +77,10 @@ export class DashboardController {
   }
 
   onWillDisappear(event: WillDisappearEvent): void {
+    const key = this.#keys.get(event.action.id);
+    if (key?.key === "mouse-clutch") {
+      void this.#releaseClutch(key, false);
+    }
     this.#keys.delete(event.action.id);
     this.#syncMotion();
   }
@@ -82,6 +97,17 @@ export class DashboardController {
     );
 
     try {
+      if (cell.type === "mouse-clutch") {
+        if (!cell.available || this.#clutchHolds.has(key.action.id)) return;
+        void this.#beginClutch(key).catch(async (error: unknown) => {
+          this.#store.setFeedback(key.action.id, {
+            kind: "error",
+            message: friendlyError(error),
+          });
+          await key.action.showAlert();
+        });
+        return;
+      }
       if (this.#swapInFlight) return;
       if (cell.type === "swap" && cell.available) {
         this.#swapArmed = !this.#swapArmed;
@@ -168,6 +194,13 @@ export class DashboardController {
     }
   }
 
+  async onKeyUp(event: KeyUpEvent): Promise<void> {
+    if (!event.action.isKey()) return;
+    const key = this.#keys.get(event.action.id);
+    if (!key || key.key !== "mouse-clutch") return;
+    await this.#releaseClutch(key, true);
+  }
+
   async onPropertyInspectorDidAppear(): Promise<void> {
     await this.#sendStatus();
   }
@@ -229,6 +262,123 @@ export class DashboardController {
       }
       if (epoch === this.#credentialEpoch) await this.#sendStatus();
     }
+  }
+
+  async #beginClutch(key: VisibleKey): Promise<void> {
+    const hold: ClutchHold = {
+      holdId: randomUUID(),
+      accepted: false,
+      renewTimer: null,
+    };
+    this.#clutchHolds.set(key.action.id, hold);
+    this.#store.setFeedback(
+      key.action.id,
+      { kind: "pending", message: "Engaging" },
+      10_000,
+    );
+    try {
+      const result = await this.#client.beginMouseClutch(hold.holdId);
+      if (this.#clutchHolds.get(key.action.id) !== hold) return;
+      if (
+        result.result.type !== "mouse_clutch_hold_updated" ||
+        !result.result.held
+      ) {
+        throw new CommandError(
+          "protocol_error",
+          "Stonemite did not accept the Mouse Clutch hold.",
+        );
+      }
+      hold.accepted = true;
+      this.#store.clearFeedback(key.action.id);
+      this.#scheduleClutchRenewal(key, hold);
+    } catch (error) {
+      if (this.#clutchHolds.get(key.action.id) !== hold) return;
+      this.#clutchHolds.delete(key.action.id);
+      throw error;
+    }
+  }
+
+  async #releaseClutch(key: VisibleKey, showFailure: boolean): Promise<void> {
+    const hold = this.#clutchHolds.get(key.action.id);
+    if (!hold) return;
+    this.#clutchHolds.delete(key.action.id);
+    if (hold.renewTimer) clearTimeout(hold.renewTimer);
+    this.#store.clearFeedback(key.action.id);
+    try {
+      const result = await this.#client.endMouseClutch(hold.holdId);
+      if (
+        result.result.type !== "mouse_clutch_hold_updated" ||
+        result.result.held
+      ) {
+        throw new CommandError(
+          "protocol_error",
+          "Stonemite did not release the Mouse Clutch hold.",
+        );
+      }
+    } catch (error) {
+      if (
+        error instanceof CommandError &&
+        error.code === "mouse_clutch_hold_expired"
+      ) {
+        return;
+      }
+      if (showFailure && this.#store.view.connection.state === "connected") {
+        this.#store.setFeedback(key.action.id, {
+          kind: "error",
+          message: friendlyError(error),
+        });
+        await key.action.showAlert();
+      }
+    }
+  }
+
+  #scheduleClutchRenewal(key: VisibleKey, hold: ClutchHold): void {
+    if (
+      !hold.accepted ||
+      this.#clutchHolds.get(key.action.id) !== hold ||
+      this.#store.view.connection.state !== "connected"
+    ) {
+      return;
+    }
+    hold.renewTimer = setTimeout(
+      () => void this.#renewClutch(key, hold),
+      MOUSE_CLUTCH_RENEW_MS,
+    );
+    hold.renewTimer.unref?.();
+  }
+
+  async #renewClutch(key: VisibleKey, hold: ClutchHold): Promise<void> {
+    hold.renewTimer = null;
+    if (this.#clutchHolds.get(key.action.id) !== hold) return;
+    try {
+      const result = await this.#client.renewMouseClutch(hold.holdId);
+      if (
+        result.result.type !== "mouse_clutch_hold_updated" ||
+        !result.result.held
+      ) {
+        throw new CommandError(
+          "mouse_clutch_hold_expired",
+          "Mouse Clutch was canceled. Release and press the key again.",
+        );
+      }
+    } catch (error) {
+      if (this.#clutchHolds.get(key.action.id) !== hold) return;
+      this.#clutchHolds.delete(key.action.id);
+      this.#store.setFeedback(key.action.id, {
+        kind: "error",
+        message: friendlyError(error),
+      });
+      await key.action.showAlert();
+      return;
+    }
+    this.#scheduleClutchRenewal(key, hold);
+  }
+
+  #forgetClutchHolds(): void {
+    for (const hold of this.#clutchHolds.values()) {
+      if (hold.renewTimer) clearTimeout(hold.renewTimer);
+    }
+    this.#clutchHolds.clear();
   }
 
   async #sendStatus(): Promise<void> {
@@ -350,6 +500,14 @@ function friendlyError(error: unknown): string {
         return "Swap unavailable";
       case "broadcast_unavailable":
         return "Broadcast unavailable";
+      case "mouse_clutch_unavailable":
+        return "Clutch unavailable";
+      case "mouse_clutch_not_ready":
+        return "No compatible boxes";
+      case "mouse_clutch_hold_expired":
+        return "Press again";
+      case "mouse_clutch_operation_failed":
+        return "Clutch failed";
       case "command_timeout":
         return "Timed out";
       case "input_unavailable":

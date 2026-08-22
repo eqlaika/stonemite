@@ -1,6 +1,7 @@
 import { APP_IMAGE, CLASS_IMAGES } from "./assets.generated";
 import {
   renderConfigurableLucideIcon,
+  renderLucideMousePointer2Icon,
   renderSwapIcon,
   type LucideAnimatedIcon,
 } from "./action-icons";
@@ -43,6 +44,8 @@ export function renderCell(cell: KeyCell, motionFrame = 0): string {
         return renderLogo(cell.connection);
       case "broadcast":
         return renderBroadcast(cell.available, cell.enabled);
+      case "mouse-clutch":
+        return renderMouseClutch(cell.available, cell.phase, cell.status);
       case "swap":
         return renderSwap(cell.available, cell.armed, motionFrame);
     }
@@ -203,6 +206,35 @@ function renderSwapTile(
   const foreground = active ? COLORS.ink : accent;
   const labelClass = active ? "active-text center" : "text center";
   return `${surface}${renderSwapIcon(foreground, motionFrame, active)}<text x="36" y="65" class="${labelClass}" font-size="15">Swap</text>`;
+}
+
+function renderMouseClutch(
+  available: boolean,
+  phase: "inactive" | "active" | "releasing",
+  status: string,
+): string {
+  const clutch = "#58c8a8";
+  const releasing = COLORS.amber;
+  const active = phase === "active";
+  const draining = phase === "releasing";
+  const accent = draining
+    ? releasing
+    : available || active
+      ? clutch
+      : COLORS.disabled;
+  const surface =
+    active || draining
+      ? `<rect width="72" height="72" rx="7" fill="${accent}"/>`
+      : base();
+  const foreground = active || draining ? COLORS.ink : accent;
+  const labelClass = active || draining ? "active-text center" : "text center";
+  const statusClass =
+    active || draining ? "active-text center" : "muted center";
+  const hasStatus = status.length > 0;
+  const statusText = hasStatus
+    ? `<text x="36" y="45" class="${statusClass}" font-size="15"${fittedTextAttributes(status, 7, 60)}>${escapeXml(status)}</text>`
+    : "";
+  return `${surface}${renderLucideMousePointer2Icon(foreground, hasStatus)}${statusText}<text x="36" y="65" class="${labelClass}" font-size="15">Mouse</text>`;
 }
 
 function renderBroadcast(available: boolean, enabled: boolean): string {

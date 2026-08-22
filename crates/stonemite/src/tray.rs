@@ -288,6 +288,7 @@ unsafe extern "system" fn wnd_proc(
             } else if wparam.0 == TIMER_MOUSE_CLUTCH {
                 if broadcast::tick() {
                     overlay::refresh_broadcast_label();
+                    overlay::publish_control_snapshot();
                 }
             } else if wparam.0 == control::TIMER_CONTROL_INPUT {
                 control::advance_input();

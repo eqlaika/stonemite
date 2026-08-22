@@ -1,4 +1,4 @@
-use crate::control::{ControlError, Controller, ErrorCode};
+use crate::control::{ControlError, Controller, ErrorCode, MouseClutchOperation, MouseClutchOwner};
 use crate::protocol::{
     data_frame_policy, decode_client_message, decode_pairing_request, ClientMessage,
     DataFramePolicy, ServerMessage, Success, MAX_TEXT_MESSAGE_SIZE,
@@ -32,6 +32,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const CONNECTION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_IN_FLIGHT_COMMANDS: usize = 16;
+static NEXT_CONTROL_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(windows)]
 fn prevent_listener_socket_inheritance(listener: &TcpListener) -> std::io::Result<()> {
@@ -427,7 +428,10 @@ async fn serve_connection(
     if pairing_session_id != 0 {
         pairing_loop(websocket, pairing, pairing_session_id, shutdown).await;
     } else {
-        connection_loop(websocket, controller, shutdown).await;
+        let session_id = NEXT_CONTROL_SESSION_ID
+            .fetch_add(1, Ordering::Relaxed)
+            .max(1);
+        connection_loop(websocket, controller, session_id, shutdown).await;
     }
 }
 
@@ -589,8 +593,31 @@ async fn pairing_loop(
 }
 
 async fn connection_loop(
+    websocket: WebSocketStream<TcpStream>,
+    controller: Arc<dyn Controller>,
+    session_id: u64,
+    shutdown: watch::Receiver<bool>,
+) {
+    let mut mouse_clutch_sequence = 0u64;
+    connection_loop_inner(
+        websocket,
+        controller.clone(),
+        session_id,
+        &mut mouse_clutch_sequence,
+        shutdown,
+    )
+    .await;
+
+    mouse_clutch_sequence = mouse_clutch_sequence.saturating_add(1);
+    let cleanup = controller.end_mouse_clutch_session(session_id, mouse_clutch_sequence);
+    let _ = tokio::time::timeout(WRITE_TIMEOUT, cleanup).await;
+}
+
+async fn connection_loop_inner(
     mut websocket: WebSocketStream<TcpStream>,
     controller: Arc<dyn Controller>,
+    session_id: u64,
+    mouse_clutch_sequence: &mut u64,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut states = controller.subscribe();
@@ -642,7 +669,14 @@ async fn connection_loop(
             incoming = websocket.next() => {
                 match incoming {
                     Some(Ok(message)) => {
-                        if !handle_frame(&mut websocket, &controller, &mut commands, message).await {
+                        if !handle_frame(
+                            &mut websocket,
+                            &controller,
+                            &mut commands,
+                            session_id,
+                            mouse_clutch_sequence,
+                            message,
+                        ).await {
                             return;
                         }
                     }
@@ -661,6 +695,8 @@ async fn handle_frame(
     websocket: &mut WebSocketStream<TcpStream>,
     controller: &Arc<dyn Controller>,
     commands: &mut FuturesUnordered<CommandFuture>,
+    session_id: u64,
+    mouse_clutch_sequence: &mut u64,
     message: Message,
 ) -> bool {
     match data_frame_policy(message.is_text(), message.is_binary()) {
@@ -739,6 +775,53 @@ async fn handle_frame(
                         return send_message(websocket, &response).await.is_ok();
                     }
                     let future = controller.set_broadcast_enabled(enabled);
+                    commands.push(Box::pin(async move { (request_id, future.await) }));
+                    true
+                }
+                Ok(ClientMessage::BeginMouseClutch {
+                    request_id,
+                    hold_id,
+                    ..
+                })
+                | Ok(ClientMessage::RenewMouseClutch {
+                    request_id,
+                    hold_id,
+                    ..
+                })
+                | Ok(ClientMessage::EndMouseClutch {
+                    request_id,
+                    hold_id,
+                    ..
+                }) => {
+                    if commands.len() >= MAX_IN_FLIGHT_COMMANDS {
+                        let response = ServerMessage::error(
+                            Some(request_id),
+                            ControlError::new(
+                                ErrorCode::InvalidArgument,
+                                "too many commands are already in flight",
+                            ),
+                        );
+                        return send_message(websocket, &response).await.is_ok();
+                    }
+                    let operation = match decode_client_message(text) {
+                        Ok(ClientMessage::BeginMouseClutch { .. }) => MouseClutchOperation::Begin,
+                        Ok(ClientMessage::RenewMouseClutch { .. }) => MouseClutchOperation::Renew,
+                        Ok(ClientMessage::EndMouseClutch { .. }) => MouseClutchOperation::End,
+                        _ => unreachable!("Mouse Clutch message was already decoded"),
+                    };
+                    let owner = match MouseClutchOwner::new(session_id, hold_id) {
+                        Ok(owner) => owner,
+                        Err(error) => {
+                            let response = ServerMessage::error(Some(request_id), error);
+                            return send_message(websocket, &response).await.is_ok();
+                        }
+                    };
+                    *mouse_clutch_sequence = mouse_clutch_sequence.saturating_add(1);
+                    let future = controller.update_mouse_clutch_hold(
+                        owner,
+                        operation,
+                        *mouse_clutch_sequence,
+                    );
                     commands.push(Box::pin(async move { (request_id, future.await) }));
                     true
                 }

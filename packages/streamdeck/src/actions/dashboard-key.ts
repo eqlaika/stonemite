@@ -1,5 +1,6 @@
 import {
   type KeyDownEvent,
+  type KeyUpEvent,
   type SendToPluginEvent,
   SingletonAction,
   type WillAppearEvent,
@@ -49,6 +50,10 @@ export class DashboardKeyAction extends SingletonAction {
 
   override onKeyDown(event: KeyDownEvent): Promise<void> {
     return this.#controller.onKeyDown(event);
+  }
+
+  override onKeyUp(event: KeyUpEvent): Promise<void> {
+    return this.#controller.onKeyUp(event);
   }
 
   override onPropertyInspectorDidAppear(): Promise<void> {

@@ -343,12 +343,40 @@ fn publish_control_state(s: &OverlayState) {
             input_ready: crate::broadcast::is_target_ready(window.pid),
         })
         .collect();
+    let mouse_clutch = trushar::control::MouseClutchState {
+        phase: match crate::broadcast::mouse_clutch_status() {
+            crate::broadcast::MouseClutchStatus::Inactive => {
+                trushar::control::MouseClutchPhase::Inactive
+            }
+            crate::broadcast::MouseClutchStatus::Active => {
+                trushar::control::MouseClutchPhase::Active
+            }
+            crate::broadcast::MouseClutchStatus::Releasing => {
+                trushar::control::MouseClutchPhase::Releasing
+            }
+        },
+        availability: match crate::broadcast::mouse_clutch_availability() {
+            crate::broadcast::MouseClutchAvailability::Ready => {
+                trushar::control::MouseClutchAvailability::Ready
+            }
+            crate::broadcast::MouseClutchAvailability::NoActiveClient => {
+                trushar::control::MouseClutchAvailability::NoActiveClient
+            }
+            crate::broadcast::MouseClutchAvailability::NoCompatibleTargets => {
+                trushar::control::MouseClutchAvailability::NoCompatibleTargets
+            }
+            crate::broadcast::MouseClutchAvailability::InputUnavailable => {
+                trushar::control::MouseClutchAvailability::InputUnavailable
+            }
+        },
+    };
     crate::control::publish(
         sources,
         trushar::control::BroadcastState {
             available: crate::broadcast::is_available(),
             enabled: crate::broadcast::is_active(),
         },
+        mouse_clutch,
     );
 }
 

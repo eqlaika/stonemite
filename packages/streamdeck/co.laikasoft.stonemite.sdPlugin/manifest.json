@@ -105,6 +105,17 @@
       "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
     },
     {
+      "Name": "Mouse Clutch",
+      "UUID": "co.laikasoft.stonemite.mouse-clutch",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Hold to send the foreground EQ client's physical mouse to compatible background boxes.",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
       "Name": "Swap",
       "UUID": "co.laikasoft.stonemite.swap",
       "Icon": "imgs/actions/stonemite/icon",

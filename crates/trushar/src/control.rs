@@ -49,6 +49,36 @@ impl BroadcastState {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MouseClutchPhase {
+    #[default]
+    Inactive,
+    Active,
+    Releasing,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MouseClutchAvailability {
+    Ready,
+    NoActiveClient,
+    NoCompatibleTargets,
+    #[default]
+    InputUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MouseClutchState {
+    pub phase: MouseClutchPhase,
+    pub availability: MouseClutchAvailability,
+}
+
+impl MouseClutchState {
+    pub const UNAVAILABLE: Self = Self {
+        phase: MouseClutchPhase::Inactive,
+        availability: MouseClutchAvailability::InputUnavailable,
+    };
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EqActionCapabilities {
     pub use_center_screen: bool,
     pub invite_follow: bool,
@@ -78,6 +108,7 @@ pub struct Capabilities {
     pub activate: bool,
     pub swap_window_numbers: bool,
     pub set_broadcast: bool,
+    pub set_mouse_clutch: bool,
     pub send_text: bool,
     pub send_keys: bool,
     pub eq_actions: EqActionCapabilities,
@@ -87,6 +118,7 @@ pub struct Capabilities {
 pub struct StateData {
     pub clients: Vec<ClientState>,
     pub broadcast: BroadcastState,
+    pub mouse_clutch: MouseClutchState,
     pub capabilities: Capabilities,
 }
 
@@ -95,10 +127,12 @@ impl Default for StateData {
         Self {
             clients: Vec::new(),
             broadcast: BroadcastState::UNAVAILABLE,
+            mouse_clutch: MouseClutchState::UNAVAILABLE,
             capabilities: Capabilities {
                 activate: true,
                 swap_window_numbers: true,
                 set_broadcast: false,
+                set_mouse_clutch: false,
                 send_text: false,
                 send_keys: false,
                 eq_actions: EqActionCapabilities::available(false),
@@ -112,6 +146,7 @@ pub struct StateSnapshot {
     pub revision: u64,
     pub clients: Vec<ClientState>,
     pub broadcast: BroadcastState,
+    pub mouse_clutch: MouseClutchState,
     pub capabilities: Capabilities,
 }
 
@@ -120,6 +155,7 @@ impl StateSnapshot {
         StateData {
             clients: self.clients.clone(),
             broadcast: self.broadcast,
+            mouse_clutch: self.mouse_clutch,
             capabilities: self.capabilities,
         }
     }
@@ -137,6 +173,7 @@ impl StateHub {
             revision: 0,
             clients: initial.clients,
             broadcast: initial.broadcast,
+            mouse_clutch: initial.mouse_clutch,
             capabilities: initial.capabilities,
         };
         let (sender, _) = watch::channel(snapshot.clone());
@@ -162,6 +199,7 @@ impl StateHub {
         current.revision = current.revision.saturating_add(1);
         current.clients = data.clients;
         current.broadcast = data.broadcast;
+        current.mouse_clutch = data.mouse_clutch;
         current.capabilities = data.capabilities;
         let snapshot = current.clone();
         self.sender.send_replace(snapshot.clone());
@@ -487,6 +525,43 @@ pub enum InputKind {
     Keys,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct MouseClutchOwner {
+    session_id: u64,
+    hold_id: String,
+}
+
+impl MouseClutchOwner {
+    pub fn new(session_id: u64, hold_id: impl Into<String>) -> Result<Self, ControlError> {
+        let hold_id = hold_id.into();
+        if hold_id.is_empty() || hold_id.len() > 128 {
+            return Err(ControlError::new(
+                ErrorCode::InvalidArgument,
+                "hold_id must contain 1 to 128 bytes",
+            ));
+        }
+        Ok(Self {
+            session_id,
+            hold_id,
+        })
+    }
+
+    pub fn session_id(&self) -> u64 {
+        self.session_id
+    }
+
+    pub fn hold_id(&self) -> &str {
+        &self.hold_id
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MouseClutchOperation {
+    Begin,
+    Renew,
+    End,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CommandOutcome {
     Activated {
@@ -500,6 +575,9 @@ pub enum CommandOutcome {
     },
     BroadcastSet {
         enabled: bool,
+    },
+    MouseClutchHoldUpdated {
+        held: bool,
     },
     InputDelivered {
         kind: InputKind,
@@ -532,6 +610,10 @@ pub enum ErrorCode {
     ActivationFailed,
     WindowNumberSwapFailed,
     BroadcastOperationFailed,
+    MouseClutchUnavailable,
+    MouseClutchNotReady,
+    MouseClutchHoldExpired,
+    MouseClutchOperationFailed,
     InputUnavailable,
     InputOperationFailed,
     EqActionUnbound,
@@ -553,6 +635,10 @@ impl ErrorCode {
             Self::ActivationFailed => "activation_failed",
             Self::WindowNumberSwapFailed => "window_number_swap_failed",
             Self::BroadcastOperationFailed => "broadcast_operation_failed",
+            Self::MouseClutchUnavailable => "mouse_clutch_unavailable",
+            Self::MouseClutchNotReady => "mouse_clutch_not_ready",
+            Self::MouseClutchHoldExpired => "mouse_clutch_hold_expired",
+            Self::MouseClutchOperationFailed => "mouse_clutch_operation_failed",
             Self::InputUnavailable => "input_unavailable",
             Self::InputOperationFailed => "input_operation_failed",
             Self::EqActionUnbound => "eq_action_unbound",
@@ -592,6 +678,17 @@ pub trait Controller: Send + Sync + 'static {
         &self,
         enabled: bool,
     ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>>;
+    fn update_mouse_clutch_hold(
+        &self,
+        owner: MouseClutchOwner,
+        operation: MouseClutchOperation,
+        sequence: u64,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>>;
+    fn end_mouse_clutch_session(
+        &self,
+        session_id: u64,
+        sequence: u64,
+    ) -> BoxFuture<'static, Result<(), ControlError>>;
     fn send_text(
         &self,
         client_id: ClientId,
@@ -689,10 +786,12 @@ impl SnapshotMapper {
         StateData {
             clients,
             broadcast,
+            mouse_clutch: MouseClutchState::UNAVAILABLE,
             capabilities: Capabilities {
                 activate: true,
                 swap_window_numbers: true,
                 set_broadcast: broadcast.available,
+                set_mouse_clutch: false,
                 send_text: input_available,
                 send_keys: input_available,
                 eq_actions: EqActionCapabilities::available(input_available),
@@ -715,6 +814,10 @@ struct InMemoryInner {
 struct MemoryState {
     clients: Vec<ClientState>,
     broadcast: BroadcastState,
+    mouse_clutch_holds: HashSet<MouseClutchOwner>,
+    mouse_clutch_sequences: HashMap<MouseClutchOwner, u64>,
+    closed_mouse_clutch_sessions: HashMap<u64, u64>,
+    closed_mouse_clutch_session_order: VecDeque<u64>,
     next_id: u64,
     activation_failure: Option<String>,
     broadcast_failure: Option<String>,
@@ -751,24 +854,14 @@ impl Default for BroadcastState {
 
 impl InMemoryController {
     pub fn new(broadcast: BroadcastState) -> Self {
-        let data = StateData {
+        let state = MemoryState {
             broadcast,
-            capabilities: Capabilities {
-                activate: true,
-                swap_window_numbers: true,
-                set_broadcast: broadcast.available,
-                send_text: false,
-                send_keys: false,
-                eq_actions: EqActionCapabilities::available(false),
-            },
-            ..StateData::default()
+            ..MemoryState::default()
         };
+        let data = memory_data(&state);
         Self {
             inner: Arc::new(InMemoryInner {
-                state: Mutex::new(MemoryState {
-                    broadcast,
-                    ..MemoryState::default()
-                }),
+                state: Mutex::new(state),
                 hub: Arc::new(StateHub::new(data)),
             }),
         }
@@ -964,13 +1057,38 @@ fn memory_data(state: &MemoryState) -> StateData {
     clients.sort_by_key(|client| client.window_number);
     let input_available =
         state.broadcast.available && clients.iter().any(|client| client.input_ready);
+    let active_id = clients
+        .iter()
+        .find(|client| client.active)
+        .map(|client| &client.id);
+    let mouse_clutch_availability = if !state.broadcast.available {
+        MouseClutchAvailability::InputUnavailable
+    } else if active_id.is_none() {
+        MouseClutchAvailability::NoActiveClient
+    } else if clients
+        .iter()
+        .any(|client| Some(&client.id) != active_id && client.input_ready)
+    {
+        MouseClutchAvailability::Ready
+    } else {
+        MouseClutchAvailability::NoCompatibleTargets
+    };
     StateData {
         clients,
         broadcast: state.broadcast,
+        mouse_clutch: MouseClutchState {
+            phase: if state.mouse_clutch_holds.is_empty() {
+                MouseClutchPhase::Inactive
+            } else {
+                MouseClutchPhase::Active
+            },
+            availability: mouse_clutch_availability,
+        },
         capabilities: Capabilities {
             activate: true,
             swap_window_numbers: true,
             set_broadcast: state.broadcast.available,
+            set_mouse_clutch: state.broadcast.available,
             send_text: input_available,
             send_keys: input_available,
             eq_actions: EqActionCapabilities::available(input_available),
@@ -1148,6 +1266,101 @@ impl Controller for InMemoryController {
             };
             inner.hub.publish(data);
             Ok(CommandOutcome::BroadcastSet { enabled })
+        })
+    }
+
+    fn update_mouse_clutch_hold(
+        &self,
+        owner: MouseClutchOwner,
+        operation: MouseClutchOperation,
+        sequence: u64,
+    ) -> BoxFuture<'static, Result<CommandOutcome, ControlError>> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            let (held, data) = {
+                let mut state = inner.state.lock().expect("memory controller poisoned");
+                let session_id = owner.session_id();
+                if state.closed_mouse_clutch_sessions.contains_key(&session_id) {
+                    return Err(ControlError::new(
+                        ErrorCode::MouseClutchHoldExpired,
+                        "the Mouse Clutch connection is no longer active",
+                    ));
+                }
+                let previous_sequence = state
+                    .mouse_clutch_sequences
+                    .get(&owner)
+                    .copied()
+                    .unwrap_or(0);
+                if sequence <= previous_sequence {
+                    let held = state.mouse_clutch_holds.contains(&owner);
+                    (held, memory_data(&state))
+                } else {
+                    state.mouse_clutch_sequences.insert(owner.clone(), sequence);
+                    match operation {
+                        MouseClutchOperation::Begin => {
+                            if memory_data(&state).mouse_clutch.availability
+                                != MouseClutchAvailability::Ready
+                            {
+                                return Err(ControlError::new(
+                                    ErrorCode::MouseClutchNotReady,
+                                    "Mouse Clutch needs a foreground client and a compatible ready background target",
+                                ));
+                            }
+                            state.mouse_clutch_holds.insert(owner.clone());
+                        }
+                        MouseClutchOperation::Renew => {
+                            if !state.mouse_clutch_holds.contains(&owner) {
+                                return Err(ControlError::new(
+                                    ErrorCode::MouseClutchHoldExpired,
+                                    "the Mouse Clutch hold is no longer active",
+                                ));
+                            }
+                        }
+                        MouseClutchOperation::End => {
+                            state.mouse_clutch_holds.remove(&owner);
+                        }
+                    }
+                    let held = state.mouse_clutch_holds.contains(&owner);
+                    (held, memory_data(&state))
+                }
+            };
+            inner.hub.publish(data);
+            Ok(CommandOutcome::MouseClutchHoldUpdated { held })
+        })
+    }
+
+    fn end_mouse_clutch_session(
+        &self,
+        session_id: u64,
+        sequence: u64,
+    ) -> BoxFuture<'static, Result<(), ControlError>> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            let data = {
+                let mut state = inner.state.lock().expect("memory controller poisoned");
+                if !state.closed_mouse_clutch_sessions.contains_key(&session_id) {
+                    state
+                        .closed_mouse_clutch_session_order
+                        .push_back(session_id);
+                }
+                state
+                    .closed_mouse_clutch_sessions
+                    .insert(session_id, sequence);
+                state
+                    .mouse_clutch_holds
+                    .retain(|owner| owner.session_id() != session_id);
+                state
+                    .mouse_clutch_sequences
+                    .retain(|owner, _| owner.session_id() != session_id);
+                while state.closed_mouse_clutch_session_order.len() > 256 {
+                    if let Some(expired) = state.closed_mouse_clutch_session_order.pop_front() {
+                        state.closed_mouse_clutch_sessions.remove(&expired);
+                    }
+                }
+                memory_data(&state)
+            };
+            inner.hub.publish(data);
+            Ok(())
         })
     }
 

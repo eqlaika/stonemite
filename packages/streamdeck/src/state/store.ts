@@ -58,6 +58,7 @@ export class DashboardStore {
   }
 
   setSnapshot(snapshot: TrusharState): void {
+    if (this.#snapshot && snapshot.revision < this.#snapshot.revision) return;
     this.#snapshot = snapshot;
     this.#emit();
   }

@@ -326,6 +326,32 @@ export class TrusharClient {
     );
   }
 
+  async beginMouseClutch(
+    holdId: string,
+  ): Promise<Extract<ServerMessage, { type: "result" }>> {
+    return this.#updateMouseClutch(
+      "begin_mouse_clutch",
+      "clutch-begin",
+      holdId,
+    );
+  }
+
+  async renewMouseClutch(
+    holdId: string,
+  ): Promise<Extract<ServerMessage, { type: "result" }>> {
+    return this.#updateMouseClutch(
+      "renew_mouse_clutch",
+      "clutch-renew",
+      holdId,
+    );
+  }
+
+  async endMouseClutch(
+    holdId: string,
+  ): Promise<Extract<ServerMessage, { type: "result" }>> {
+    return this.#updateMouseClutch("end_mouse_clutch", "clutch-end", holdId);
+  }
+
   async listEqKeymapActions(targets: EqActionTargets): Promise<
     Extract<Success, { type: "eq_keymap_actions_listed" }> & {
       mappings: string[];
@@ -407,6 +433,22 @@ export class TrusharClient {
         action,
       },
       "eq_action_batch_delivered",
+    );
+  }
+
+  #updateMouseClutch(
+    type: "begin_mouse_clutch" | "renew_mouse_clutch" | "end_mouse_clutch",
+    requestKind: string,
+    holdId: string,
+  ): Promise<Extract<ServerMessage, { type: "result" }>> {
+    return this.#request(
+      {
+        type,
+        version: PROTOCOL_VERSION,
+        request_id: this.#nextRequestId(requestKind),
+        hold_id: holdId,
+      },
+      "mouse_clutch_hold_updated",
     );
   }
 

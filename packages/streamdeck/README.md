@@ -1,6 +1,6 @@
 # Stonemite Stream Deck plugin
 
-The **Stonemite · EQ boxing** Stream Deck plugin provides customizable controls for Stonemite. It shows the current six-client roster, activates an exact loaded EQ client, swaps the window numbers of the active and selected clients, invokes configurable mapped EQ actions, reflects targeted-input readiness, and explicitly enables or disables Stonemite broadcasting.
+The **Stonemite · EQ boxing** Stream Deck plugin provides customizable controls for Stonemite. It shows the current six-client roster, activates an exact loaded EQ client, swaps the window numbers of the active and selected clients, invokes configurable mapped EQ actions, reflects targeted-input readiness, explicitly enables or disables Stonemite broadcasting, and provides a hold-to-broadcast Mouse Clutch key.
 
 The Swap key replaces the old MITE ambient key. Press **Swap**, then press a character. Stonemite exchanges that character's window number with the currently active character's number without activating a different window. Press Swap again or select the current character to cancel.
 
@@ -56,7 +56,15 @@ Linking restarts or changes the user's Stream Deck installation, so it is a deli
 
 The plugin does not currently install a preset profile. Create or open a profile in Stream Deck, then place the controls you want.
 
-Character slots 1–6, Broadcast, Swap, Hotkey, and Stonemite setup are separate actions in the Stream Deck action list. Drag any of them to any key position to create your own layout; behavior follows the action rather than its row and column. Duplicate actions are supported. Leave each action image at its default because a user-defined image takes precedence over the plugin's live rendering. The plugin disables user titles for these actions.
+Character slots 1–6, Broadcast, Mouse Clutch, Swap, Hotkey, and Stonemite setup are separate actions in the Stream Deck action list. Drag any of them to any key position to create your own layout; behavior follows the action rather than its row and column. Duplicate actions are supported. Leave each action image at its default because a user-defined image takes precedence over the plugin's live rendering. The plugin disables user titles for these actions.
+
+## Use Mouse Clutch
+
+Drag **Mouse Clutch** onto a key and hold it while interacting with the foreground EQ client. Stonemite passes the physical mouse—movement, buttons, and wheel—to every input-ready background client whose window origin, client size, and DPI match the foreground client. Releasing the deck key enters Stonemite's bounded release state; if a mouse button is still down, target pass-through remains active until that button is released safely.
+
+The tile is teal while active and amber while releasing. `NO ACTIVE`, `NO MATCH`, and `UNAVAILABLE` explain why a new hold cannot start. `UPDATE` means the connected Stonemite version does not support remote Mouse Clutch control. The tile reflects Stonemite's global authoritative state, so it also lights when the configured physical Mouse Clutch key or another duplicate deck tile owns the hold.
+
+Every held physical or deck control owns Mouse Clutch independently. Stonemite stops only after all owners release, but focus, source, target, settings, connection, or process loss can cancel every hold for safety. A canceled hold never re-arms automatically: release and press the deck key again. The plugin renews each live hold over its existing connection; Stonemite revokes it if Stream Deck disconnects or renewals stop.
 
 ## Configure a mapped hotkey
 
@@ -107,6 +115,7 @@ The manifest uses `imgs/plugin/icon.png` and its `@2x` variant for the 256px and
 - **Activated** means Stonemite accepted an exact-client activation request and returned authoritative current state.
 - **Window numbers swapped** means Stonemite exchanged the active and selected clients' stable numbers and returned authoritative current state; it does not change the active client.
 - **Broadcast on/off** is Stonemite's pushed broadcast state, not a blind local toggle.
+- **Mouse Clutch active/releasing** is Stonemite's pushed global clutch phase, including physical-key and duplicate-tile owners; it does not claim that EQ acted on a mouse event.
 - **Input ready** means that client's compatible trusik input channel acknowledged readiness.
 - Hotkey progress confirms mapped-key delivery to the resolved clients only; it does not prove that EQ performed the mapped action or completed an in-game social.
 - The plugin does not observe whether EQ accepted input or performed a resulting in-game action.
