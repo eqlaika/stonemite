@@ -82,7 +82,7 @@ pub fn check_and_update() -> UpdateResult {
 
 /// Return the current compiled version.
 pub fn current_version() -> &'static str {
-    cargo_crate_version!()
+    crate::build_info::version()
 }
 
 /// Restart the application by spawning the current exe and exiting.

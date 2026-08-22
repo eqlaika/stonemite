@@ -176,7 +176,7 @@ impl SettingsPayload {
         Ok(Self {
             options: SettingsOptions::new(),
             runtime: SettingsRuntime {
-                version: env!("CARGO_PKG_VERSION").to_owned(),
+                version: crate::build_info::version().to_owned(),
                 trusik_enabled: config.trusik,
                 integration_address: integration_address(&config.trushar.bind),
             },

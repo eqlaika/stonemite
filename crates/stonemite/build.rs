@@ -4,6 +4,7 @@ fn main() {
     // Re-run build script when icon assets change.
     println!("cargo:rerun-if-changed=assets/app.ico");
     println!("cargo:rerun-if-changed=assets/tray.ico");
+    println!("cargo:rerun-if-env-changed=STONEMITE_BUILD_LABEL");
 
     // Embed the trusik input-proxy DLL (dinput8.dll) into the exe so the app
     // and its DLL can never drift out of sync. The DLL is produced by the

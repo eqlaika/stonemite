@@ -77,6 +77,13 @@ quit:
 run: quit build
     @Start-Process target/debug/stonemite.exe
 
+# Mirror, build, and run the current working tree on the configured Windows host
+deploy-dev:
+    #!/usr/bin/env bash
+    # This recipe intentionally runs on the local Unix development host.
+    set -euo pipefail
+    exec ./scripts/deploy-dev
+
 # Clean build artifacts and dist
 clean:
     cargo clean

@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${STONEMITE_DEV_HOST:?Set STONEMITE_DEV_HOST in .envrc to the Windows SSH host}"
+: "${STONEMITE_DEV_REPO:?Set STONEMITE_DEV_REPO in .envrc to the checkout path on that host}"
+
+host="$STONEMITE_DEV_HOST"
+remote_repo="$STONEMITE_DEV_REPO"
+remote_repo_base64="$(printf '%s' "$remote_repo" | base64 | tr -d '\r\n')"
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+package_version="$(awk -F '"' '/^version = "/ { print $2; exit }' crates/stonemite/Cargo.toml)"
+commit="$(git rev-parse --short=8 HEAD)"
+
+printf 'Building the embedded settings frontend locally...\n'
+npm --prefix settings-ui run build
+
+archive="$(mktemp "${TMPDIR:-/tmp}/stonemite-dev.XXXXXX")"
+deployment_id="$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM:-0}"
+archive_name="stonemite-dev-source-${deployment_id}.zip"
+stage_name="stonemite-dev-source-${deployment_id}"
+trap 'rm -f "$archive"' EXIT
+
+source_hash="$(python3 - "$archive" <<'PY'
+import hashlib
+import os
+import subprocess
+import sys
+import zipfile
+
+archive = sys.argv[1]
+paths = set(
+    subprocess.check_output(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"]
+    ).split(b"\0")
+)
+for directory, _, filenames in os.walk("settings-ui/dist"):
+    for filename in filenames:
+        paths.add(os.fsencode(os.path.join(directory, filename)))
+digest = hashlib.sha256()
+
+with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+    for raw_path in sorted(path for path in paths if path):
+        path = os.fsdecode(raw_path)
+        if not os.path.isfile(path):
+            # Deleted tracked files must be absent from the mirrored source.
+            continue
+        digest.update(raw_path)
+        digest.update(b"\0")
+        with open(path, "rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+        bundle.write(path, path)
+
+print(digest.hexdigest()[:8])
+PY
+)"
+
+build_label="${package_version}-dev+${commit}"
+if ! git diff --quiet --ignore-submodules -- || \
+   ! git diff --cached --quiet --ignore-submodules -- || \
+   [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+    build_label="${build_label}.dirty.${source_hash}"
+fi
+
+if [[ ! "$build_label" =~ ^[0-9A-Za-z.+-]+$ ]]; then
+    printf 'Invalid development build label: %s\n' "$build_label" >&2
+    exit 1
+fi
+
+printf 'Deploying Stonemite %s to %s...\n' "$build_label" "$host"
+
+remote_temp="$(ssh "$host" '[Console]::Write($env:TEMP)')"
+remote_temp="$(printf '%s' "$remote_temp" | tr -d '\r' | tr '\\' '/')"
+
+# scp handles Windows OpenSSH's standard input reliably and avoids leaving a
+# receiver process blocked after the archive bytes have been written.
+scp -q "$archive" "${host}:${remote_temp}/${archive_name}"
+
+# Extract to a unique staging directory, then let the checked-in PowerShell
+# helper mirror, build, replace, and launch the application.
+ssh "$host" "\
+\$ErrorActionPreference = 'Stop'; \
+\$archive = Join-Path \$env:TEMP '$archive_name'; \
+\$stage = Join-Path \$env:TEMP '$stage_name'; \
+\$repo = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$remote_repo_base64')); \
+try { \
+    Remove-Item -Recurse -Force \$stage -ErrorAction SilentlyContinue; \
+    Expand-Archive -LiteralPath \$archive -DestinationPath \$stage -Force; \
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path \$stage 'scripts\\deploy-dev.ps1') -BuildLabel '$build_label' -RepoPath \$repo; \
+    if (\$LASTEXITCODE -ne 0) { throw \"Remote deployment failed with exit code \$LASTEXITCODE\" } \
+} finally { \
+    Remove-Item -Force \$archive -ErrorAction SilentlyContinue; \
+    Remove-Item -Recurse -Force \$stage -ErrorAction SilentlyContinue \
+}"
+
+printf 'Deployed Stonemite %s to %s.\n' "$build_label" "$host"

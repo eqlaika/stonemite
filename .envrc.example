@@ -1,0 +1,3 @@
+# Copy to .envrc, fill in local values, then run `direnv allow`.
+export STONEMITE_DEV_HOST=windows-host
+export STONEMITE_DEV_REPO='C:\path\to\stonemite'

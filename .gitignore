@@ -4,6 +4,7 @@
 /streamdeck/dist/
 /settings-ui/node_modules/
 /settings-ui/dist/
+/.envrc
 /streamdeck/co.laikasoft.stonemite.sdPlugin/bin/
 /streamdeck/co.laikasoft.stonemite.sdPlugin/logs/
 /streamdeck/src/render/assets.generated.ts

@@ -2,6 +2,7 @@
 
 mod auto_type;
 mod broadcast;
+mod build_info;
 mod character_cache;
 mod class_icons;
 mod config;
