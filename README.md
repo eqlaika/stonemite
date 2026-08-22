@@ -103,4 +103,4 @@ Stonemite is intentionally designed to minimize account risk by avoiding automat
 
 ## License
 
-Stonemite is licensed under the [GNU General Public License v3](LICENSE). The software free to use, modify, and distribute, but modified versions must remain open source. Copyright (c) 2026 Laikasoft.
+Stonemite is licensed under the [GNU General Public License v3](LICENSE). The software free to use, modify, and distribute, but modified versions must remain open source. Copyright ©️ 2026 Laikasoft.
