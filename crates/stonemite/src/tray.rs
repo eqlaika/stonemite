@@ -15,8 +15,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowThreadProcessId, KillTimer, PostMessageW, PostQuitMessage, RegisterClassW,
     SetForegroundWindow, SetTimer, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, LR_DEFAULTCOLOR,
     MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_TIMER, WM_USER,
-    WNDCLASSW, WS_EX_TOOLWINDOW,
+    TPM_LEFTALIGN, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP,
+    WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSW, WS_EX_TOOLWINDOW,
 };
 
 use crate::broadcast;
@@ -307,8 +307,9 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_TRAY => {
             let event = (lparam.0 & 0xFFFF) as u32;
-            // WM_LBUTTONUP = 0x0202, WM_RBUTTONUP = 0x0205
-            if event == 0x0202 || event == 0x0205 {
+            if event == WM_LBUTTONUP {
+                settings_dialog::show();
+            } else if event == WM_RBUTTONUP {
                 show_context_menu(hwnd);
             }
             LRESULT(0)
