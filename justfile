@@ -8,36 +8,41 @@ zip_name := "stonemite-x86_64-pc-windows-msvc.zip"
 default:
     @just --list
 
-# Install the settings frontend dependencies when needed
+# Install frontend dependencies when npm is available; native Windows SSH
+# builds may instead consume settings-ui/dist built on the development host.
 settings-ui-deps:
-    @if (-not (Test-Path "settings-ui/node_modules")) { npm --prefix settings-ui ci }
+    @$npm = Get-Command npm -ErrorAction SilentlyContinue; if ($npm) { if (-not (Test-Path "settings-ui/node_modules")) { npm --prefix settings-ui ci } } elseif (-not (Test-Path "settings-ui/dist/index.html")) { throw "npm is unavailable and settings-ui/dist is not prebuilt" }
 
-# Build and test the embedded settings frontend
+# Build the embedded frontend, or verify the locally prebuilt mirror on Windows.
 settings-ui-build: settings-ui-deps
-    npm --prefix settings-ui run build
+    @$npm = Get-Command npm -ErrorAction SilentlyContinue; if ($npm) { npm --prefix settings-ui run build } elseif (-not (Test-Path "settings-ui/dist/index.html")) { throw "settings-ui/dist is not prebuilt" } else { Write-Host "Using prebuilt settings-ui/dist (npm is unavailable)." }
 
-settings-ui-test: settings-ui-deps
+settings-ui-test:
+    @if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw "npm is required for settings UI tests" }
     npm --prefix settings-ui run typecheck
     npm --prefix settings-ui test
 
+# Verify canonical and internal version metadata agree
+version-check:
+    python scripts/version.py check
+
 # Build debug
-build: settings-ui-build
+build: version-check settings-ui-build
     cargo build -p trusik
     cargo build -p stonemite
 
 # Build release
-build-release: settings-ui-build
+build-release: version-check settings-ui-build
     cargo build --release -p trusik
     cargo build --release -p stonemite
 
-# Get current version from Cargo.toml
+# Get the canonical YYYY.MM.DD[.N] public version
 version:
-    @(Get-Content crates/stonemite/Cargo.toml | Select-String '^version = "(.+)"' | ForEach-Object { $_.Matches.Groups[1].Value } | Select-Object -First 1)
+    @python scripts/version.py get
 
-# Bump version in Cargo.toml (usage: just bump 0.2.0)
+# Set the canonical version and synchronize Cargo/Tauri metadata
 bump new_version:
-    @$content = Get-Content crates/stonemite/Cargo.toml -Raw; $content = $content -replace '(?m)(?<=^\[package\]\r?\nname = "stonemite"\r?\n)version = ".*"', 'version = "{{new_version}}"'; Set-Content crates/stonemite/Cargo.toml $content -NoNewline
-    @Write-Host "Version bumped to {{new_version}}"
+    @python scripts/version.py set "{{new_version}}"
 
 # Build release and create zip for distribution
 package: build-release
@@ -49,9 +54,9 @@ package: build-release
 
 # Build Inno Setup installer (requires Inno Setup 6)
 installer: build-release
-    @$iscc = (Get-Command "ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source); if (-not $iscc) { $iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" }; if (-not (Test-Path $iscc)) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }; $ver = (Get-Content crates/stonemite/Cargo.toml | Select-String '^version = "(.+)"').Matches.Groups[1].Value; & $iscc /DAppVersion="$ver" installer.iss
+    @$iscc = (Get-Command "ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source); if (-not $iscc) { $iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" }; if (-not (Test-Path $iscc)) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }; $ver = python scripts/version.py get; & $iscc /DAppVersion="$ver" installer.iss
 
-# Full release flow: bump version, build, package, installer (usage: just release 0.2.0)
+# Full release flow: bump version, build, package, installer (usage: just release 2026.08.22)
 release new_version: (bump new_version) build-release
     @New-Item -ItemType Directory -Force -Path dist | Out-Null
     @Copy-Item target/release/stonemite.exe dist/

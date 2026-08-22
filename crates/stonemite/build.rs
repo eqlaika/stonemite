@@ -1,6 +1,47 @@
+mod calver;
+
 use std::path::PathBuf;
 
 fn main() {
+    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let repository_root = manifest_dir
+        .parent()
+        .and_then(|crates| crates.parent())
+        .expect("Stonemite manifest is not under <repository>/crates/stonemite");
+    let version_path = repository_root.join("VERSION");
+    println!("cargo:rerun-if-changed={}", version_path.display());
+
+    let public_version = std::fs::read_to_string(&version_path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", version_path.display()));
+    let public_version = public_version.trim();
+    let parsed_version = calver::CalVer::parse(public_version)
+        .unwrap_or_else(|error| panic!("invalid {}: {error}", version_path.display()));
+    assert_eq!(
+        parsed_version.to_string(),
+        public_version,
+        "{} must contain the canonical version without a tag prefix",
+        version_path.display()
+    );
+    let internal_version = parsed_version.cargo_version();
+    assert_eq!(
+        env!("CARGO_PKG_VERSION"),
+        internal_version,
+        "crates/stonemite/Cargo.toml is out of sync with VERSION; run scripts/version.py set {public_version}"
+    );
+
+    let tauri_config_path = manifest_dir.join("tauri.conf.json");
+    let tauri_config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&tauri_config_path).unwrap_or_else(
+            |error| panic!("failed to read {}: {error}", tauri_config_path.display()),
+        ))
+        .unwrap_or_else(|error| panic!("failed to parse {}: {error}", tauri_config_path.display()));
+    assert_eq!(
+        tauri_config.get("version").and_then(serde_json::Value::as_str),
+        Some(internal_version.as_str()),
+        "crates/stonemite/tauri.conf.json is out of sync with VERSION; run scripts/version.py set {public_version}"
+    );
+    println!("cargo:rustc-env=STONEMITE_VERSION={public_version}");
+
     // Re-run build script when icon assets change.
     println!("cargo:rerun-if-changed=assets/app.ico");
     println!("cargo:rerun-if-changed=assets/app-dev.ico");

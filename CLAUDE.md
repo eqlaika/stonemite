@@ -29,13 +29,13 @@ Target: `x86_64-pc-windows-msvc`
 ## Release
 
 ```
-just release 0.2.0   # bump version, build release, zip + installer to dist/
-just bump 0.2.0      # bump version only
-just package         # build release + zip (without version bump)
-just installer       # build release + Inno Setup installer only
+just release 2026.08.22   # set version, build release, zip + installer to dist/
+just bump 2026.08.22      # set and synchronize version metadata only
+just package              # build release + zip (without version bump)
+just installer            # build release + Inno Setup installer only
 ```
 
-`just release` produces both `dist/stonemite-x86_64-pc-windows-msvc.zip` and `dist/stonemite-0.2.0-setup.exe`. Requires [Inno Setup 6](https://jrsoftware.org/isdl.php). The app uses `self_update` crate to check for updates from `eqlaika/stonemite` GitHub releases.
+Public versions use the Pacific release date as `YYYY.MM.DD`; append `.1`, `.2`, and so on for additional releases that day. `VERSION` is canonical, while `scripts/version.py` maintains the order-preserving Cargo/Tauri encoding. `just release` produces both `dist/stonemite-x86_64-pc-windows-msvc.zip` and `dist/stonemite-2026.08.22-setup.exe`. Requires [Inno Setup 6](https://jrsoftware.org/isdl.php). The app uses `self_update` for GitHub release discovery, download, and executable replacement.
 
 - `installer.iss` — Inno Setup script (installs to Program Files, Start Menu shortcut, optional autostart)
 

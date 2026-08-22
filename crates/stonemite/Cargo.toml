@@ -1,9 +1,10 @@
 [package]
 name = "stonemite"
-version = "0.5.0"
+version = "2026.8.2200"
 edition = "2021"
 
 [build-dependencies]
+serde_json = "1"
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]

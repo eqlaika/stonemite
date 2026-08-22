@@ -4,6 +4,7 @@
 /streamdeck/dist/
 /settings-ui/node_modules/
 /settings-ui/dist/
+__pycache__/
 /.envrc
 /streamdeck/co.laikasoft.stonemite.sdPlugin/bin/
 /streamdeck/co.laikasoft.stonemite.sdPlugin/logs/

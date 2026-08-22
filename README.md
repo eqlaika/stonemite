@@ -15,7 +15,7 @@ Stonemite makes multiboxing EQ easy: PiP overlays with click-to-swap, swap hotke
 
 Download the latest release from [GitHub Releases](https://github.com/eqlaika/stonemite/releases):
 
-- **Installer** (`stonemite-x.y.z-setup.exe`) — installs to Program Files, creates a Start Menu shortcut, with optional Windows startup
+- **Installer** (`stonemite-YYYY.MM.DD[.N]-setup.exe`) — installs to Program Files, creates a Start Menu shortcut, with optional Windows startup
 - **Portable** (`stonemite-x86_64-pc-windows-msvc.zip`) — extract and run anywhere
 
 A system tray icon appears with access to all settings. Check for updates from the tray menu.
@@ -40,14 +40,14 @@ Target: `x86_64-pc-windows-msvc`
 ## Release
 
 ```
-just release 0.5.0
+just release 2026.08.22
 ```
 
-This bumps the version in `Cargo.toml`, builds a release binary, and packages both `dist/stonemite-x86_64-pc-windows-msvc.zip` and `dist/stonemite-0.5.0-setup.exe`. Requires [Inno Setup 6](https://jrsoftware.org/isdl.php). Then:
+Public versions use Pacific release dates in `YYYY.MM.DD` form. A second release on the same date appends `.1`, then `.2`, and so on. `VERSION` is canonical; `scripts/version.py` synchronizes the internal three-component Cargo/Tauri encoding. The release recipe builds and packages both `dist/stonemite-x86_64-pc-windows-msvc.zip` and `dist/stonemite-2026.08.22-setup.exe`. Requires [Inno Setup 6](https://jrsoftware.org/isdl.php). Then:
 
-1. Commit and tag: `git add -A && git commit -m "Release v0.5.0" && git tag v0.5.0`
+1. Commit and tag: `git add -A && git commit -m "Release v2026.08.22" && git tag v2026.08.22`
 2. Push: `git push && git push --tags`
-3. Create a GitHub release: `gh release create v0.5.0 dist/stonemite-x86_64-pc-windows-msvc.zip dist/stonemite-0.5.0-setup.exe --title 'v0.5.0' --notes-file dist/release-notes.md`
+3. Create a GitHub release: `gh release create v2026.08.22 dist/stonemite-x86_64-pc-windows-msvc.zip dist/stonemite-2026.08.22-setup.exe --title 'v2026.08.22' --notes-file dist/release-notes.md`
 
 The app checks for updates against [eqlaika/stonemite](https://github.com/eqlaika/stonemite) GitHub releases via the `self_update` crate.
 

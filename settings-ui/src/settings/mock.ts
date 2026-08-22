@@ -74,7 +74,7 @@ const mockPayload: SettingsPayload = {
     ],
   },
   runtime: {
-    version: "0.5.0-preview",
+    version: "2026.08.22-dev",
     trusikEnabled: true,
     integrationAddress: "gaming-pc.local:19720",
   },

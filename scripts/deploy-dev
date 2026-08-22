@@ -10,7 +10,7 @@ remote_repo_base64="$(printf '%s' "$remote_repo" | base64 | tr -d '\r\n')"
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-package_version="$(awk -F '"' '/^version = "/ { print $2; exit }' crates/stonemite/Cargo.toml)"
+public_version="$(python3 scripts/version.py get)"
 commit="$(git rev-parse --short=8 HEAD)"
 
 printf 'Building the embedded settings frontend locally...\n'
@@ -57,7 +57,7 @@ print(digest.hexdigest()[:8])
 PY
 )"
 
-build_label="${package_version}-dev+${commit}"
+build_label="${public_version}-dev+${commit}"
 if ! git diff --quiet --ignore-submodules -- || \
    ! git diff --cached --quiet --ignore-submodules -- || \
    [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
