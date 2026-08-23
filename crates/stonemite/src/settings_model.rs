@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{
     Account, BoxIdentity, Config, LabelFontWeight, PipEdge, TrusharConfig,
-    MAX_PIP_LABEL_FONT_FAMILY_LEN, MAX_PIP_LABEL_FONT_SCALE, MIN_PIP_LABEL_FONT_SCALE,
+    MAX_PIP_LABEL_FONT_FAMILY_LEN, MAX_PIP_LABEL_FONT_SCALE, MAX_PIP_OPACITY,
+    MIN_PIP_LABEL_FONT_SCALE, MIN_PIP_OPACITY,
 };
 use crate::crypt;
 
@@ -139,6 +140,7 @@ pub struct AccountDraft {
 #[serde(rename_all = "camelCase")]
 pub struct PipSettings {
     pub edge: PipEdge,
+    pub thumbnail_opacity: u32,
     pub label_height: u32,
     pub label_opacity: u32,
     pub font_family: String,
@@ -329,6 +331,7 @@ impl SettingsDraft {
             box_order: config.box_order.clone(),
             pip: PipSettings {
                 edge: config.pip_edge,
+                thumbnail_opacity: config.effective_pip_opacity(),
                 label_height: config.pip_label_height.unwrap_or(48),
                 label_opacity: config.pip_label_opacity.unwrap_or(80),
                 font_family: config.effective_pip_label_font_family().to_owned(),
@@ -427,6 +430,7 @@ impl SettingsDraft {
             hide_hotkey: self.pip.hide_hotkey,
             pip_edge: self.pip.edge,
             pip_strip_width: existing.pip_strip_width,
+            pip_opacity: Some(self.pip.thumbnail_opacity),
             pip_positions: existing.pip_positions,
             snap_grid: existing.snap_grid,
             trusik: existing.trusik,
@@ -479,6 +483,12 @@ impl SettingsDraft {
             10.0,
         )?;
         validate_range("Update interval", self.general.updates.interval_days, 1, 30)?;
+        validate_range(
+            "PiP thumbnail opacity",
+            self.pip.thumbnail_opacity,
+            MIN_PIP_OPACITY,
+            MAX_PIP_OPACITY,
+        )?;
         validate_range("PiP label height", self.pip.label_height, 24, 64)?;
         validate_range("PiP label opacity", self.pip.label_opacity, 10, 100)?;
         validate_range(
@@ -639,6 +649,10 @@ mod tests {
         assert!(draft.box_order.is_empty());
         assert_eq!(draft.pip.edge, PipEdge::Right);
         assert_eq!(
+            draft.pip.thumbnail_opacity,
+            crate::config::DEFAULT_PIP_OPACITY
+        );
+        assert_eq!(
             draft.pip.font_family,
             crate::config::DEFAULT_PIP_LABEL_FONT_FAMILY
         );
@@ -657,6 +671,25 @@ mod tests {
         assert_eq!(
             draft.validate(),
             Err("Toast height must be between 24 and 128".to_owned())
+        );
+    }
+
+    #[test]
+    fn pip_appearance_is_validated_and_persisted() {
+        let mut draft = SettingsDraft::from_config(&Config::default()).unwrap();
+        draft.pip.thumbnail_opacity = 65;
+        draft.pip.label_height = 56;
+        draft.pip.label_opacity = 72;
+        let (config, _) = draft.into_config(Config::default()).unwrap();
+        assert_eq!(config.pip_opacity, Some(65));
+        assert_eq!(config.pip_label_height, Some(56));
+        assert_eq!(config.pip_label_opacity, Some(72));
+
+        let mut invalid = SettingsDraft::from_config(&Config::default()).unwrap();
+        invalid.pip.thumbnail_opacity = 9;
+        assert_eq!(
+            invalid.validate(),
+            Err("PiP thumbnail opacity must be between 10 and 100".to_owned())
         );
     }
 

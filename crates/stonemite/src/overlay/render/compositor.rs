@@ -1392,6 +1392,7 @@ mod tests {
             ActiveLabelScene, LabelScene, PipInteractionScene, PipScene, StatusBannerScene,
             TimerScene, ToastScene, UiTextRole,
         };
+        use windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED;
 
         unsafe {
             let _com = TestComApartment::new();
@@ -1500,6 +1501,11 @@ mod tests {
                 &pip_layout,
             )
             .expect("draw complete PiP scene");
+            assert_eq!(
+                graphics.d2d_context.GetAntialiasMode(),
+                D2D1_ANTIALIAS_MODE_ALIASED,
+                "moving notification trace must restore crisp scene antialiasing",
+            );
 
             super::super::scene_d2d::draw_status_banner(
                 &graphics.d2d_context,

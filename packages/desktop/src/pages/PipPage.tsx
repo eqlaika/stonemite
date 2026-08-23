@@ -87,6 +87,32 @@ export function LabelTypographyControls({
   );
 }
 
+export function ThumbnailOpacityControl({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <Field
+      label="Opacity"
+      description="Set the normal transparency of the live EQ preview. Hovering a PiP temporarily reveals it at full opacity."
+      descriptionId="pip-thumbnail-opacity-help"
+    >
+      <RangeInput
+        value={value}
+        min={10}
+        max={100}
+        suffix="%"
+        ariaLabel="PiP thumbnail opacity"
+        ariaDescribedBy="pip-thumbnail-opacity-help"
+        onChange={onChange}
+      />
+    </Field>
+  );
+}
+
 export function PipPage() {
   const { draft, setDraft, options } = useSettings();
   if (!draft || !options) return null;
@@ -102,7 +128,7 @@ export function PipPage() {
   return (
     <SettingsPage
       title="PiP overlay"
-      description="Placement, labels, ordering, and overlay visibility."
+      description="Placement, thumbnail transparency, labels, ordering, and overlay visibility."
     >
       <FormSection
         title="Layout"
@@ -130,6 +156,18 @@ export function PipPage() {
           description="Keep PiP thumbnails automatically arranged along the selected edge."
           checked={draft.pip.autoOrder}
           onChange={(autoOrder) => updatePip((pip) => ({ ...pip, autoOrder }))}
+        />
+      </FormSection>
+
+      <FormSection
+        title="Thumbnails"
+        description="Adjust live EQ previews independently from labels and notifications."
+      >
+        <ThumbnailOpacityControl
+          value={draft.pip.thumbnailOpacity}
+          onChange={(thumbnailOpacity) =>
+            updatePip((pip) => ({ ...pip, thumbnailOpacity }))
+          }
         />
       </FormSection>
 

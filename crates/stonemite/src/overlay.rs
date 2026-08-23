@@ -59,9 +59,9 @@ const MIN_STRIP_WIDTH_FRACTION: f64 = 0.05;
 /// Width of the resize grab zone along the interior edge (logical pixels).
 const RESIZE_HANDLE_WIDTH: i32 = 12;
 
-/// Thumbnail opacity (0-255). ~80% = 204.
-const THUMB_OPACITY_NORMAL: u8 = 204;
+/// Thumbnail opacity while hovered and maximum opacity while reordering.
 const THUMB_OPACITY_HOVER: u8 = 255;
+const THUMB_OPACITY_DRAG_MAX: u8 = 80;
 
 /// Border thickness for hover highlight.
 const BORDER_WIDTH: i32 = 3;
@@ -325,6 +325,26 @@ struct ReorderDragState {
     dragging: bool,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct ReorderCancellation {
+    dimmed_source: Option<usize>,
+    old_target: Option<usize>,
+}
+
+fn take_reorder_cancellation(
+    reorder_drag: &mut Option<ReorderDragState>,
+    drop_target: &mut Option<usize>,
+) -> ReorderCancellation {
+    let dimmed_source = reorder_drag
+        .take()
+        .filter(|drag| drag.dragging)
+        .map(|drag| drag.from_index);
+    ReorderCancellation {
+        dimmed_source,
+        old_target: drop_target.take(),
+    }
+}
+
 struct ComApartment {
     usable: bool,
     uninitialize: bool,
@@ -402,6 +422,8 @@ struct OverlayState {
     pip_edge: config::PipEdge,
     /// User-configured strip width override (pixels). None = auto.
     custom_strip_width: Option<i32>,
+    /// Configured normal DWM thumbnail alpha (0-255); hover remains opaque.
+    thumbnail_alpha: u8,
     /// User has toggled overlay hidden via hotkey.
     hidden_by_user: bool,
     context_menu_target_pid: Option<u32>,
@@ -811,6 +833,36 @@ fn label_font_weight(weight: config::LabelFontWeight) -> u16 {
     }
 }
 
+fn opacity_percent_to_alpha(percent: u32) -> u8 {
+    ((percent.clamp(0, 100) as u16 * 255) / 100) as u8
+}
+
+fn reorder_thumbnail_alpha(normal_alpha: u8) -> u8 {
+    normal_alpha.min(THUMB_OPACITY_DRAG_MAX)
+}
+
+unsafe fn cancel_reorder_drag(s: &mut OverlayState) {
+    let cancellation = take_reorder_cancellation(&mut s.reorder_drag, &mut s.drop_target);
+    if let Some(source) = cancellation.dimmed_source {
+        if let Some(pip) = s.pip_windows.get(source) {
+            let properties = DWM_THUMBNAIL_PROPERTIES {
+                dwFlags: DWM_TNP_OPACITY,
+                opacity: s.thumbnail_alpha,
+                ..Default::default()
+            };
+            let _ = DwmUpdateThumbnailProperties(pip.thumb, &properties);
+            request_redraw(pip.label_hwnd);
+        }
+    }
+    if let Some(target) = cancellation.old_target {
+        if Some(target) != cancellation.dimmed_source {
+            if let Some(pip) = s.pip_windows.get(target) {
+                request_redraw(pip.label_hwnd);
+            }
+        }
+    }
+}
+
 fn configured_label_theme(cfg: &config::Config) -> LabelTheme {
     LabelTheme::with_name_font(
         cfg.effective_pip_label_font_family().to_owned(),
@@ -980,7 +1032,9 @@ fn sync_mouse_eligibility(s: &OverlayState) {
 }
 
 fn is_eq_or_ours(hwnd: HWND, s: &OverlayState) -> bool {
-    if is_our_window(hwnd, s) {
+    if is_our_window(hwnd, s)
+        || unsafe { crate::settings_dialog::foreground_window_is_settings(hwnd) }
+    {
         return true;
     }
     // Check by HWND first (fast path), then fall back to PID check.
@@ -1291,7 +1345,7 @@ unsafe fn init_inner() -> HWND {
         .pip_label_opacity
         .unwrap_or(DEFAULT_LABEL_OPACITY)
         .min(100);
-    let label_alpha = ((label_opacity as u16 * 255) / 100) as u8;
+    let label_alpha = opacity_percent_to_alpha(label_opacity);
 
     // Register broadcast banner window class.
     let bc_class = w!("StonemiteBroadcastClass");
@@ -1410,6 +1464,7 @@ unsafe fn init_inner() -> HWND {
         dpi_scale: get_dpi_scale(label_hwnd),
         pip_edge: cfg.pip_edge,
         custom_strip_width: cfg.pip_strip_width.map(|v| v as i32),
+        thumbnail_alpha: opacity_percent_to_alpha(cfg.effective_pip_opacity()),
         hidden_by_user: false,
         context_menu_target_pid: None,
         context_menu_candidates: Vec::new(),
@@ -1973,6 +2028,7 @@ unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
 }
 
 unsafe fn rebuild_thumbnails_guarded(s: &mut OverlayState) {
+    cancel_reorder_drag(s);
     // Destroy existing PiP windows only after authored composition surfaces
     // are detached. DWM thumbnail ownership remains on the host HWND.
     let previous = std::mem::take(&mut s.pip_windows);
@@ -1993,7 +2049,6 @@ unsafe fn rebuild_thumbnails_guarded(s: &mut OverlayState) {
         }
         let _ = DestroyWindow(pw.hwnd);
     }
-    s.drop_target = None;
 
     if s.pip_order.is_empty() {
         let _ = ShowWindow(s.active_label_hwnd, SW_HIDE);
@@ -2071,7 +2126,7 @@ unsafe fn rebuild_thumbnails_guarded(s: &mut OverlayState) {
                 | DWM_TNP_SOURCECLIENTAREAONLY,
             rcDestination: thumb_rect,
             fVisible: true.into(),
-            opacity: THUMB_OPACITY_NORMAL,
+            opacity: s.thumbnail_alpha,
             fSourceClientAreaOnly: true.into(),
             ..Default::default()
         };
@@ -4550,7 +4605,7 @@ unsafe extern "system" fn pip_wnd_proc(
                         if let Some(pw) = s.pip_windows.get(drag.from_index) {
                             let props = DWM_THUMBNAIL_PROPERTIES {
                                 dwFlags: DWM_TNP_OPACITY,
-                                opacity: 80,
+                                opacity: reorder_thumbnail_alpha(s.thumbnail_alpha),
                                 ..Default::default()
                             };
                             let _ = DwmUpdateThumbnailProperties(pw.thumb, &props);
@@ -4635,7 +4690,7 @@ unsafe extern "system" fn pip_wnd_proc(
                     pw.hovered = false;
                     let props = DWM_THUMBNAIL_PROPERTIES {
                         dwFlags: DWM_TNP_OPACITY,
-                        opacity: THUMB_OPACITY_NORMAL,
+                        opacity: s.thumbnail_alpha,
                         ..Default::default()
                     };
                     let _ = DwmUpdateThumbnailProperties(pw.thumb, &props);
@@ -4643,23 +4698,27 @@ unsafe extern "system" fn pip_wnd_proc(
                 }
             }
 
-            // Cancel non-dragging reorder on leave.
+            // A potential click that never became a drag is no longer active.
             if s.reorder_drag.as_ref().is_some_and(|drag| !drag.dragging) {
-                s.reorder_drag = None;
-                s.drop_target = None;
+                cancel_reorder_drag(s);
             }
 
             LRESULT(0)
         }
 
         WM_CANCELMODE => {
-            let had_invite_press = state()
-                .as_ref()
-                .is_some_and(|s| notifications::invite_action_pressed(s, pip_idx));
+            let Some(s) = state().as_mut() else {
+                return DefWindowProcW(hwnd, msg, wparam, lparam);
+            };
+            let had_invite_press = notifications::invite_action_pressed(s, pip_idx);
+            let had_reorder = s.reorder_drag.is_some();
             if had_invite_press {
-                if let Some(s) = state().as_mut() {
-                    notifications::clear_invite_interaction(s, pip_idx);
-                }
+                notifications::clear_invite_interaction(s, pip_idx);
+            }
+            if had_reorder {
+                cancel_reorder_drag(s);
+            }
+            if had_invite_press || had_reorder {
                 let _ = ReleaseCapture();
                 LRESULT(0)
             } else {
@@ -4678,6 +4737,7 @@ unsafe extern "system" fn pip_wnd_proc(
         WM_CLEAR_INVITE_CAPTURE => {
             if let Some(s) = state().as_mut() {
                 notifications::clear_invite_interaction(s, pip_idx);
+                cancel_reorder_drag(s);
             }
             LRESULT(0)
         }
@@ -4692,12 +4752,12 @@ unsafe extern "system" fn pip_wnd_proc(
             };
 
             if !s.edit_mode && notifications::press_invite_action(s, pip_idx, pt) {
-                s.reorder_drag = None;
-                s.drop_target = None;
+                cancel_reorder_drag(s);
                 let _ = SetCapture(hwnd);
                 return LRESULT(0);
             }
 
+            cancel_reorder_drag(s);
             if s.edit_mode {
                 let mut cr = RECT::default();
                 let _ = GetClientRect(hwnd, &mut cr);
@@ -4779,8 +4839,7 @@ unsafe extern "system" fn pip_wnd_proc(
                 let had_invite_press = notifications::invite_action_pressed(s, pip_idx);
                 let invite_action = notifications::release_invite_action(s, pip_idx, point);
                 if had_invite_press {
-                    s.reorder_drag = None;
-                    s.drop_target = None;
+                    cancel_reorder_drag(s);
                     let _ = ReleaseCapture();
                     if let Some((pid, action)) = invite_action {
                         notifications::execute_invite_action(s, pid, action);
@@ -4816,7 +4875,7 @@ unsafe extern "system" fn pip_wnd_proc(
                     if let Some(pw) = s.pip_windows.get(drag.from_index) {
                         let props = DWM_THUMBNAIL_PROPERTIES {
                             dwFlags: DWM_TNP_OPACITY,
-                            opacity: THUMB_OPACITY_NORMAL,
+                            opacity: s.thumbnail_alpha,
                             ..Default::default()
                         };
                         let _ = DwmUpdateThumbnailProperties(pw.thumb, &props);
@@ -5165,6 +5224,7 @@ pub fn force_rebuild() {
             apply_auto_order(s);
         }
         s.custom_strip_width = cfg.pip_strip_width.map(|v| v as i32);
+        s.thumbnail_alpha = opacity_percent_to_alpha(cfg.effective_pip_opacity());
         s.has_custom_positions = !cfg.pip_positions.is_empty();
         s.snap_grid = cfg.snap_grid as i32;
         s.label_height = cfg
@@ -5175,7 +5235,7 @@ pub fn force_rebuild() {
             .pip_label_opacity
             .unwrap_or(DEFAULT_LABEL_OPACITY)
             .min(100);
-        s.label_alpha = ((opacity as u16 * 255) / 100) as u8;
+        s.label_alpha = opacity_percent_to_alpha(opacity);
         s.label_theme = configured_label_theme(&cfg);
         // Handle hide_from_alt_tab setting change.
         let old_hide = s.hide_from_alt_tab;
@@ -5460,6 +5520,47 @@ mod tests {
         assert!(!overlay_visibility_policy(true, true, true, true));
         assert!(!overlay_visibility_policy(false, false, true, true));
         assert!(!overlay_visibility_policy(false, true, false, false));
+    }
+
+    #[test]
+    fn thumbnail_opacity_scales_percent_and_reorder_never_brightens_it() {
+        assert_eq!(opacity_percent_to_alpha(10), 25);
+        assert_eq!(opacity_percent_to_alpha(80), 204);
+        assert_eq!(opacity_percent_to_alpha(100), 255);
+        assert_eq!(reorder_thumbnail_alpha(25), 25);
+        assert_eq!(reorder_thumbnail_alpha(204), THUMB_OPACITY_DRAG_MAX);
+    }
+
+    #[test]
+    fn reorder_cancellation_takes_dimmed_source_and_old_target_atomically() {
+        let mut drag = Some(ReorderDragState {
+            from_index: 2,
+            start_pt: POINT::default(),
+            dragging: true,
+        });
+        let mut target = Some(4);
+        assert_eq!(
+            take_reorder_cancellation(&mut drag, &mut target),
+            ReorderCancellation {
+                dimmed_source: Some(2),
+                old_target: Some(4),
+            }
+        );
+        assert!(drag.is_none());
+        assert!(target.is_none());
+
+        let mut pending_click = Some(ReorderDragState {
+            from_index: 1,
+            start_pt: POINT::default(),
+            dragging: false,
+        });
+        assert_eq!(
+            take_reorder_cancellation(&mut pending_click, &mut None),
+            ReorderCancellation {
+                dimmed_source: None,
+                old_target: None,
+            }
+        );
     }
 
     #[test]

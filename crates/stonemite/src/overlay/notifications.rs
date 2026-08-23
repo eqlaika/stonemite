@@ -17,7 +17,7 @@ pub(super) const RESURRECTION_COLOR: u32 = 0x0089DF80;
 pub(super) const DEATH_COLOR: u32 = 0x006F82FF;
 
 const PREVIEW_DURATION_MS: u64 = 6000;
-const ANIMATION_LAP_MS: u64 = 900;
+const ANIMATION_LAP_MS: u64 = 750;
 const ANIMATION_LAPS: u64 = 3;
 const ANIMATION_DURATION_MS: u64 = ANIMATION_LAP_MS * ANIMATION_LAPS;
 const PREVIEW_HEIGHT: i32 = 54;
@@ -214,26 +214,23 @@ impl Notification {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct BorderLine {
-    pub from: (i32, i32),
-    pub to: (i32, i32),
+    pub from: (f32, f32),
+    pub to: (f32, f32),
 }
 
-fn perimeter_point(width: i32, height: i32, distance: f64) -> (i32, i32) {
+fn perimeter_point(width: i32, height: i32, distance: f64) -> (f32, f32) {
     let width = width.max(1) as f64;
     let height = height.max(1) as f64;
     let perimeter = 2.0 * (width + height);
     let distance = distance.rem_euclid(perimeter);
     if distance <= width {
-        (distance.round() as i32, 0)
+        (distance as f32, 0.0)
     } else if distance <= width + height {
-        (width as i32, (distance - width).round() as i32)
+        (width as f32, (distance - width) as f32)
     } else if distance <= 2.0 * width + height {
-        (
-            (2.0 * width + height - distance).round() as i32,
-            height as i32,
-        )
+        ((2.0 * width + height - distance) as f32, height as f32)
     } else {
-        (0, (perimeter - distance).round() as i32)
+        (0.0, (perimeter - distance) as f32)
     }
 }
 
@@ -246,16 +243,16 @@ fn perimeter_lines(width: i32, height: i32, start: f64, length: f64) -> Vec<Bord
     let mut remaining = length.clamp(0.0, perimeter);
     let mut lines = Vec::with_capacity(5);
 
-    while remaining > 0.01 && lines.len() < 5 {
+    while remaining > f64::EPSILON && lines.len() < 5 {
         let edge_end = boundaries
             .iter()
             .copied()
-            .find(|boundary| *boundary > cursor + 0.01)
+            .find(|boundary| *boundary > cursor)
             .unwrap_or(perimeter);
         let step = remaining.min(edge_end - cursor);
         let from = perimeter_point(width as i32, height as i32, cursor);
-        let to = if cursor + step >= perimeter - 0.01 {
-            (0, 0)
+        let to = if cursor + step >= perimeter {
+            (0.0, 0.0)
         } else {
             perimeter_point(width as i32, height as i32, cursor + step)
         };
@@ -264,7 +261,7 @@ fn perimeter_lines(width: i32, height: i32, start: f64, length: f64) -> Vec<Bord
         }
         remaining -= step;
         cursor += step;
-        if cursor >= perimeter - 0.01 {
+        if cursor >= perimeter {
             cursor = 0.0;
         }
     }
@@ -427,10 +424,13 @@ impl NotificationVisualSnapshot {
             .into_iter()
             .map(|line| BorderLine {
                 from: (
-                    rect.left + inset + line.from.0,
-                    rect.top + inset + line.from.1,
+                    (rect.left + inset) as f32 + line.from.0,
+                    (rect.top + inset) as f32 + line.from.1,
                 ),
-                to: (rect.left + inset + line.to.0, rect.top + inset + line.to.1),
+                to: (
+                    (rect.left + inset) as f32 + line.to.0,
+                    (rect.top + inset) as f32 + line.to.1,
+                ),
             })
             .collect();
         NotificationBorderLayout {
@@ -1305,17 +1305,19 @@ mod tests {
 
     #[test]
     fn preview_and_animation_are_bounded_and_reduce_motion_safe() {
+        assert_eq!(ANIMATION_LAP_MS, 750);
+        assert_eq!(ANIMATION_DURATION_MS, 2_250);
         let mut notification = tell(1_000);
         assert!(notification.preview_visible(1_000));
         assert!(notification.preview_visible(1_000 + PREVIEW_DURATION_MS - 1));
         assert!(!notification.preview_visible(1_000 + PREVIEW_DURATION_MS));
-        assert_eq!(notification.animation_frame(1_450, true), Some((0, 0.5)));
+        assert_eq!(notification.animation_frame(1_375, true), Some((0, 0.5)));
         assert_eq!(notification.animation_frame(1_450, false), None);
         assert_eq!(
-            notification.animation_frame(1_000 + 2 * ANIMATION_LAP_MS + 450, true),
+            notification.animation_frame(1_000 + 2 * ANIMATION_LAP_MS + 375, true),
             Some((2, 0.5))
         );
-        assert_eq!(notification.redraws_for_tick(1_450, true), (true, false));
+        assert_eq!(notification.redraws_for_tick(1_375, true), (true, false));
         assert_eq!(
             notification.redraws_for_tick(1_000 + ANIMATION_DURATION_MS, true),
             (true, false)
@@ -1407,14 +1409,46 @@ mod tests {
             lines,
             vec![
                 BorderLine {
-                    from: (0, 5),
-                    to: (0, 0),
+                    from: (0.0, 5.0),
+                    to: (0.0, 0.0),
                 },
                 BorderLine {
-                    from: (0, 0),
-                    to: (15, 0),
+                    from: (0.0, 0.0),
+                    to: (15.0, 0.0),
                 },
             ]
         );
+        assert_eq!(lines[0].to, lines[1].from);
+    }
+
+    #[test]
+    fn border_segment_preserves_subpixel_motion_and_corner_continuity() {
+        let lines = perimeter_lines(100, 50, 99.75, 1.0);
+        assert_eq!(
+            lines,
+            vec![
+                BorderLine {
+                    from: (99.75, 0.0),
+                    to: (100.0, 0.0),
+                },
+                BorderLine {
+                    from: (100.0, 0.0),
+                    to: (100.0, 0.75),
+                },
+            ]
+        );
+        assert_eq!(lines[0].to, lines[1].from);
+    }
+
+    #[test]
+    fn near_corner_start_splits_at_the_boundary_without_a_diagonal() {
+        let lines = perimeter_lines(100, 50, 99.995, 1.0);
+        assert_eq!(lines.len(), 2);
+        assert!((lines[0].from.0 - 99.995).abs() < 0.001);
+        assert_eq!(lines[0].from.1, 0.0);
+        assert_eq!(lines[0].to, (100.0, 0.0));
+        assert_eq!(lines[0].to, lines[1].from);
+        assert_eq!(lines[1].to.0, 100.0);
+        assert!((lines[1].to.1 - 0.995).abs() < 0.001);
     }
 }

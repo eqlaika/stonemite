@@ -29,6 +29,7 @@ const mockPayload: SettingsPayload = {
     ],
     pip: {
       edge: "right",
+      thumbnailOpacity: 80,
       labelHeight: 48,
       labelOpacity: 80,
       fontFamily: "Segoe UI",

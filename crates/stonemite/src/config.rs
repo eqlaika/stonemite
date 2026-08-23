@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_EQ_DIR: &str = r"C:\Users\Public\Daybreak Game Company\Installed Games\EverQuest";
+pub const DEFAULT_PIP_OPACITY: u32 = 80;
+pub const MIN_PIP_OPACITY: u32 = 10;
+pub const MAX_PIP_OPACITY: u32 = 100;
 pub const DEFAULT_PIP_LABEL_FONT_FAMILY: &str = "Segoe UI";
 pub const DEFAULT_PIP_LABEL_FONT_SCALE: u32 = 100;
 pub const MIN_PIP_LABEL_FONT_SCALE: u32 = 60;
@@ -193,6 +196,9 @@ pub struct Config {
     /// Custom PiP strip width in pixels. None = auto-size.
     #[serde(default)]
     pub pip_strip_width: Option<u32>,
+    /// Normal live EQ thumbnail opacity as a percentage. None = default (80).
+    #[serde(default, deserialize_with = "deserialize_optional_u32")]
+    pub pip_opacity: Option<u32>,
     /// Per-pip custom positions. Empty = auto strip layout.
     #[serde(default)]
     pub pip_positions: Vec<PipPosition>,
@@ -364,6 +370,7 @@ impl Default for Config {
             hide_hotkey: default_hide_hotkey(),
             pip_edge: PipEdge::default(),
             pip_strip_width: None,
+            pip_opacity: None,
             pip_positions: Vec::new(),
             snap_grid: default_snap_grid(),
             pip_label_height: None,
@@ -403,6 +410,12 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn effective_pip_opacity(&self) -> u32 {
+        self.pip_opacity
+            .unwrap_or(DEFAULT_PIP_OPACITY)
+            .clamp(MIN_PIP_OPACITY, MAX_PIP_OPACITY)
+    }
+
     pub fn effective_pip_label_font_family(&self) -> &str {
         self.pip_label_font_family
             .as_deref()
@@ -815,6 +828,24 @@ box_order = [
         assert_eq!(config.eq_dir, DEFAULT_EQ_DIR);
         assert_eq!(config.trushar.bind, "127.0.0.1:19720");
         assert_eq!(config.trushar.auth_token, None);
+    }
+
+    #[test]
+    fn pip_opacity_defaults_and_clamps_malformed_ranges() {
+        assert_eq!(
+            Config::default().effective_pip_opacity(),
+            DEFAULT_PIP_OPACITY
+        );
+        let low = Config {
+            pip_opacity: Some(0),
+            ..Config::default()
+        };
+        let high = Config {
+            pip_opacity: Some(500),
+            ..Config::default()
+        };
+        assert_eq!(low.effective_pip_opacity(), MIN_PIP_OPACITY);
+        assert_eq!(high.effective_pip_opacity(), MAX_PIP_OPACITY);
     }
 
     #[test]

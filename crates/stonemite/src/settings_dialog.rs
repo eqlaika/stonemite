@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -9,9 +9,10 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{header, HeaderValue};
 use tokio_tungstenite::tungstenite::Message;
 use windows::core::w;
-use windows::Win32::Foundation::{LPARAM, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, PostMessageW, SendMessageTimeoutW, SetForegroundWindow, SMTO_ABORTIFHUNG, WM_USER,
+    FindWindowW, GetWindowThreadProcessId, PostMessageW, SendMessageTimeoutW, SetForegroundWindow,
+    SMTO_ABORTIFHUNG, WM_USER,
 };
 
 use crate::config::Config;
@@ -28,12 +29,38 @@ pub const WM_CANCEL_PAIRING: u32 = WM_USER + 103;
 /// Synchronous query for whether the current pairing window is still open.
 pub const WM_PAIRING_STATUS: u32 = WM_USER + 104;
 
-static SETTINGS_OPEN: AtomicBool = AtomicBool::new(false);
+static SETTINGS_PROCESS_ID: AtomicU32 = AtomicU32::new(0);
+
+fn settings_identity_matches(
+    foreground: HWND,
+    titled_window: Option<HWND>,
+    foreground_pid: u32,
+    tracked_pid: u32,
+) -> bool {
+    !foreground.is_invalid()
+        && titled_window == Some(foreground)
+        && foreground_pid != 0
+        && foreground_pid == tracked_pid
+}
+
+/// Return whether `hwnd` is the exact titled top-level window owned by the
+/// settings child process spawned by this tray instance.
+pub unsafe fn foreground_window_is_settings(hwnd: HWND) -> bool {
+    let titled_window = FindWindowW(None, w!("Stonemite Settings")).ok();
+    let mut foreground_pid = 0;
+    GetWindowThreadProcessId(hwnd, Some(&mut foreground_pid));
+    settings_identity_matches(
+        hwnd,
+        titled_window,
+        foreground_pid,
+        SETTINGS_PROCESS_ID.load(Ordering::SeqCst),
+    )
+}
 
 /// Show the Tauri settings window in a same-executable subprocess. If it is
 /// already open, bring the existing window to the foreground.
 pub fn show() {
-    if SETTINGS_OPEN.load(Ordering::SeqCst) {
+    if SETTINGS_PROCESS_ID.load(Ordering::SeqCst) != 0 {
         unsafe {
             if let Ok(window) = FindWindowW(None, w!("Stonemite Settings")) {
                 let _ = SetForegroundWindow(window);
@@ -48,10 +75,16 @@ pub fn show() {
         .spawn()
     {
         Ok(mut child) => {
-            SETTINGS_OPEN.store(true, Ordering::SeqCst);
+            let child_pid = child.id();
+            SETTINGS_PROCESS_ID.store(child_pid, Ordering::SeqCst);
             std::thread::spawn(move || {
                 let _ = child.wait();
-                SETTINGS_OPEN.store(false, Ordering::SeqCst);
+                let _ = SETTINGS_PROCESS_ID.compare_exchange(
+                    child_pid,
+                    0,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                );
             });
         }
         Err(error) => eprintln!("Failed to open settings: {error}"),
@@ -380,6 +413,42 @@ fn request_tray_restart() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_identity_requires_exact_window_and_tracked_process() {
+        let foreground = HWND(41usize as *mut _);
+        let other = HWND(42usize as *mut _);
+        assert!(settings_identity_matches(
+            foreground,
+            Some(foreground),
+            9001,
+            9001,
+        ));
+        assert!(!settings_identity_matches(
+            foreground,
+            Some(other),
+            9001,
+            9001,
+        ));
+        assert!(!settings_identity_matches(
+            foreground,
+            Some(foreground),
+            9001,
+            9002,
+        ));
+        assert!(!settings_identity_matches(
+            foreground,
+            Some(foreground),
+            9001,
+            0,
+        ));
+        assert!(!settings_identity_matches(
+            HWND::default(),
+            Some(HWND::default()),
+            9001,
+            9001,
+        ));
+    }
 
     #[test]
     fn pairing_codes_keep_all_leading_zeroes() {

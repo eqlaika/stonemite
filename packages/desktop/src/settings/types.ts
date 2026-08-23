@@ -52,6 +52,7 @@ export interface AccountsSettings {
 
 export interface PipSettings {
   edge: PipEdge;
+  thumbnailOpacity: number;
   labelHeight: number;
   labelOpacity: number;
   fontFamily: string;

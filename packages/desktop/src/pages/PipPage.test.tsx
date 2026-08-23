@@ -7,7 +7,10 @@ import type {
   OptionItem,
   PipSettings,
 } from "../settings/types";
-import { LabelTypographyControls } from "./PipPage";
+import {
+  LabelTypographyControls,
+  ThumbnailOpacityControl,
+} from "./PipPage";
 
 const weights: OptionItem<LabelFontWeight>[] = [
   { value: "regular", label: "Regular" },
@@ -27,6 +30,7 @@ const fontFamilies = [
 
 const initial: PipSettings = {
   edge: "right",
+  thumbnailOpacity: 80,
   labelHeight: 48,
   labelOpacity: 80,
   fontFamily: "Segoe UI",
@@ -47,6 +51,29 @@ function TypographyHarness() {
     />
   );
 }
+
+function ThumbnailOpacityHarness() {
+  const [value, setValue] = useState(initial.thumbnailOpacity);
+  return <ThumbnailOpacityControl value={value} onChange={setValue} />;
+}
+
+describe("ThumbnailOpacityControl", () => {
+  it("updates the independent live-thumbnail opacity accessibly", () => {
+    render(<ThumbnailOpacityHarness />);
+
+    const opacity = screen.getByLabelText("PiP thumbnail opacity");
+    expect(opacity).toHaveAttribute("min", "10");
+    expect(opacity).toHaveAttribute("max", "100");
+    expect(opacity).toHaveValue("80");
+    expect(opacity).toHaveAccessibleDescription(
+      "Set the normal transparency of the live EQ preview. Hovering a PiP temporarily reveals it at full opacity.",
+    );
+
+    fireEvent.change(opacity, { target: { value: "65" } });
+    expect(opacity).toHaveValue("65");
+    expect(screen.getByText("65%")).toBeInTheDocument();
+  });
+});
 
 describe("LabelTypographyControls", () => {
   it("updates the family, weight, and text scale accessibly", () => {

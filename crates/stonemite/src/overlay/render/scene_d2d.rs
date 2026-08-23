@@ -7,10 +7,10 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D_POINT_2F, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    ID2D1Bitmap1, ID2D1DeviceContext, ID2D1GeometrySink, D2D1_ANTIALIAS_MODE_ALIASED,
-    D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_ELLIPSE, D2D1_INTERPOLATION_MODE_LINEAR,
-    D2D1_LAYER_OPTIONS1_NONE, D2D1_LAYER_PARAMETERS1, D2D1_ROUNDED_RECT,
-    D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE,
+    ID2D1Bitmap1, ID2D1DeviceContext, ID2D1GeometrySink, D2D1_ANTIALIAS_MODE,
+    D2D1_ANTIALIAS_MODE_ALIASED, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_DRAW_TEXT_OPTIONS_CLIP,
+    D2D1_ELLIPSE, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, D2D1_LAYER_OPTIONS1_NONE,
+    D2D1_LAYER_PARAMETERS1, D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_MEASURING_MODE_NATURAL, DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER,
@@ -193,6 +193,25 @@ unsafe fn draw_pip_content_group(
     result
 }
 
+struct ScopedAntialiasMode<'a> {
+    context: &'a ID2D1DeviceContext,
+    previous: D2D1_ANTIALIAS_MODE,
+}
+
+impl<'a> ScopedAntialiasMode<'a> {
+    unsafe fn set(context: &'a ID2D1DeviceContext, mode: D2D1_ANTIALIAS_MODE) -> Self {
+        let previous = context.GetAntialiasMode();
+        context.SetAntialiasMode(mode);
+        Self { context, previous }
+    }
+}
+
+impl Drop for ScopedAntialiasMode<'_> {
+    fn drop(&mut self) {
+        unsafe { self.context.SetAntialiasMode(self.previous) };
+    }
+}
+
 unsafe fn prepare_context(context: &ID2D1DeviceContext) {
     context.SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
     context.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
@@ -238,7 +257,7 @@ unsafe fn draw_label(
             icon,
             Some(&d2d_rect(icon_bounds)),
             1.0,
-            D2D1_INTERPOLATION_MODE_LINEAR,
+            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
             None,
             None,
         );
@@ -332,15 +351,30 @@ unsafe fn draw_notification_border(
         fill_inward_frame(context, *frame, SceneColor::opaque(layout.frame_color))?;
     }
     if !layout.highlight_lines.is_empty() {
+        // Keep authored rectangles pixel-crisp, but allow the moving trace to
+        // advance at subpixel positions. The guard restores the prior mode on
+        // success and on any early return from fallible resource creation.
+        let _antialias = ScopedAntialiasMode::set(context, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         let brush = solid_brush(context, SceneColor::opaque(layout.highlight_color))?;
+        let stroke_width = layout.stroke_width as f32;
+        let radius = stroke_width / 2.0;
         for line in &layout.highlight_lines {
-            context.DrawLine(
-                point(line.from.0 as f32, line.from.1 as f32),
-                point(line.to.0 as f32, line.to.1 as f32),
-                &brush,
-                layout.stroke_width as f32,
-                None,
-            );
+            let from = point(line.from.0, line.from.1);
+            let to = point(line.to.0, line.to.1);
+            context.DrawLine(from, to, &brush, stroke_width, None);
+            // Default Direct2D line caps are flat. Round each endpoint so
+            // independently split edge segments join continuously at corners
+            // and the moving head advances smoothly at subpixel positions.
+            for center in [from, to] {
+                context.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: center,
+                        radiusX: radius,
+                        radiusY: radius,
+                    },
+                    &brush,
+                );
+            }
         }
     }
     Ok(())
