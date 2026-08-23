@@ -8,6 +8,12 @@ EverQuest multiboxing tool for Windows. Requires Windows 10 or later.
 
 Stonemite makes multiboxing EQ easy: PiP overlays with click-to-swap, swap hotkeys, keyboard key broadcasting, hold-to-broadcast Mouse Clutch, character login, automatic character window labels, optional Stream Deck controls, drag-and-drop layout editor, and more. Stonemite is hi-DPI aware, works out of the box with no dependencies or configuration wizards, and is free and open source.
 
+<p align="center">
+  <img src="docs/images/pip-overlays.jpg" width="760" alt="EverQuest running with five labeled Stonemite PiP overlays">
+  <br>
+  <sub>Keep every character visible with labeled, click-to-swap PiP overlays.</sub>
+</p>
+
 > [!WARNING]
 > **Stonemite is not an automation tool.** Every gameplay input must originate from an immediate physical user action; Stonemite never decides when a gameplay action should occur. Input sequences, loops, and game-state reactions that control EQ are intentionally unsupported. Passive log observation can drive UI notifications and display-only timers, but those features cannot inject input or invoke gameplay controls. Pull requests that add unattended gameplay will not be accepted. Stonemite is designed to comply fully with EverQuest's Terms of Service and EULA.
 
@@ -23,6 +29,12 @@ A system tray icon appears with access to all settings. Check for updates from t
 ## Stream Deck
 
 The separately packaged **Stonemite · EQ boxing** plugin shows a live six-client roster and provides exact-client activation, broadcast control, hold-to-broadcast Mouse Clutch, window-number Swap, and configurable mapped Hotkey actions for all loaded, active, background, or selected boxes. Multi-step behavior stays in user-authored EverQuest socials. Same-PC installations connect automatically over loopback; running Stream Deck Desktop on another computer requires one-time LAN pairing.
+
+<p align="center">
+  <img src="docs/images/stream-deck-controls.png" width="620" alt="Stonemite Stream Deck profile with character and boxing controls">
+  <br>
+  <sub>Live character status and common boxing controls on Stream Deck.</sub>
+</p>
 
 The plugin requires Stream Deck Desktop 7.4+ on macOS 12+ or Windows 10+. It is not bundled with the Stonemite installer or portable ZIP. See [`packages/streamdeck/README.md`](packages/streamdeck/README.md) for setup, development, and packaging details.
 
