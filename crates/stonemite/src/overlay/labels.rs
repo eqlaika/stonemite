@@ -1,8 +1,7 @@
 //! Renderer-independent label content, style, and geometry.
 //!
-//! The Win32 window layer decides where a label lives. Rendering backends
-//! consume these types so the current GDI implementation can later be replaced
-//! without moving label state or hit geometry again.
+//! The Win32 window layer decides where a label lives. Direct2D rendering
+//! consumes these types without owning label state or hit geometry.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Color {
@@ -170,6 +169,36 @@ impl Rect {
 
     pub(super) const fn height(self) -> i32 {
         self.bottom - self.top
+    }
+
+    pub(super) const fn is_empty(self) -> bool {
+        self.right <= self.left || self.bottom <= self.top
+    }
+
+    pub(super) fn inset(self, amount: i32) -> Self {
+        let horizontal = amount.max(0).min(self.width().max(0) / 2);
+        let vertical = amount.max(0).min(self.height().max(0) / 2);
+        Self::new(
+            self.left + horizontal,
+            self.top + vertical,
+            self.right - horizontal,
+            self.bottom - vertical,
+        )
+    }
+
+    pub(super) fn intersect(self, other: Self) -> Self {
+        let left = self.left.max(other.left);
+        let top = self.top.max(other.top);
+        Self::new(
+            left,
+            top,
+            self.right.min(other.right).max(left),
+            self.bottom.min(other.bottom).max(top),
+        )
+    }
+
+    pub(super) fn offset(self, x: i32, y: i32) -> Self {
+        Self::new(self.left + x, self.top + y, self.right + x, self.bottom + y)
     }
 
     fn offset_origin(self, x: i32, y: i32) -> Self {

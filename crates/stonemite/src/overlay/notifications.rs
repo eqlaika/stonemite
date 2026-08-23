@@ -3,16 +3,12 @@
 //! Static icon geometry is adapted from the Lucide and Lucide Animated frames
 //! already used by the Stream Deck integration.
 
-use windows::core::w;
-use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT, SIZE};
-use windows::Win32::Graphics::Gdi::{
-    CreateFontW, CreatePen, CreateSolidBrush, DrawTextW, Ellipse, FrameRect, GetStockObject,
-    GetTextExtentPoint32W, LineTo, MoveToEx, PolyBezierTo, RoundRect, SelectObject, SetTextColor,
-    DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_BOLD, HDC,
-    NULL_BRUSH, PS_NULL, PS_SOLID,
-};
+use std::time::Instant;
+
+use windows::Win32::Foundation::{HWND, POINT, RECT};
 
 use super::dpi;
+use super::labels::{Color, LabelStyle, Rect};
 
 pub(super) const TIMER_ID: usize = 43;
 pub(super) const ANIMATION_STEP_MS: u32 = 16;
@@ -217,9 +213,9 @@ impl Notification {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct BorderLine {
-    from: (i32, i32),
-    to: (i32, i32),
+pub(super) struct BorderLine {
+    pub from: (i32, i32),
+    pub to: (i32, i32),
 }
 
 fn perimeter_point(width: i32, height: i32, distance: f64) -> (i32, i32) {
@@ -295,305 +291,216 @@ fn border_highlight(lap: u64, progress: f64, perimeter: f64, origin: f64) -> (f6
     }
 }
 
-unsafe fn draw_frame(hdc: HDC, rect: RECT, width: i32, color: u32) {
-    let brush = CreateSolidBrush(COLORREF(color));
-    for inset in 0..width.max(1) {
-        let frame = RECT {
-            left: rect.left + inset,
-            top: rect.top + inset,
-            right: rect.right - inset,
-            bottom: rect.bottom - inset,
-        };
-        let _ = FrameRect(hdc, &frame, brush);
-    }
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush);
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct NotificationVisualSnapshot {
+    pub kind: Kind,
+    pub text: String,
+    pub color: Color,
+    pub unread_colors: Vec<Color>,
+    pub invite_actions: bool,
+    pub hovered_action: Option<InviteAction>,
+    pub pressed_action: Option<InviteAction>,
+    pub animation: Option<(u64, f64)>,
+    pub preview_visible: bool,
 }
 
-pub(super) unsafe fn draw_border(
-    hdc: HDC,
-    rect: RECT,
-    border: i32,
-    notification: &Notification,
-    now_ms: u64,
-    animations_enabled: bool,
-) {
-    let animation = notification.animation_frame(now_ms, animations_enabled);
-    draw_frame(
-        hdc,
-        rect,
-        border,
-        if animation.is_some() {
-            dim_colorref(notification.color)
-        } else {
-            notification.color
-        },
-    );
-
-    let Some((lap, progress)) = animation else {
-        return;
-    };
-    let inset = (border / 2).max(1);
-    let path_width = (rect.right - rect.left - 1 - 2 * inset).max(1);
-    let path_height = (rect.bottom - rect.top - 1 - 2 * inset).max(1);
-    let perimeter = 2.0 * (path_width + path_height) as f64;
-    let top_middle = path_width as f64 / 2.0;
-    let (segment_start, segment_length) = border_highlight(lap, progress, perimeter, top_middle);
-    let lines = perimeter_lines(path_width, path_height, segment_start, segment_length);
-    let pen = CreatePen(PS_SOLID, border.max(2), COLORREF(notification.color));
-    let old_pen = SelectObject(hdc, pen);
-    for line in lines {
-        let from = POINT {
-            x: rect.left + inset + line.from.0,
-            y: rect.top + inset + line.from.1,
-        };
-        let _ = MoveToEx(hdc, from.x, from.y, None);
-        let _ = LineTo(
-            hdc,
-            rect.left + inset + line.to.0,
-            rect.top + inset + line.to.1,
-        );
-    }
-    let _ = SelectObject(hdc, old_pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(pen);
-}
-
-fn icon_point(rect: RECT, x: f64, y: f64) -> POINT {
-    let width = (rect.right - rect.left).max(1);
-    let height = (rect.bottom - rect.top).max(1);
-    POINT {
-        x: rect.left + (x * width as f64 / 24.0).round() as i32,
-        y: rect.top + (y * height as f64 / 24.0).round() as i32,
-    }
-}
-
-unsafe fn select_icon_pen(
-    hdc: HDC,
-    rect: RECT,
-    color: u32,
-) -> (
-    windows::Win32::Graphics::Gdi::HPEN,
-    windows::Win32::Graphics::Gdi::HGDIOBJ,
-    windows::Win32::Graphics::Gdi::HGDIOBJ,
-) {
-    let width = (rect.right - rect.left).max(1);
-    let height = (rect.bottom - rect.top).max(1);
-    let pen = CreatePen(PS_SOLID, (width.min(height) / 12).max(2), COLORREF(color));
-    let old_pen = SelectObject(hdc, pen);
-    let old_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-    (pen, old_pen, old_brush)
-}
-
-unsafe fn restore_icon_pen(
-    hdc: HDC,
-    pen: windows::Win32::Graphics::Gdi::HPEN,
-    old_pen: windows::Win32::Graphics::Gdi::HGDIOBJ,
-    old_brush: windows::Win32::Graphics::Gdi::HGDIOBJ,
-) {
-    let _ = SelectObject(hdc, old_brush);
-    let _ = SelectObject(hdc, old_pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(pen);
-}
-
-unsafe fn draw_message_circle(hdc: HDC, rect: RECT, color: u32) {
-    let (pen, old_pen, old_brush) = select_icon_pen(hdc, rect, color);
-    let start = icon_point(rect, 7.9, 20.0);
-    let _ = MoveToEx(hdc, start.x, start.y, None);
-    let _ = PolyBezierTo(
-        hdc,
-        &[
-            icon_point(rect, 12.5, 20.9),
-            icon_point(rect, 17.6, 18.8),
-            icon_point(rect, 20.1, 14.8),
-            icon_point(rect, 22.8, 10.0),
-            icon_point(rect, 20.0, 4.1),
-            icon_point(rect, 15.1, 2.4),
-            icon_point(rect, 10.2, 0.7),
-            icon_point(rect, 5.0, 3.5),
-            icon_point(rect, 3.3, 8.4),
-            icon_point(rect, 2.4, 11.1),
-            icon_point(rect, 2.7, 14.0),
-            icon_point(rect, 4.0, 16.1),
-        ],
-    );
-    let tail = icon_point(rect, 2.0, 22.0);
-    let _ = LineTo(hdc, tail.x, tail.y);
-    let _ = LineTo(hdc, start.x, start.y);
-    restore_icon_pen(hdc, pen, old_pen, old_brush);
-}
-
-unsafe fn draw_user_plus(hdc: HDC, rect: RECT, color: u32, raid: bool) {
-    let (pen, old_pen, old_brush) = select_icon_pen(hdc, rect, color);
-    let head = RECT {
-        left: icon_point(rect, 5.0, 3.0).x,
-        top: icon_point(rect, 5.0, 3.0).y,
-        right: icon_point(rect, 15.0, 13.0).x,
-        bottom: icon_point(rect, 15.0, 13.0).y,
-    };
-    let _ = Ellipse(hdc, head.left, head.top, head.right, head.bottom);
-    let start = icon_point(rect, 2.0, 21.0);
-    let _ = MoveToEx(hdc, start.x, start.y, None);
-    let _ = PolyBezierTo(
-        hdc,
-        &[
-            icon_point(rect, 2.0, 16.6),
-            icon_point(rect, 5.6, 13.0),
-            icon_point(rect, 10.0, 13.0),
-            icon_point(rect, 12.2, 13.0),
-            icon_point(rect, 14.0, 13.7),
-            icon_point(rect, 15.3, 15.0),
-        ],
-    );
-    if raid {
-        let side_start = icon_point(rect, 17.6, 3.7);
-        let _ = MoveToEx(hdc, side_start.x, side_start.y, None);
-        let _ = PolyBezierTo(
-            hdc,
-            &[
-                icon_point(rect, 21.0, 5.0),
-                icon_point(rect, 21.0, 10.0),
-                icon_point(rect, 18.0, 12.0),
-                icon_point(rect, 20.4, 13.8),
-                icon_point(rect, 22.0, 16.8),
-                icon_point(rect, 22.0, 20.0),
-            ],
-        );
-    } else {
-        let vertical_top = icon_point(rect, 19.0, 16.0);
-        let vertical_bottom = icon_point(rect, 19.0, 22.0);
-        let horizontal_left = icon_point(rect, 16.0, 19.0);
-        let horizontal_right = icon_point(rect, 22.0, 19.0);
-        let _ = MoveToEx(hdc, vertical_top.x, vertical_top.y, None);
-        let _ = LineTo(hdc, vertical_bottom.x, vertical_bottom.y);
-        let _ = MoveToEx(hdc, horizontal_left.x, horizontal_left.y, None);
-        let _ = LineTo(hdc, horizontal_right.x, horizontal_right.y);
-    }
-    restore_icon_pen(hdc, pen, old_pen, old_brush);
-}
-
-unsafe fn draw_heart_pulse(hdc: HDC, rect: RECT, color: u32) {
-    let (pen, old_pen, old_brush) = select_icon_pen(hdc, rect, color);
-    let start = icon_point(rect, 12.0, 21.0);
-    let _ = MoveToEx(hdc, start.x, start.y, None);
-    let _ = PolyBezierTo(
-        hdc,
-        &[
-            icon_point(rect, 10.0, 19.2),
-            icon_point(rect, 3.0, 15.0),
-            icon_point(rect, 2.0, 10.0),
-            icon_point(rect, 1.4, 6.0),
-            icon_point(rect, 4.0, 3.0),
-            icon_point(rect, 7.5, 3.0),
-            icon_point(rect, 9.8, 3.0),
-            icon_point(rect, 11.2, 4.4),
-            icon_point(rect, 12.0, 5.6),
-            icon_point(rect, 12.8, 4.4),
-            icon_point(rect, 14.2, 3.0),
-            icon_point(rect, 16.5, 3.0),
-            icon_point(rect, 20.0, 3.0),
-            icon_point(rect, 22.6, 6.0),
-            icon_point(rect, 22.0, 10.0),
-            icon_point(rect, 21.2, 14.0),
-            icon_point(rect, 14.0, 19.2),
-            start,
-        ],
-    );
-    let pulse = [
-        (3.2, 13.0),
-        (9.5, 13.0),
-        (10.0, 12.0),
-        (12.0, 16.5),
-        (14.0, 9.5),
-        (15.5, 13.0),
-        (20.8, 13.0),
-    ];
-    let first = icon_point(rect, pulse[0].0, pulse[0].1);
-    let _ = MoveToEx(hdc, first.x, first.y, None);
-    for &(x, y) in &pulse[1..] {
-        let point = icon_point(rect, x, y);
-        let _ = LineTo(hdc, point.x, point.y);
-    }
-    restore_icon_pen(hdc, pen, old_pen, old_brush);
-}
-
-unsafe fn draw_bone(hdc: HDC, rect: RECT, color: u32) {
-    let (pen, old_pen, old_brush) = select_icon_pen(hdc, rect, color);
-    let start = icon_point(rect, 7.0, 17.0);
-    let end = icon_point(rect, 17.0, 7.0);
-    let _ = MoveToEx(hdc, start.x, start.y, None);
-    let _ = LineTo(hdc, end.x, end.y);
-    for &(cx, cy) in &[(5.0, 19.0), (19.0, 5.0)] {
-        let left = icon_point(rect, cx - 2.5, cy - 2.5);
-        let right = icon_point(rect, cx + 2.5, cy + 2.5);
-        let _ = Ellipse(hdc, left.x, left.y, right.x, right.y);
-    }
-    restore_icon_pen(hdc, pen, old_pen, old_brush);
-}
-
-unsafe fn draw_icon(hdc: HDC, rect: RECT, color: u32, kind: Kind) {
-    match kind {
-        Kind::Tell => draw_message_circle(hdc, rect, color),
-        Kind::GroupInvite => draw_user_plus(hdc, rect, color, false),
-        Kind::RaidInvite => draw_user_plus(hdc, rect, color, true),
-        Kind::Resurrection => draw_heart_pulse(hdc, rect, color),
-        Kind::Death => draw_bone(hdc, rect, color),
-    }
-}
-
-pub(super) unsafe fn draw_unread_dots(
-    hdc: HDC,
-    client: RECT,
-    label_bottom: i32,
-    scale: f64,
-    notification: &Notification,
-) -> i32 {
-    let dot_diameter = dpi(UNREAD_DOT_DIAMETER, scale).max(6);
-    let ring = dpi(UNREAD_DOT_RING, scale).max(1);
-    let gap = dpi(UNREAD_DOT_GAP, scale).max(1);
-    let stride = dot_diameter + 2 * ring + gap;
-    let row_top = label_bottom + dpi(PREVIEW_GAP, scale);
-    let dot_y = row_top + ring;
-    let available_width = (client.right - client.left).max(0);
-    let max_dots = ((available_width + gap) / stride).max(0) as usize;
-    let ring_brush = CreateSolidBrush(COLORREF(PREVIEW_BACKGROUND));
-    let dot_pen = CreatePen(PS_NULL, 0, COLORREF(0));
-    let old_dot_pen = SelectObject(hdc, dot_pen);
-    let old_dot_brush = SelectObject(hdc, ring_brush);
-    let first_visible = notification.unread.len().saturating_sub(max_dots);
-    for (index, unread) in notification.unread.iter().skip(first_visible).enumerate() {
-        let dot_x = client.left + ring + index as i32 * stride;
-        let _ = Ellipse(
-            hdc,
-            dot_x - ring,
-            dot_y - ring,
-            dot_x + dot_diameter + ring,
-            dot_y + dot_diameter + ring,
-        );
-        let color_brush = CreateSolidBrush(COLORREF(unread.color));
-        let _ = SelectObject(hdc, color_brush);
-        let _ = Ellipse(
-            hdc,
-            dot_x,
-            dot_y,
-            dot_x + dot_diameter,
-            dot_y + dot_diameter,
-        );
-        let _ = SelectObject(hdc, ring_brush);
-        let _ = windows::Win32::Graphics::Gdi::DeleteObject(color_brush);
-    }
-    let _ = SelectObject(hdc, old_dot_brush);
-    let _ = SelectObject(hdc, old_dot_pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(dot_pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(ring_brush);
-    row_top + dpi(UNREAD_ROW_HEIGHT, scale)
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct NotificationBorderLayout {
+    pub frames: Vec<Rect>,
+    pub frame_color: Color,
+    pub highlight_color: Color,
+    pub highlight_lines: Vec<BorderLine>,
+    pub stroke_width: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct InviteButtonRects {
-    accept: RECT,
-    dismiss: RECT,
+pub(super) struct UnreadDotLayout {
+    pub ring: Rect,
+    pub dot: Rect,
+    pub ring_color: Color,
+    pub color: Color,
 }
 
-fn invite_button_rects(preview: RECT, scale: f64) -> Option<InviteButtonRects> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct InviteButtonVisual {
+    pub action: InviteAction,
+    pub bounds: Rect,
+    pub fill_color: Color,
+    pub border_color: Color,
+    pub text_color: Color,
+    pub hovered: bool,
+    pub pressed: bool,
+    pub radius: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct NotificationPreviewLayout {
+    pub far_shadow: Rect,
+    pub near_shadow: Rect,
+    pub surface: Rect,
+    pub icon: Rect,
+    pub text: Rect,
+    pub far_shadow_color: Color,
+    pub near_shadow_color: Color,
+    pub surface_color: Color,
+    pub radius: i32,
+    pub buttons: Vec<InviteButtonVisual>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct NotificationContentLayout {
+    pub unread_dots: Vec<UnreadDotLayout>,
+    pub unread_bottom: i32,
+    pub preview: Option<NotificationPreviewLayout>,
+}
+
+impl NotificationContentLayout {
+    /// Hit-test exactly the button/surface rectangles selected by layout. A
+    /// constrained plain-preview fallback has no buttons and is noninteractive.
+    fn invite_interaction_at(&self, point: (i32, i32)) -> Option<Option<InviteAction>> {
+        let preview = self.preview.as_ref()?;
+        if preview.buttons.is_empty() || !rect_contains(preview.surface, point) {
+            return None;
+        }
+        Some(
+            preview
+                .buttons
+                .iter()
+                .find(|button| rect_contains(button.bounds, point))
+                .map(|button| button.action),
+        )
+    }
+}
+
+fn rect_contains(rect: Rect, point: (i32, i32)) -> bool {
+    point.0 >= rect.left && point.0 < rect.right && point.1 >= rect.top && point.1 < rect.bottom
+}
+
+impl Notification {
+    pub(super) fn visual_snapshot(
+        &self,
+        now_ms: u64,
+        animations_enabled: bool,
+    ) -> NotificationVisualSnapshot {
+        NotificationVisualSnapshot {
+            kind: self.kind,
+            text: self.text.clone(),
+            color: Color::from_colorref(self.color),
+            unread_colors: self
+                .unread
+                .iter()
+                .map(|unread| Color::from_colorref(unread.color))
+                .collect(),
+            invite_actions: self.invite_actions,
+            hovered_action: self.hovered_action,
+            pressed_action: self.pressed_action,
+            animation: self.animation_frame(now_ms, animations_enabled),
+            preview_visible: self.preview_visible(now_ms),
+        }
+    }
+}
+
+impl NotificationVisualSnapshot {
+    pub(super) fn border_layout(&self, rect: Rect, border: i32) -> NotificationBorderLayout {
+        let frame_color = if self.animation.is_some() {
+            Color::from_colorref(dim_colorref(colorref(self.color)))
+        } else {
+            self.color
+        };
+        let frames = (0..border.max(1)).map(|inset| rect.inset(inset)).collect();
+        let stroke_width = border.max(2);
+        let Some((lap, progress)) = self.animation else {
+            return NotificationBorderLayout {
+                frames,
+                frame_color,
+                highlight_color: self.color,
+                highlight_lines: Vec::new(),
+                stroke_width,
+            };
+        };
+        let inset = (border / 2).max(1);
+        let path_width = (rect.width() - 1 - 2 * inset).max(1);
+        let path_height = (rect.height() - 1 - 2 * inset).max(1);
+        let perimeter = 2.0 * (path_width + path_height) as f64;
+        let (start, length) = border_highlight(lap, progress, perimeter, path_width as f64 / 2.0);
+        let highlight_lines = perimeter_lines(path_width, path_height, start, length)
+            .into_iter()
+            .map(|line| BorderLine {
+                from: (
+                    rect.left + inset + line.from.0,
+                    rect.top + inset + line.from.1,
+                ),
+                to: (rect.left + inset + line.to.0, rect.top + inset + line.to.1),
+            })
+            .collect();
+        NotificationBorderLayout {
+            frames,
+            frame_color,
+            highlight_color: self.color,
+            highlight_lines,
+            stroke_width,
+        }
+    }
+
+    pub(super) fn content_layout(
+        &self,
+        client: Rect,
+        label_bottom: i32,
+        scale: f64,
+        measured_text_width: i32,
+    ) -> NotificationContentLayout {
+        let dot_diameter = dpi(UNREAD_DOT_DIAMETER, scale).max(6);
+        let ring = dpi(UNREAD_DOT_RING, scale).max(1);
+        let gap = dpi(UNREAD_DOT_GAP, scale).max(1);
+        let stride = dot_diameter + 2 * ring + gap;
+        let row_top = label_bottom + dpi(PREVIEW_GAP, scale);
+        let dot_y = row_top + ring;
+        let max_dots = ((client.width().max(0) + gap) / stride).max(0) as usize;
+        let first_visible = self.unread_colors.len().saturating_sub(max_dots);
+        let unread_dots = self
+            .unread_colors
+            .iter()
+            .skip(first_visible)
+            .enumerate()
+            .map(|(index, color)| {
+                let dot_x = client.left + ring + index as i32 * stride;
+                UnreadDotLayout {
+                    ring: Rect::new(
+                        dot_x - ring,
+                        dot_y - ring,
+                        dot_x + dot_diameter + ring,
+                        dot_y + dot_diameter + ring,
+                    )
+                    .intersect(client),
+                    dot: Rect::new(dot_x, dot_y, dot_x + dot_diameter, dot_y + dot_diameter)
+                        .intersect(client),
+                    ring_color: Color::from_colorref(PREVIEW_BACKGROUND),
+                    color: *color,
+                }
+            })
+            .collect();
+        let unread_bottom = unread_row_bottom(label_bottom, scale);
+        let preview = self
+            .preview_visible
+            .then(|| preview_layout(client, unread_bottom, scale, self, measured_text_width))
+            .flatten();
+        NotificationContentLayout {
+            unread_dots,
+            unread_bottom,
+            preview,
+        }
+    }
+}
+
+fn colorref(color: Color) -> u32 {
+    u32::from(color.red) | (u32::from(color.green) << 8) | (u32::from(color.blue) << 16)
+}
+
+fn rect_from_win32(rect: RECT) -> Rect {
+    Rect::new(rect.left, rect.top, rect.right, rect.bottom)
+}
+
+fn invite_button_rects_neutral(preview: Rect, scale: f64) -> Option<(Rect, Rect)> {
     let pad = dpi(PREVIEW_PADDING, scale);
     let gap = dpi(ACTION_BUTTON_GAP, scale);
     let height = dpi(ACTION_BUTTON_HEIGHT, scale);
@@ -604,77 +511,164 @@ fn invite_button_rects(preview: RECT, scale: f64) -> Option<InviteButtonRects> {
     if top <= preview.top + pad || left + accept_width + gap + dismiss_width + pad > preview.right {
         return None;
     }
-    Some(InviteButtonRects {
-        accept: RECT {
-            left,
+    Some((
+        Rect::new(left, top, left + accept_width, top + height),
+        Rect::new(
+            left + accept_width + gap,
             top,
-            right: left + accept_width,
-            bottom: top + height,
-        },
-        dismiss: RECT {
-            left: left + accept_width + gap,
-            top,
-            right: left + accept_width + gap + dismiss_width,
-            bottom: top + height,
-        },
-    })
+            left + accept_width + gap + dismiss_width,
+            top + height,
+        ),
+    ))
 }
 
-fn point_in_rect(rect: RECT, point: POINT) -> bool {
-    point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
+fn unread_row_bottom(label_bottom: i32, scale: f64) -> i32 {
+    label_bottom + dpi(PREVIEW_GAP, scale) + dpi(UNREAD_ROW_HEIGHT, scale)
 }
 
-fn available_invite_buttons(
-    notification: &Notification,
-    preview: RECT,
-    scale: f64,
-) -> Option<InviteButtonRects> {
-    (notification.invite_actions && preview.bottom - preview.top >= dpi(84, scale))
-        .then(|| invite_button_rects(preview, scale))
-        .flatten()
-}
-
-fn invite_action_for_point(buttons: InviteButtonRects, point: POINT) -> Option<InviteAction> {
-    if point_in_rect(buttons.accept, point) {
-        Some(InviteAction::Accept)
-    } else if point_in_rect(buttons.dismiss, point) {
-        Some(InviteAction::Dismiss)
-    } else {
-        None
-    }
-}
-
-fn invite_preview_interaction(
-    preview: RECT,
-    buttons: InviteButtonRects,
-    point: POINT,
-) -> Option<Option<InviteAction>> {
-    point_in_rect(preview, point).then(|| invite_action_for_point(buttons, point))
-}
-
-pub(super) fn preview_bounds(
-    client: RECT,
+fn preview_available_bounds(
+    client: Rect,
     minimum_top: i32,
     scale: f64,
-    notification: &Notification,
-) -> RECT {
+    invite_actions: bool,
+) -> Rect {
     let minimum_top = minimum_top + dpi(PREVIEW_GAP, scale);
     let margin = dpi(PREVIEW_MARGIN, scale);
     let shadow_x = dpi(PREVIEW_SHADOW_X, scale);
     let shadow_y = dpi(PREVIEW_SHADOW_Y, scale);
     let preview_bottom = client.bottom - margin - shadow_y;
-    let bounds_for_height = |height| RECT {
-        left: client.left + margin,
-        top: (preview_bottom - dpi(height, scale)).max(minimum_top),
-        right: client.right - margin - shadow_x,
-        bottom: preview_bottom,
+    let bounds_for_height = |height| {
+        Rect::new(
+            client.left + margin,
+            (preview_bottom - dpi(height, scale)).max(minimum_top),
+            client.right - margin - shadow_x,
+            preview_bottom,
+        )
     };
     let action_preview = bounds_for_height(ACTION_PREVIEW_HEIGHT);
-    if available_invite_buttons(notification, action_preview, scale).is_some() {
+    if invite_actions
+        && action_preview.height() >= dpi(84, scale)
+        && invite_button_rects_neutral(action_preview, scale).is_some()
+    {
         action_preview
     } else {
         bounds_for_height(PREVIEW_HEIGHT)
     }
+}
+
+fn button_visual(
+    action: InviteAction,
+    bounds: Rect,
+    base_color: u32,
+    text_color: u32,
+    scale: f64,
+    snapshot: &NotificationVisualSnapshot,
+) -> InviteButtonVisual {
+    let hovered = snapshot.hovered_action == Some(action);
+    let pressed = snapshot.pressed_action == Some(action) && hovered;
+    let fill = if pressed {
+        adjust_color(base_color, -24)
+    } else if hovered {
+        adjust_color(base_color, 18)
+    } else {
+        base_color
+    };
+    InviteButtonVisual {
+        action,
+        bounds,
+        fill_color: Color::from_colorref(fill),
+        border_color: Color::from_colorref(adjust_color(fill, 28)),
+        text_color: Color::from_colorref(text_color),
+        hovered,
+        pressed,
+        radius: dpi(7, scale).max(3),
+    }
+}
+
+fn preview_layout(
+    client: Rect,
+    minimum_top: i32,
+    scale: f64,
+    snapshot: &NotificationVisualSnapshot,
+    measured_text_width: i32,
+) -> Option<NotificationPreviewLayout> {
+    let available = preview_available_bounds(client, minimum_top, scale, snapshot.invite_actions);
+    if available.width() < dpi(120, scale) || available.height() < dpi(32, scale) {
+        return None;
+    }
+    let available_buttons = snapshot
+        .invite_actions
+        .then(|| invite_button_rects_neutral(available, scale))
+        .flatten();
+    let pad = dpi(PREVIEW_PADDING, scale);
+    let icon_size = dpi(PREVIEW_ICON_SIZE, scale).min(available.height() - 2 * pad);
+    let gap = dpi(9, scale);
+    let desired_width = 2 * pad + icon_size + gap + measured_text_width + dpi(12, scale);
+    let preview_width =
+        if available_buttons.is_some() || desired_width >= available.width() - dpi(24, scale) {
+            available.width()
+        } else {
+            desired_width
+                .max(dpi(PREVIEW_MIN_WIDTH, scale))
+                .min(available.width())
+        };
+    let surface = Rect::new(
+        available.left,
+        available.top,
+        available.left + preview_width,
+        available.bottom,
+    );
+    let far_x = dpi(PREVIEW_SHADOW_X, scale);
+    let far_y = dpi(PREVIEW_SHADOW_Y, scale);
+    let content_bottom = available_buttons
+        .map(|(accept, _)| accept.top - dpi(4, scale))
+        .unwrap_or(surface.bottom);
+    let icon_left = surface.left + pad;
+    let icon_top = surface.top + (content_bottom - surface.top - icon_size) / 2;
+    let buttons = available_buttons
+        .map(|(accept, dismiss)| {
+            vec![
+                button_visual(
+                    InviteAction::Accept,
+                    accept,
+                    colorref(snapshot.color),
+                    contrasting_text_color(colorref(snapshot.color)),
+                    scale,
+                    snapshot,
+                ),
+                button_visual(
+                    InviteAction::Dismiss,
+                    dismiss,
+                    0x00605040,
+                    0x00FFFFFF,
+                    scale,
+                    snapshot,
+                ),
+            ]
+        })
+        .unwrap_or_default();
+    Some(NotificationPreviewLayout {
+        far_shadow: surface.offset(far_x, far_y),
+        near_shadow: surface.offset(far_x / 2, far_y / 2),
+        surface,
+        icon: Rect::new(
+            icon_left,
+            icon_top,
+            icon_left + icon_size,
+            icon_top + icon_size,
+        ),
+        text: Rect::new(
+            icon_left + icon_size + gap,
+            surface.top,
+            surface.right - pad,
+            content_bottom,
+        ),
+        far_shadow_color: Color::from_colorref(PREVIEW_SHADOW_FAR),
+        near_shadow_color: Color::from_colorref(PREVIEW_SHADOW_NEAR),
+        surface_color: Color::from_colorref(PREVIEW_BACKGROUND),
+        radius: dpi(10, scale).max(4),
+        buttons,
+    })
 }
 
 fn adjust_color(color: u32, amount: i32) -> u32 {
@@ -691,242 +685,6 @@ fn contrasting_text_color(background: u32) -> u32 {
     } else {
         0x00FFFFFF
     }
-}
-
-struct InviteButtonStyle {
-    base_color: u32,
-    text_color: u32,
-    hovered: bool,
-    pressed: bool,
-}
-
-unsafe fn draw_invite_button(
-    hdc: HDC,
-    mut rect: RECT,
-    scale: f64,
-    label: &str,
-    style: InviteButtonStyle,
-) {
-    let color = if style.pressed {
-        adjust_color(style.base_color, -24)
-    } else if style.hovered {
-        adjust_color(style.base_color, 18)
-    } else {
-        style.base_color
-    };
-    let brush = CreateSolidBrush(COLORREF(color));
-    let pen = CreatePen(
-        PS_SOLID,
-        dpi(1, scale).max(1),
-        COLORREF(adjust_color(color, 28)),
-    );
-    let old_brush = SelectObject(hdc, brush);
-    let old_pen = SelectObject(hdc, pen);
-    let radius = dpi(7, scale).max(3);
-    let _ = RoundRect(
-        hdc,
-        rect.left,
-        rect.top,
-        rect.right,
-        rect.bottom,
-        radius * 2,
-        radius * 2,
-    );
-    let _ = SelectObject(hdc, old_pen);
-    let _ = SelectObject(hdc, old_brush);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush);
-
-    let font = CreateFontW(
-        dpi(16, scale),
-        0,
-        0,
-        0,
-        FW_BOLD.0 as i32,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        w!("Segoe UI"),
-    );
-    let old_font = SelectObject(hdc, font);
-    let _ = SetTextColor(hdc, COLORREF(style.text_color));
-    let mut wide: Vec<u16> = label.encode_utf16().collect();
-    let _ = DrawTextW(
-        hdc,
-        &mut wide,
-        &mut rect,
-        DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
-    );
-    let _ = SelectObject(hdc, old_font);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
-}
-
-pub(super) unsafe fn draw_preview(
-    hdc: HDC,
-    available: RECT,
-    scale: f64,
-    notification: &Notification,
-) {
-    let available_width = available.right - available.left;
-    let available_height = available.bottom - available.top;
-    if available_width < dpi(120, scale) || available_height < dpi(32, scale) {
-        return;
-    }
-    let available_buttons = available_invite_buttons(notification, available, scale);
-    let show_actions = available_buttons.is_some();
-
-    let font = CreateFontW(
-        dpi(26, scale),
-        0,
-        0,
-        0,
-        FW_BOLD.0 as i32,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        w!("Segoe UI"),
-    );
-    let mut text_wide: Vec<u16> = notification.text.encode_utf16().collect();
-    let mut text_size = SIZE::default();
-    let old_font = SelectObject(hdc, font);
-    let _ = GetTextExtentPoint32W(hdc, &text_wide, &mut text_size);
-
-    let pad = dpi(PREVIEW_PADDING, scale);
-    let icon_size = dpi(PREVIEW_ICON_SIZE, scale).min(available_height - 2 * pad);
-    let gap = dpi(9, scale);
-    let desired_width = 2 * pad + icon_size + gap + text_size.cx + dpi(12, scale);
-    let preview_width = if show_actions || desired_width >= available_width - dpi(24, scale) {
-        available_width
-    } else {
-        desired_width
-            .max(dpi(PREVIEW_MIN_WIDTH, scale))
-            .min(available_width)
-    };
-    let preview = RECT {
-        left: available.left,
-        top: available.top,
-        right: available.left + preview_width,
-        bottom: available.bottom,
-    };
-    let radius = dpi(10, scale).max(4);
-    let far_shadow_brush = CreateSolidBrush(COLORREF(PREVIEW_SHADOW_FAR));
-    let near_shadow_brush = CreateSolidBrush(COLORREF(PREVIEW_SHADOW_NEAR));
-    let surface_brush = CreateSolidBrush(COLORREF(PREVIEW_BACKGROUND));
-    let null_pen = CreatePen(PS_NULL, 0, COLORREF(0));
-    let old_pen = SelectObject(hdc, null_pen);
-    let old_brush = SelectObject(hdc, far_shadow_brush);
-    let far_x = dpi(PREVIEW_SHADOW_X, scale);
-    let far_y = dpi(PREVIEW_SHADOW_Y, scale);
-    let _ = RoundRect(
-        hdc,
-        preview.left + far_x,
-        preview.top + far_y,
-        preview.right + far_x,
-        preview.bottom + far_y,
-        radius * 2,
-        radius * 2,
-    );
-    let _ = SelectObject(hdc, near_shadow_brush);
-    let _ = RoundRect(
-        hdc,
-        preview.left + far_x / 2,
-        preview.top + far_y / 2,
-        preview.right + far_x / 2,
-        preview.bottom + far_y / 2,
-        radius * 2,
-        radius * 2,
-    );
-    let _ = SelectObject(hdc, surface_brush);
-    let _ = RoundRect(
-        hdc,
-        preview.left,
-        preview.top,
-        preview.right,
-        preview.bottom,
-        radius * 2,
-        radius * 2,
-    );
-
-    let buttons = available_buttons;
-    let content_bottom = buttons
-        .map(|buttons| buttons.accept.top - dpi(4, scale))
-        .unwrap_or(preview.bottom);
-    let icon_left = preview.left + pad;
-    let icon_top = preview.top + ((content_bottom - preview.top - icon_size) / 2);
-    draw_icon(
-        hdc,
-        RECT {
-            left: icon_left,
-            top: icon_top,
-            right: icon_left + icon_size,
-            bottom: icon_top + icon_size,
-        },
-        notification.color,
-        notification.kind,
-    );
-
-    let mut text_rect = RECT {
-        left: icon_left + icon_size + gap,
-        top: preview.top,
-        right: preview.right - pad,
-        bottom: content_bottom,
-    };
-    let _ = SelectObject(hdc, font);
-    let _ = SetTextColor(hdc, COLORREF(notification.color));
-    let _ = DrawTextW(
-        hdc,
-        &mut text_wide,
-        &mut text_rect,
-        DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX,
-    );
-
-    if let Some(buttons) = buttons {
-        draw_invite_button(
-            hdc,
-            buttons.accept,
-            scale,
-            "Accept",
-            InviteButtonStyle {
-                base_color: notification.color,
-                text_color: contrasting_text_color(notification.color),
-                hovered: notification.hovered_action == Some(InviteAction::Accept),
-                pressed: notification.pressed_action == Some(InviteAction::Accept)
-                    && notification.hovered_action == Some(InviteAction::Accept),
-            },
-        );
-        draw_invite_button(
-            hdc,
-            buttons.dismiss,
-            scale,
-            "Dismiss",
-            InviteButtonStyle {
-                base_color: 0x00605040,
-                text_color: 0x00FFFFFF,
-                hovered: notification.hovered_action == Some(InviteAction::Dismiss),
-                pressed: notification.pressed_action == Some(InviteAction::Dismiss)
-                    && notification.hovered_action == Some(InviteAction::Dismiss),
-            },
-        );
-    }
-
-    let _ = SelectObject(hdc, old_brush);
-    let _ = SelectObject(hdc, old_pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(surface_brush);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(near_shadow_brush);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(far_shadow_brush);
-    let _ = SelectObject(hdc, old_font);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
 }
 
 /// Return the action-preview hit for one PiP. `Some(None)` means the pointer is
@@ -947,22 +705,28 @@ unsafe fn invite_interaction_at_point(
     }
 
     let mut client = RECT::default();
-    windows::Win32::UI::WindowsAndMessaging::GetClientRect(pip.label_hwnd, &mut client).ok()?;
-    let border = dpi(super::BORDER_WIDTH, state.dpi_scale);
-    let label_point = POINT {
-        x: point.x - border,
-        y: point.y - border,
-    };
-    if !point_in_rect(client, label_point) {
-        return None;
-    }
-    let label_bottom = dpi(state.label_height, state.dpi_scale)
-        .min(client.bottom - client.top)
-        .max(1);
-    let unread_bottom = label_bottom + dpi(PREVIEW_GAP + UNREAD_ROW_HEIGHT, state.dpi_scale);
-    let preview = preview_bounds(client, unread_bottom, state.dpi_scale, notification);
-    let buttons = available_invite_buttons(notification, preview, state.dpi_scale)?;
-    invite_preview_interaction(preview, buttons, label_point).map(|action| (pip.pid, action))
+    windows::Win32::UI::WindowsAndMessaging::GetClientRect(pip.hwnd, &mut client).ok()?;
+    let now = Instant::now();
+    let source_id = format!("pid:{}", pip.pid);
+    let timer_progress = state
+        .timers
+        .visible_for(Some(&source_id), now)
+        .map(|timer| timer.progress(now));
+    let snapshot = notification.visual_snapshot(
+        windows::Win32::System::SystemInformation::GetTickCount64(),
+        state.animations_enabled,
+    );
+    let layout = super::scenes::notification_content_layout(
+        &snapshot,
+        rect_from_win32(client),
+        dpi(super::BORDER_WIDTH, state.dpi_scale),
+        LabelStyle::new(state.dpi_scale, state.label_height),
+        timer_progress,
+        0,
+    );
+    layout
+        .invite_interaction_at((point.x, point.y))
+        .map(|action| (pip.pid, action))
 }
 
 pub(super) unsafe fn has_invite_preview_at(
@@ -1000,7 +764,7 @@ pub(super) unsafe fn update_invite_hover(
     if let Some(notification) = state.notifications.get_mut(&pid) {
         if notification.hovered_action != hovered {
             notification.hovered_action = hovered;
-            let _ = windows::Win32::Graphics::Gdi::InvalidateRect(label_hwnd, None, false);
+            super::request_redraw(label_hwnd);
         }
     }
 }
@@ -1016,7 +780,7 @@ pub(super) unsafe fn clear_invite_interaction(state: &mut super::OverlayState, p
             || notification.pressed_action.take().is_some()
             || std::mem::take(&mut notification.invite_preview_pressed)
         {
-            let _ = windows::Win32::Graphics::Gdi::InvalidateRect(label_hwnd, None, false);
+            super::request_redraw(label_hwnd);
         }
     }
 }
@@ -1037,7 +801,7 @@ pub(super) unsafe fn press_invite_action(
         notification.invite_preview_pressed = true;
         notification.hovered_action = action;
         notification.pressed_action = action;
-        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(label_hwnd, None, false);
+        super::request_redraw(label_hwnd);
         true
     } else {
         false
@@ -1070,7 +834,7 @@ pub(super) unsafe fn release_invite_action(
         .filter(|(hit_pid, _)| *hit_pid == pid)
         .and_then(|(_, action)| action);
     notification.hovered_action = hovered;
-    let _ = windows::Win32::Graphics::Gdi::InvalidateRect(label_hwnd, None, false);
+    super::request_redraw(label_hwnd);
     hovered
         .filter(|action| Some(*action) == pressed)
         .map(|action| (pid, action))
@@ -1086,17 +850,7 @@ unsafe fn remove_group_invites(
         state.notifications.remove(&pid);
     }
     if let Some(pip) = state.pip_windows.iter().find(|pip| pip.pid == pid) {
-        if remove {
-            let _ = windows::Win32::UI::WindowsAndMessaging::SetLayeredWindowAttributes(
-                pip.label_hwnd,
-                COLORREF(super::LABEL_COLOR_KEY),
-                state.label_alpha,
-                windows::Win32::UI::WindowsAndMessaging::LWA_ALPHA
-                    | windows::Win32::UI::WindowsAndMessaging::LWA_COLORKEY,
-            );
-        }
-        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(pip.hwnd, None, false);
-        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(pip.label_hwnd, None, false);
+        super::request_redraw(pip.label_hwnd);
     }
 }
 
@@ -1129,8 +883,7 @@ pub(super) unsafe fn execute_invite_action(
                     notification.invite_preview_pressed = false;
                 }
                 if let Some(pip) = state.pip_windows.iter().find(|pip| pip.pid == pid) {
-                    let _ =
-                        windows::Win32::Graphics::Gdi::InvalidateRect(pip.label_hwnd, None, false);
+                    super::request_redraw(pip.label_hwnd);
                 }
                 super::show_toast_inner(
                     state,
@@ -1320,16 +1073,7 @@ fn apply(
 
     unsafe {
         if let Some(pip) = state.pip_windows.iter().find(|pip| pip.pid == pid) {
-            let key = COLORREF(super::LABEL_COLOR_KEY);
-            let _ = windows::Win32::UI::WindowsAndMessaging::SetLayeredWindowAttributes(
-                pip.label_hwnd,
-                key,
-                state.label_alpha.max(LABEL_MIN_ALPHA),
-                windows::Win32::UI::WindowsAndMessaging::LWA_ALPHA
-                    | windows::Win32::UI::WindowsAndMessaging::LWA_COLORKEY,
-            );
-            super::invalidate_pip_border(pip.hwnd, dpi(super::BORDER_WIDTH, state.dpi_scale));
-            let _ = windows::Win32::Graphics::Gdi::InvalidateRect(pip.label_hwnd, None, false);
+            super::request_redraw(pip.label_hwnd);
         }
         let _ = windows::Win32::UI::WindowsAndMessaging::SetTimer(
             state.active_label_hwnd,
@@ -1343,16 +1087,12 @@ fn apply(
 pub(super) unsafe fn tick(state: &mut super::OverlayState, timer_hwnd: HWND) {
     let now_ms = windows::Win32::System::SystemInformation::GetTickCount64();
     let animations_enabled = state.animations_enabled;
-    let border = dpi(super::BORDER_WIDTH, state.dpi_scale);
     for pip in &state.pip_windows {
         if let Some(notification) = state.notifications.get_mut(&pip.pid) {
             let (redraw_border, redraw_preview) =
                 notification.redraws_for_tick(now_ms, animations_enabled);
-            if redraw_border {
-                super::invalidate_pip_border(pip.hwnd, border);
-            }
-            if redraw_preview {
-                let _ = windows::Win32::Graphics::Gdi::InvalidateRect(pip.label_hwnd, None, false);
+            if redraw_border || redraw_preview {
+                super::request_redraw(pip.label_hwnd);
             }
         }
     }
@@ -1509,71 +1249,24 @@ mod tests {
             2_000,
             true,
         );
-        let preview = preview_bounds(
-            RECT {
-                left: 0,
-                top: 0,
-                right: 420,
-                bottom: 240,
-            },
-            50,
-            1.0,
-            &notification,
-        );
-        let buttons = available_invite_buttons(&notification, preview, 1.0).unwrap();
+        let snapshot = notification.visual_snapshot(2_001, false);
+        let layout = snapshot.content_layout(Rect::new(0, 0, 420, 240), 50, 1.0, 180);
+        let preview = layout.preview.as_ref().expect("action preview");
+        assert_eq!(preview.buttons.len(), 2);
+        for button in &preview.buttons {
+            let center = (
+                (button.bounds.left + button.bounds.right) / 2,
+                (button.bounds.top + button.bounds.bottom) / 2,
+            );
+            assert_eq!(
+                layout.invite_interaction_at(center),
+                Some(Some(button.action))
+            );
+        }
         assert_eq!(
-            invite_action_for_point(
-                buttons,
-                POINT {
-                    x: (buttons.accept.left + buttons.accept.right) / 2,
-                    y: (buttons.accept.top + buttons.accept.bottom) / 2,
-                },
-            ),
-            Some(InviteAction::Accept)
-        );
-        assert_eq!(
-            invite_action_for_point(
-                buttons,
-                POINT {
-                    x: (buttons.dismiss.left + buttons.dismiss.right) / 2,
-                    y: (buttons.dismiss.top + buttons.dismiss.bottom) / 2,
-                },
-            ),
-            Some(InviteAction::Dismiss)
-        );
-        assert_eq!(
-            invite_preview_interaction(
-                preview,
-                buttons,
-                POINT {
-                    x: preview.left + 5,
-                    y: preview.top + 5,
-                },
-            ),
+            layout.invite_interaction_at((preview.surface.left + 5, preview.surface.top + 5)),
             Some(None),
-            "the whole preview must consume clicks instead of activating its PiP"
-        );
-        assert_eq!(
-            invite_preview_interaction(preview, buttons, POINT { x: 5, y: 5 }),
-            None
-        );
-
-        let narrow_preview = preview_bounds(
-            RECT {
-                left: 0,
-                top: 0,
-                right: 200,
-                bottom: 240,
-            },
-            50,
-            1.0,
-            &notification,
-        );
-        assert_eq!(narrow_preview.bottom - narrow_preview.top, PREVIEW_HEIGHT);
-        assert_eq!(
-            available_invite_buttons(&notification, narrow_preview, 1.0),
-            None,
-            "narrow previews must render and hit-test as non-interactive"
+            "the whole rendered action preview consumes clicks"
         );
     }
 
@@ -1639,6 +1332,60 @@ mod tests {
             notification.redraws_for_tick(1_000 + PREVIEW_DURATION_MS + 1, true),
             (false, false)
         );
+    }
+
+    #[test]
+    fn short_pip_timer_invite_plain_fallback_has_no_hit_target() {
+        let notification = Notification::push(
+            None,
+            Kind::GroupInvite,
+            "Honka invited you to a group".to_owned(),
+            0x0060B06A,
+            2_000,
+            true,
+        );
+        let snapshot = notification.visual_snapshot(2_001, false);
+        let layout = super::super::scenes::notification_content_layout(
+            &snapshot,
+            Rect::new(0, 0, 420, 180),
+            3,
+            LabelStyle::new(1.0, 48),
+            Some(0.5),
+            180,
+        );
+        let preview = layout.preview.as_ref().expect("plain preview fallback");
+        assert!(preview.buttons.is_empty());
+        assert_eq!(
+            layout.invite_interaction_at((preview.surface.left + 10, preview.surface.bottom - 10)),
+            None,
+            "invisible action buttons must never consume or activate clicks"
+        );
+    }
+
+    #[test]
+    fn notification_dots_and_preview_scale_at_supported_dpi_values() {
+        let notification = tell(1_000);
+        let snapshot = notification.visual_snapshot(1_001, false);
+        for (scale, expected_dot) in [(1.0_f64, 9), (1.25_f64, 11), (1.5_f64, 14)] {
+            let layout = snapshot.content_layout(Rect::new(0, 0, 480, 300), 72, scale, 120);
+            assert_eq!(layout.unread_dots.len(), 1);
+            assert_eq!(layout.unread_dots[0].dot.width(), expected_dot);
+            let preview = layout.preview.expect("preview at supported DPI");
+            assert_eq!(preview.radius, dpi(10, scale).max(4));
+            assert_eq!(preview.icon.width(), dpi(PREVIEW_ICON_SIZE, scale));
+        }
+    }
+
+    #[test]
+    fn notification_layout_clips_preview_on_tiny_surfaces() {
+        let notification = tell(1_000);
+        let snapshot = notification.visual_snapshot(1_001, false);
+        let layout = snapshot.content_layout(Rect::new(0, 0, 80, 40), 35, 1.5, 500);
+        assert!(layout.preview.is_none());
+        assert!(layout
+            .unread_dots
+            .iter()
+            .all(|dot| dot.dot == dot.dot.intersect(Rect::new(0, 0, 80, 40))));
     }
 
     #[test]

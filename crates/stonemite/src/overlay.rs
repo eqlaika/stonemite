@@ -1,32 +1,34 @@
-use std::cell::{Cell, UnsafeCell};
+use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 mod labels;
 mod notifications;
 mod render;
+mod scenes;
 mod timers;
 
-use labels::{Color, LabelModel, LabelStyle, LabelTheme};
+use labels::{Color, LabelModel, LabelStyle, LabelTheme, Rect};
 use notifications::{EnabledKinds, Notification};
+use render::Compositor;
+use scenes::{
+    ActiveLabelScene, LabelScene, PipInteractionScene, PipScene, StatusBannerScene, TimerScene,
+    ToastScene, UiTextRole,
+};
 use timers::TimerOverlayState;
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, RPC_E_CHANGED_MODE, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
     DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION,
     DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, ClientToScreen, CreateFontW, CreatePen, CreateSolidBrush, DrawTextW, EndPaint,
-    FillRect, FrameRect, GetStockObject, GetTextExtentPoint32W, InvalidateRect, RoundRect,
-    SelectObject, SetBkMode, SetTextColor, BACKGROUND_MODE, BLACK_BRUSH, DT_CENTER, DT_LEFT,
-    DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_HEAVY, HBRUSH, PAINTSTRUCT, PS_NULL,
-};
+use windows::Win32::Graphics::Gdi::{ClientToScreen, InvalidateRect, ScreenToClient, ValidateRect};
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
 };
@@ -69,9 +71,6 @@ const DEFAULT_LABEL_HEIGHT: i32 = 48;
 
 /// Default label opacity percentage (0–100).
 const DEFAULT_LABEL_OPACITY: u32 = 80;
-
-/// Color key for layered window transparency (magenta, COLORREF = 0x00BBGGRR).
-const LABEL_COLOR_KEY: u32 = 0x00FF00FF;
 
 /// Base ID for character-assign context menu items.
 const IDM_CHAR_BASE: u32 = 5000;
@@ -119,9 +118,6 @@ const SNAP_DISTANCE: i32 = 12;
 /// Pixel zone around PiP edges for resize detection in edit mode.
 const RESIZE_ZONE: i32 = 8;
 
-/// Color for edit mode border indicator (bright cyan, COLORREF).
-const EDIT_BORDER_COLOR: u32 = 0x00FFFF00;
-
 /// VK_SHIFT virtual key code.
 const VK_SHIFT_CODE: i32 = 0x10;
 
@@ -145,14 +141,13 @@ const TIMER_OVERLAY_INTERVAL_MS: u32 = 100;
 const TIMER_PANEL_GAP: i32 = 4;
 const TIMER_PANEL_HEIGHT: i32 = 42;
 const WM_CLEAR_INVITE_CAPTURE: u32 = WM_USER + 44;
-/// Color key for toast layered window.
-const TOAST_COLOR_KEY: u32 = 0x00FF00FF;
+const WM_SERVICE_COMPOSITOR_RECOVERY: u32 = WM_USER + 45;
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum ToastPhase {
     Hidden,
     FadingIn,
@@ -160,15 +155,127 @@ enum ToastPhase {
     FadingOut,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ToastFadeEffect {
+    None,
+    UpdateOpacity(u8),
+    HideAndStop,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct ToastFadeTransition {
+    phase: ToastPhase,
+    alpha: u8,
+    phase_start: u64,
+    effect: ToastFadeEffect,
+}
+
+fn toast_publication_allowed(
+    phase: ToastPhase,
+    scene_ready: bool,
+    overlay_visible: bool,
+    surface_attached: bool,
+) -> bool {
+    phase != ToastPhase::Hidden && scene_ready && overlay_visible && surface_attached
+}
+
+fn advance_toast_fade(
+    phase: ToastPhase,
+    alpha: u8,
+    phase_start: u64,
+    duration_ms: u32,
+    now: u64,
+) -> ToastFadeTransition {
+    match phase {
+        ToastPhase::FadingIn => {
+            let alpha = alpha.saturating_add(TOAST_ALPHA_STEP).min(TOAST_MAX_ALPHA);
+            let (phase, phase_start) = if alpha == TOAST_MAX_ALPHA {
+                (ToastPhase::Visible, now)
+            } else {
+                (ToastPhase::FadingIn, phase_start)
+            };
+            ToastFadeTransition {
+                phase,
+                alpha,
+                phase_start,
+                effect: ToastFadeEffect::UpdateOpacity(alpha),
+            }
+        }
+        ToastPhase::Visible if now.saturating_sub(phase_start) >= u64::from(duration_ms) => {
+            ToastFadeTransition {
+                phase: ToastPhase::FadingOut,
+                alpha,
+                phase_start,
+                effect: ToastFadeEffect::None,
+            }
+        }
+        ToastPhase::Visible => ToastFadeTransition {
+            phase,
+            alpha,
+            phase_start,
+            effect: ToastFadeEffect::None,
+        },
+        ToastPhase::FadingOut => {
+            let alpha = alpha.saturating_sub(TOAST_ALPHA_STEP);
+            if alpha == 0 {
+                ToastFadeTransition {
+                    phase: ToastPhase::Hidden,
+                    alpha,
+                    phase_start,
+                    effect: ToastFadeEffect::HideAndStop,
+                }
+            } else {
+                ToastFadeTransition {
+                    phase,
+                    alpha,
+                    phase_start,
+                    effect: ToastFadeEffect::UpdateOpacity(alpha),
+                }
+            }
+        }
+        ToastPhase::Hidden => ToastFadeTransition {
+            phase,
+            alpha: 0,
+            phase_start,
+            effect: ToastFadeEffect::HideAndStop,
+        },
+    }
+}
+
 struct ToastState {
     hwnd: HWND,
     text: String,
     phase: ToastPhase,
+    /// True only after the current staged text has completed Present1 and attach.
+    scene_ready: bool,
     alpha: u8,
     phase_start: u64,
     duration_ms: u32,
     height: i32,
     enabled: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ActiveSceneKey {
+    text: String,
+    class: Option<String>,
+    color: u32,
+    number: usize,
+    label_height: i32,
+    label_alpha: u8,
+    dpi_bits: u64,
+    theme: LabelTheme,
+    timer_label: Option<String>,
+    timer_start: Option<Instant>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BannerSceneKey {
+    text: String,
+    background: Color,
+    label_height: i32,
+    label_alpha: u8,
+    dpi_bits: u64,
 }
 
 struct PipWindowEntry {
@@ -218,8 +325,51 @@ struct ReorderDragState {
     dragging: bool,
 }
 
+struct ComApartment {
+    usable: bool,
+    uninitialize: bool,
+}
+
+impl ComApartment {
+    unsafe fn initialize() -> Self {
+        match CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok() {
+            Ok(()) => Self {
+                usable: true,
+                uninitialize: true,
+            },
+            Err(error) if error.code() == RPC_E_CHANGED_MODE => Self {
+                usable: true,
+                uninitialize: false,
+            },
+            Err(error) => {
+                debug_log(&format!(
+                    "DirectComposition COM initialization failed: {error}"
+                ));
+                Self {
+                    usable: false,
+                    uninitialize: false,
+                }
+            }
+        }
+    }
+}
+
+impl Drop for ComApartment {
+    fn drop(&mut self) {
+        if self.uninitialize {
+            unsafe { CoUninitialize() };
+        }
+    }
+}
+
 struct OverlayState {
+    /// The hardware compositor drops before its balanced COM apartment owner.
+    compositor: Option<Compositor>,
+    com_apartment: ComApartment,
     pip_windows: Vec<PipWindowEntry>,
+    /// Hidden composition HWNDs retained until their registered surfaces can
+    /// be detached safely and the HWNDs can then be destroyed.
+    pending_composition_destroys: Vec<HWND>,
     /// All tracked EQ windows with stable numbers and character assignments.
     eq_windows: Vec<EqWindow>,
     /// PIDs in PiP strip order. Positions are fixed; on swap, two PIDs exchange.
@@ -234,6 +384,9 @@ struct OverlayState {
     active_label_class: Option<String>,
     active_label_color: u32,
     active_label_number: usize,
+    active_label_hovered: bool,
+    active_scene_key: Option<ActiveSceneKey>,
+    banner_scene_key: Option<BannerSceneKey>,
     /// Broadcast banner window, shown next to the active label when broadcasting.
     broadcast_label_hwnd: HWND,
     /// Configured label height (logical pixels).
@@ -316,6 +469,9 @@ static OVERLAY: OverlayCell = OverlayCell(UnsafeCell::new(None));
 // foreground event hooks while we're already mutating state.
 thread_local! {
     static IN_OVERLAY: Cell<bool> = const { Cell::new(false) };
+    static SERVICING_COMPOSITOR_RECOVERY: Cell<bool> = const { Cell::new(false) };
+    static COMPOSITOR_RECOVERY_POSTED: Cell<bool> = const { Cell::new(false) };
+    static REDRAW_PENDING: RefCell<HashSet<isize>> = RefCell::new(HashSet::new());
 }
 
 // Dummy None value returned when re-entrant access is detected.
@@ -598,11 +754,7 @@ unsafe fn get_dpi_scale(hwnd: HWND) -> f64 {
     if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).is_ok() && dpi_x > 0 {
         return dpi_x as f64 / 96.0;
     }
-    use windows::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, ReleaseDC, LOGPIXELSY};
-    let dc = GetDC(HWND::default());
-    let val = GetDeviceCaps(dc, LOGPIXELSY);
-    let _ = ReleaseDC(HWND::default(), dc);
-    val as f64 / 96.0
+    f64::from(GetDpiForSystem().max(96)) / 96.0
 }
 
 fn dpi(val: i32, scale: f64) -> i32 {
@@ -619,17 +771,6 @@ unsafe fn client_animations_enabled() -> bool {
     )
     .is_err()
         || enabled.as_bool()
-}
-
-fn pip_label_overlay_size(
-    _s: &OverlayState,
-    pip_width: i32,
-    pip_height: i32,
-    border: i32,
-) -> (i32, i32) {
-    let inner_width = (pip_width - 2 * border).max(0);
-    let inner_height = (pip_height - 2 * border).max(0);
-    (inner_width, inner_height)
 }
 
 fn color_for_number(number: usize) -> u32 {
@@ -688,10 +829,60 @@ fn format_timer_remaining(remaining: Duration) -> String {
     format!("{}.{:01}s", tenths / 10, tenths % 10)
 }
 
-unsafe fn invalidate_timer_labels(s: &OverlayState) {
-    let _ = InvalidateRect(s.active_label_hwnd, None, false);
+fn timer_owner_hwnds(s: &OverlayState, now: Instant) -> Vec<HWND> {
+    let mut owners = Vec::new();
+    let active_source = s.active_pid.map(|pid| format!("pid:{pid}"));
+    if s.timers
+        .visible_for(active_source.as_deref(), now)
+        .is_some()
+    {
+        owners.push(s.active_label_hwnd);
+    }
     for pip in &s.pip_windows {
-        let _ = InvalidateRect(pip.label_hwnd, None, false);
+        let source_id = format!("pid:{}", pip.pid);
+        if s.timers.visible_for(Some(&source_id), now).is_some() {
+            owners.push(pip.label_hwnd);
+        }
+    }
+    owners
+}
+
+fn timer_tick_redraw_targets(
+    expired: bool,
+    active_label_hwnd: HWND,
+    pip_label_hwnds: &[HWND],
+    previous_owners: &[HWND],
+    current_owners: &[HWND],
+) -> Vec<HWND> {
+    let mut targets = Vec::new();
+    let mut seen = HashSet::new();
+    let mut add = |hwnd: HWND| {
+        if !hwnd.is_invalid()
+            && !(expired && hwnd == active_label_hwnd)
+            && seen.insert(hwnd.0 as isize)
+        {
+            targets.push(hwnd);
+        }
+    };
+    if expired {
+        // Expired timers are already excluded by visible_for. Redrawing the
+        // bounded PiP set clears whichever client owned the expired scene.
+        pip_label_hwnds.iter().copied().for_each(&mut add);
+    } else {
+        previous_owners
+            .iter()
+            .chain(current_owners)
+            .copied()
+            .for_each(add);
+    }
+    targets
+}
+
+unsafe fn invalidate_timer_labels(s: &OverlayState) {
+    for hwnd in timer_owner_hwnds(s, Instant::now()) {
+        if hwnd != s.active_label_hwnd {
+            request_redraw(hwnd);
+        }
     }
 }
 
@@ -738,6 +929,7 @@ fn is_our_window(hwnd: HWND, s: &OverlayState) -> bool {
     s.pip_windows
         .iter()
         .any(|pw| pw.hwnd == hwnd || pw.label_hwnd == hwnd)
+        || s.pending_composition_destroys.contains(&hwnd)
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -1052,7 +1244,6 @@ unsafe fn init_inner() -> HWND {
     let wc = WNDCLASSW {
         lpfnWndProc: Some(pip_wnd_proc),
         lpszClassName: pip_class,
-        hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
         hCursor: cursor,
         style: CS_DBLCLKS,
         ..Default::default()
@@ -1064,7 +1255,6 @@ unsafe fn init_inner() -> HWND {
     let pip_label_wc = WNDCLASSW {
         lpfnWndProc: Some(pip_label_wnd_proc),
         lpszClassName: pip_label_class,
-        hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
         hCursor: cursor,
         ..Default::default()
     };
@@ -1075,14 +1265,13 @@ unsafe fn init_inner() -> HWND {
     let label_wc = WNDCLASSW {
         lpfnWndProc: Some(label_wnd_proc),
         lpszClassName: label_class,
-        hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
         hCursor: cursor,
         ..Default::default()
     };
     RegisterClassW(&label_wc);
 
     let label_hwnd = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP,
         label_class,
         w!("StonemiteLabel"),
         WS_POPUP,
@@ -1104,23 +1293,22 @@ unsafe fn init_inner() -> HWND {
         .min(100);
     let label_alpha = ((label_opacity as u16 * 255) / 100) as u8;
 
-    let label_key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
-    let _ =
-        SetLayeredWindowAttributes(label_hwnd, label_key, label_alpha, LWA_ALPHA | LWA_COLORKEY);
-
     // Register broadcast banner window class.
     let bc_class = w!("StonemiteBroadcastClass");
     let bc_wc = WNDCLASSW {
         lpfnWndProc: Some(broadcast_label_wnd_proc),
         lpszClassName: bc_class,
-        hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
         hCursor: cursor,
         ..Default::default()
     };
     RegisterClassW(&bc_wc);
 
     let bc_hwnd = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+        WS_EX_TOPMOST
+            | WS_EX_TOOLWINDOW
+            | WS_EX_TRANSPARENT
+            | WS_EX_NOACTIVATE
+            | WS_EX_NOREDIRECTIONBITMAP,
         bc_class,
         w!("StonemiteBroadcast"),
         WS_POPUP,
@@ -1135,21 +1323,22 @@ unsafe fn init_inner() -> HWND {
     )
     .expect("Failed to create broadcast label window");
 
-    let _ = SetLayeredWindowAttributes(bc_hwnd, label_key, label_alpha, LWA_ALPHA | LWA_COLORKEY);
-
     // Register toast notification window class.
     let toast_class = w!("StonemiteToastClass");
     let toast_wc = WNDCLASSW {
         lpfnWndProc: Some(toast_wnd_proc),
         lpszClassName: toast_class,
-        hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
         hCursor: cursor,
         ..Default::default()
     };
     RegisterClassW(&toast_wc);
 
     let toast_hwnd = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+        WS_EX_TOPMOST
+            | WS_EX_TOOLWINDOW
+            | WS_EX_TRANSPARENT
+            | WS_EX_NOACTIVATE
+            | WS_EX_NOREDIRECTIONBITMAP,
         toast_class,
         w!("StonemiteToast"),
         WS_POPUP,
@@ -1163,9 +1352,6 @@ unsafe fn init_inner() -> HWND {
         None,
     )
     .expect("Failed to create toast window");
-
-    let toast_key = windows::Win32::Foundation::COLORREF(TOAST_COLOR_KEY);
-    let _ = SetLayeredWindowAttributes(toast_hwnd, toast_key, 0, LWA_ALPHA | LWA_COLORKEY);
 
     let hook = SetWinEventHook(
         EVENT_SYSTEM_FOREGROUND,
@@ -1183,9 +1369,26 @@ unsafe fn init_inner() -> HWND {
         .map(|v| v as i32)
         .unwrap_or(DEFAULT_LABEL_HEIGHT);
     let label_theme = configured_label_theme(&cfg);
+    let com_apartment = ComApartment::initialize();
+    let compositor = if com_apartment.usable {
+        match Compositor::new() {
+            Ok(compositor) => Some(compositor),
+            Err(error) => {
+                debug_log(&format!(
+                    "DirectComposition compositor initialization failed: {error}"
+                ));
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     *state_unguarded() = Some(OverlayState {
+        compositor,
+        com_apartment,
         pip_windows: Vec::new(),
+        pending_composition_destroys: Vec::new(),
         eq_windows: Vec::new(),
         pip_order: Vec::new(),
         preferred_box_order: cfg.box_order.clone(),
@@ -1195,6 +1398,9 @@ unsafe fn init_inner() -> HWND {
         active_label_class: None,
         active_label_color: LABEL_COLORS[0],
         active_label_number: 0,
+        active_label_hovered: false,
+        active_scene_key: None,
+        banner_scene_key: None,
         broadcast_label_hwnd: bc_hwnd,
         label_height,
         label_alpha,
@@ -1222,6 +1428,7 @@ unsafe fn init_inner() -> HWND {
             hwnd: toast_hwnd,
             text: String::new(),
             phase: ToastPhase::Hidden,
+            scene_ready: false,
             alpha: 0,
             phase_start: 0,
             duration_ms: cfg
@@ -1339,6 +1546,7 @@ unsafe fn poll_inner_guarded() {
             update_active_label(s);
         }
         apply_alt_tab_hiding(s);
+        service_compositor_recovery(s);
         update_visibility(s);
         debug_assert_client_partition(s);
         publish_control_state(s);
@@ -1441,6 +1649,7 @@ unsafe fn poll_inner_guarded() {
 
     apply_alt_tab_hiding(s);
     rebuild_thumbnails(s);
+    service_compositor_recovery(s);
     update_visibility(s);
     debug_assert_client_partition(s);
     publish_control_state(s);
@@ -1764,13 +1973,23 @@ unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
 }
 
 unsafe fn rebuild_thumbnails_guarded(s: &mut OverlayState) {
-    // Destroy existing PiP windows and unregister thumbnails.
-    for pw in s.pip_windows.drain(..) {
+    // Destroy existing PiP windows only after authored composition surfaces
+    // are detached. DWM thumbnail ownership remains on the host HWND.
+    let previous = std::mem::take(&mut s.pip_windows);
+    for pw in previous {
+        let composition_detached = unregister_composition_surface(s, pw.label_hwnd);
         if pw.thumb != 0 {
             let _ = DwmUnregisterThumbnail(pw.thumb);
         }
         if !pw.label_hwnd.is_invalid() {
-            let _ = DestroyWindow(pw.label_hwnd);
+            if composition_detached {
+                let _ = DestroyWindow(pw.label_hwnd);
+            } else {
+                let _ = ShowWindow(pw.label_hwnd, SW_HIDE);
+                if !s.pending_composition_destroys.contains(&pw.label_hwnd) {
+                    s.pending_composition_destroys.push(pw.label_hwnd);
+                }
+            }
         }
         let _ = DestroyWindow(pw.hwnd);
     }
@@ -1797,8 +2016,9 @@ unsafe fn rebuild_thumbnails_guarded(s: &mut OverlayState) {
 
     let pip_class = w!("StonemitePipClass");
 
-    for (i, &pid) in s.pip_order.iter().enumerate() {
-        let Some(eq_win) = s.eq_windows.iter().find(|w| w.pid == pid) else {
+    let pip_order = s.pip_order.clone();
+    for (i, pid) in pip_order.into_iter().enumerate() {
+        let Some(eq_win) = s.eq_windows.iter().find(|w| w.pid == pid).cloned() else {
             continue;
         };
         if !IsWindow(eq_win.hwnd).as_bool() {
@@ -1857,33 +2077,30 @@ unsafe fn rebuild_thumbnails_guarded(s: &mut OverlayState) {
         };
         let _ = DwmUpdateThumbnailProperties(thumb, &props);
 
-        // Create layered label overlay window on top of the PiP.
-        let label_text = format_label(eq_win);
-        let (lbl_w, lbl_h) = pip_label_overlay_size(s, cw, ch, border);
+        // One full-host transparent composition sibling owns every authored
+        // PiP visual. The DWM host remains thumbnail-only beneath it.
+        let label_text = format_label(&eq_win);
         let pip_label_class = w!("StonemitePipLabelClass");
         let lbl_hwnd = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+            WS_EX_TOPMOST
+                | WS_EX_TOOLWINDOW
+                | WS_EX_TRANSPARENT
+                | WS_EX_NOACTIVATE
+                | WS_EX_NOREDIRECTIONBITMAP,
             pip_label_class,
-            w!("StonemitePipLabel"),
+            w!("StonemitePipComposition"),
             WS_POPUP,
-            rect.left + border,
-            rect.top + border,
-            lbl_w,
-            lbl_h,
+            rect.left,
+            rect.top,
+            cw,
+            ch,
             None,
             None,
             None,
             None,
         )
-        .expect("Failed to create PiP label window");
+        .expect("Failed to create PiP composition window");
         SetWindowLongPtrW(lbl_hwnd, GWLP_USERDATA, (i + 1) as isize);
-        let key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
-        let label_alpha = if s.notifications.contains_key(&pid) {
-            s.label_alpha.max(notifications::LABEL_MIN_ALPHA)
-        } else {
-            s.label_alpha
-        };
-        let _ = SetLayeredWindowAttributes(lbl_hwnd, key, label_alpha, LWA_ALPHA | LWA_COLORKEY);
 
         s.pip_windows.push(PipWindowEntry {
             hwnd,
@@ -1895,6 +2112,7 @@ unsafe fn rebuild_thumbnails_guarded(s: &mut OverlayState) {
             number: eq_win.number,
             hovered: false,
         });
+        render_pip_surface(s, s.pip_windows.len() - 1);
     }
 
     update_active_label(s);
@@ -1954,19 +2172,49 @@ unsafe fn update_active_label(s: &mut OverlayState) {
     let lh = s.label_height;
     let style = LabelStyle::new(d, lh);
     let label_h = style.height();
-    let timer_height = active_timer(s, Instant::now())
+    let active_timer = active_timer(s, Instant::now());
+    let timer_label = active_timer.map(|timer| timer.label.to_string());
+    let timer_start = active_timer.map(|timer| timer.start_time);
+    let timer_height = timer_label
+        .as_ref()
         .map(|_| dpi(TIMER_PANEL_GAP + TIMER_PANEL_HEIGHT, d))
         .unwrap_or(0);
+    let active_scene_key = ActiveSceneKey {
+        text: s.active_label_text.clone(),
+        class: s.active_label_class.clone(),
+        color: s.active_label_color,
+        number: s.active_label_number,
+        label_height: s.label_height,
+        label_alpha: s.label_alpha,
+        dpi_bits: s.dpi_scale.to_bits(),
+        theme: s.label_theme.clone(),
+        timer_label,
+        timer_start,
+    };
+    let active_scene_changed = s.active_scene_key.as_ref() != Some(&active_scene_key);
+    if !ensure_compositor(s) {
+        return;
+    }
     let model = label_model(
         &s.active_label_text,
         s.active_label_class.as_deref(),
         s.active_label_number,
         s.active_label_color,
     );
-
-    let hdc = windows::Win32::Graphics::Gdi::GetDC(s.active_label_hwnd);
-    let text_width = render::measure_label_width(hdc, &model, style, &s.label_theme, i32::MAX);
-    let _ = windows::Win32::Graphics::Gdi::ReleaseDC(s.active_label_hwnd, hdc);
+    let text_width = match s
+        .compositor
+        .as_ref()
+        .expect("compositor ensured")
+        .measure_label_width(&model, style, &s.label_theme, i32::MAX)
+    {
+        Ok(width) => width,
+        Err(error) => {
+            debug_log(&format!(
+                "DirectWrite active-label measurement failed: {error}"
+            ));
+            return;
+        }
+    };
 
     // When PiP edge is left, anchor the label at top-right so the strip doesn't cover it.
     let label_x = if matches!(s.pip_edge, config::PipEdge::Left) {
@@ -1975,76 +2223,70 @@ unsafe fn update_active_label(s: &mut OverlayState) {
         top_left.x
     };
 
-    let _ = SetWindowPos(
+    let active_size = (text_width, label_h + timer_height);
+    if (active_scene_changed || !surface_is_ready(s, s.active_label_hwnd))
+        && !render_active_label_surface_for_size(s, active_size.0, active_size.1)
+    {
+        return;
+    }
+    s.active_scene_key = Some(active_scene_key);
+    position_window_if_changed(
         s.active_label_hwnd,
         HWND_TOPMOST,
         label_x,
         top_left.y,
-        text_width,
-        label_h + timer_height,
-        SWP_NOACTIVATE,
+        active_size.0,
+        active_size.1,
     );
-
-    // Color key transparency: magenta pixels become fully transparent, rest gets alpha.
-    let key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
-    let _ = SetLayeredWindowAttributes(
-        s.active_label_hwnd,
-        key,
-        s.label_alpha,
-        LWA_ALPHA | LWA_COLORKEY,
-    );
-
-    let _ = InvalidateRect(s.active_label_hwnd, None, true);
 
     // Position the explicit keyboard/mouse input indicator next to the active label.
     if let Some(bc_text) = input_indicator_text() {
-        let bc_font = CreateFontW(
-            dpi(lh - 12, d),
-            0,
-            0,
-            0,
-            FW_HEAVY.0 as i32,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            w!("Segoe UI"),
-        );
-        let bc_hdc = windows::Win32::Graphics::Gdi::GetDC(s.broadcast_label_hwnd);
-        let bc_old = SelectObject(bc_hdc, bc_font);
-        let bc_wide: Vec<u16> = bc_text.encode_utf16().collect();
-        let mut bc_size = windows::Win32::Foundation::SIZE::default();
-        let _ = GetTextExtentPoint32W(bc_hdc, &bc_wide, &mut bc_size);
-        let _ = SelectObject(bc_hdc, bc_old);
-        let _ = windows::Win32::Graphics::Gdi::DeleteObject(bc_font);
-        let _ = windows::Win32::Graphics::Gdi::ReleaseDC(s.broadcast_label_hwnd, bc_hdc);
-        let bc_width = bc_size.cx + dpi(20, d);
+        let bc_width = match s
+            .compositor
+            .as_ref()
+            .expect("compositor ensured")
+            .measure_text(
+                bc_text,
+                &UiTextRole::StatusBanner.font(),
+                UiTextRole::StatusBanner.height(d, (lh - 12).max(1)),
+            ) {
+            Ok(width) => width + dpi(20, d),
+            Err(error) => {
+                debug_log(&format!(
+                    "DirectWrite status-banner measurement failed: {error}"
+                ));
+                return;
+            }
+        };
         let bc_x = if matches!(s.pip_edge, config::PipEdge::Left) {
             label_x - bc_width - dpi(4, d)
         } else {
             label_x + text_width + dpi(4, d)
         };
-        let _ = SetWindowPos(
+        let banner_scene_key = BannerSceneKey {
+            text: bc_text.to_owned(),
+            background: input_indicator_background(),
+            label_height: s.label_height,
+            label_alpha: s.label_alpha,
+            dpi_bits: s.dpi_scale.to_bits(),
+        };
+        let banner_scene_changed = s.banner_scene_key.as_ref() != Some(&banner_scene_key);
+        if (banner_scene_changed || !surface_is_ready(s, s.broadcast_label_hwnd))
+            && !render_banner_surface_for_size(s, bc_width, label_h)
+        {
+            return;
+        }
+        s.banner_scene_key = Some(banner_scene_key);
+        position_window_if_changed(
             s.broadcast_label_hwnd,
             HWND_TOPMOST,
             bc_x,
             top_left.y,
             bc_width,
             label_h,
-            SWP_NOACTIVATE,
         );
-        let _ = SetLayeredWindowAttributes(
-            s.broadcast_label_hwnd,
-            key,
-            s.label_alpha,
-            LWA_ALPHA | LWA_COLORKEY,
-        );
-        let _ = InvalidateRect(s.broadcast_label_hwnd, None, true);
     } else {
+        s.banner_scene_key = None;
         let _ = ShowWindow(s.broadcast_label_hwnd, SW_HIDE);
     }
 }
@@ -2053,40 +2295,39 @@ unsafe fn update_active_label(s: &mut OverlayState) {
 // Visibility
 // ---------------------------------------------------------------------------
 
-unsafe fn update_visibility(s: &mut OverlayState) {
-    if s.hidden_by_user {
-        for pw in &mut s.pip_windows {
-            pw.hovered = false;
-            let _ = ShowWindow(pw.hwnd, SW_HIDE);
-            let _ = ShowWindow(pw.label_hwnd, SW_HIDE);
-        }
-        let _ = ShowWindow(s.active_label_hwnd, SW_HIDE);
-        let _ = ShowWindow(s.broadcast_label_hwnd, SW_HIDE);
-        let _ = ShowWindow(s.toast.hwnd, SW_HIDE);
-        let _ = KillTimer(s.toast.hwnd, TIMER_TOAST_FADE);
-        s.toast.phase = ToastPhase::Hidden;
-        return;
-    }
+fn overlay_visibility_policy(
+    hidden_by_user: bool,
+    has_pip: bool,
+    context_menu_open: bool,
+    foreground_is_eq_or_ours: bool,
+) -> bool {
+    !hidden_by_user && has_pip && (context_menu_open || foreground_is_eq_or_ours)
+}
 
+unsafe fn overlay_visibility_allowed(s: &OverlayState) -> bool {
     let has_pip = !s.pip_order.is_empty();
-    let fg = GetForegroundWindow();
-    let eq_or_ours = is_eq_or_ours(fg, s);
-    let visible = has_pip && (s.context_menu_open || eq_or_ours);
+    let foreground_matches = if s.hidden_by_user || !has_pip {
+        false
+    } else {
+        is_eq_or_ours(GetForegroundWindow(), s)
+    };
+    overlay_visibility_policy(
+        s.hidden_by_user,
+        has_pip,
+        s.context_menu_open,
+        foreground_matches,
+    )
+}
 
-    if visible {
-        // Show PiP thumbnail windows first, then labels on top.
-        // ShowWindow first, then SetWindowPos to re-assert z-order
-        // (interactions with a PiP can promote it above its label).
-        for pw in &s.pip_windows {
-            let _ = ShowWindow(pw.hwnd, SW_SHOWNOACTIVATE);
-        }
-        for pw in &s.pip_windows {
-            let _ = ShowWindow(pw.label_hwnd, SW_SHOWNOACTIVATE);
-        }
-        // Re-assert z-order: labels above thumbnails.
-        for pw in &s.pip_windows {
+unsafe fn apply_pip_pair_visibility(s: &OverlayState, visible: bool) {
+    let was_guarded = IN_OVERLAY.replace(true);
+    for pip in &s.pip_windows {
+        if visible && surface_is_ready(s, pip.label_hwnd) {
+            let _ = ShowWindow(pip.hwnd, SW_SHOWNOACTIVATE);
+            let _ = ShowWindow(pip.label_hwnd, SW_SHOWNOACTIVATE);
+            // Interactions with a PiP can promote it above its sibling.
             let _ = SetWindowPos(
-                pw.label_hwnd,
+                pip.label_hwnd,
                 HWND_TOPMOST,
                 0,
                 0,
@@ -2094,26 +2335,62 @@ unsafe fn update_visibility(s: &mut OverlayState) {
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
+        } else {
+            let _ = ShowWindow(pip.hwnd, SW_HIDE);
+            let _ = ShowWindow(pip.label_hwnd, SW_HIDE);
+            if visible {
+                request_redraw(pip.label_hwnd);
+            }
         }
-        if !s.active_label_text.is_empty() {
+    }
+    IN_OVERLAY.set(was_guarded);
+}
+
+unsafe fn update_visibility(s: &mut OverlayState) {
+    if overlay_visibility_allowed(s) {
+        // Publish any state accumulated while hidden before exposing a visual.
+        for index in 0..s.pip_windows.len() {
+            let hwnd = s.pip_windows[index].label_hwnd;
+            if has_redraw_request(hwnd) {
+                render_pip_surface(s, index);
+            }
+        }
+        if has_redraw_request(s.active_label_hwnd) {
+            render_active_label_surface(s);
+        }
+        if has_redraw_request(s.broadcast_label_hwnd) {
+            render_banner_surface(s);
+        }
+
+        // A thumbnail host and its full-host authored sibling are one visible
+        // pair. DWM remains registered while both wait for a complete frame.
+        apply_pip_pair_visibility(s, true);
+        if !s.active_label_text.is_empty() && surface_is_ready(s, s.active_label_hwnd) {
             let _ = ShowWindow(s.active_label_hwnd, SW_SHOWNOACTIVATE);
         }
-        if input_indicator_text().is_some() {
+        if input_indicator_text().is_some() && surface_is_ready(s, s.broadcast_label_hwnd) {
             let _ = ShowWindow(s.broadcast_label_hwnd, SW_SHOWNOACTIVATE);
         } else {
             let _ = ShowWindow(s.broadcast_label_hwnd, SW_HIDE);
         }
     } else {
         for pw in &mut s.pip_windows {
-            pw.hovered = false;
+            if std::mem::take(&mut pw.hovered) {
+                request_redraw(pw.label_hwnd);
+            }
             let _ = ShowWindow(pw.hwnd, SW_HIDE);
             let _ = ShowWindow(pw.label_hwnd, SW_HIDE);
+        }
+        if std::mem::take(&mut s.active_label_hovered) {
+            let alpha = s.label_alpha;
+            set_composition_opacity(s, s.active_label_hwnd, alpha);
         }
         let _ = ShowWindow(s.active_label_hwnd, SW_HIDE);
         let _ = ShowWindow(s.broadcast_label_hwnd, SW_HIDE);
         let _ = ShowWindow(s.toast.hwnd, SW_HIDE);
         let _ = KillTimer(s.toast.hwnd, TIMER_TOAST_FADE);
         s.toast.phase = ToastPhase::Hidden;
+        s.toast.scene_ready = false;
     }
 }
 
@@ -2989,6 +3266,677 @@ unsafe fn handle_edge_assign(s: &mut OverlayState, cmd_id: u32) {
 }
 
 // ---------------------------------------------------------------------------
+// DirectComposition scene publication and redraw scheduling
+// ---------------------------------------------------------------------------
+
+unsafe fn position_pip_pair(pip: &PipWindowEntry, x: i32, y: i32, width: i32, height: i32) {
+    let deferred = (|| -> windows::core::Result<()> {
+        let batch = BeginDeferWindowPos(2)?;
+        let batch = DeferWindowPos(
+            batch,
+            pip.hwnd,
+            HWND::default(),
+            x,
+            y,
+            width,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )?;
+        let batch = DeferWindowPos(
+            batch,
+            pip.label_hwnd,
+            HWND_TOPMOST,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE,
+        )?;
+        EndDeferWindowPos(batch)
+    })();
+    if deferred.is_err() {
+        let _ = SetWindowPos(
+            pip.hwnd,
+            HWND::default(),
+            x,
+            y,
+            width,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+        let _ = SetWindowPos(
+            pip.label_hwnd,
+            HWND_TOPMOST,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE,
+        );
+    }
+}
+
+unsafe fn position_window_if_changed(
+    hwnd: HWND,
+    insert_after: HWND,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> bool {
+    let mut current = RECT::default();
+    let matches = GetWindowRect(hwnd, &mut current).is_ok()
+        && current.left == x
+        && current.top == y
+        && current.right - current.left == width
+        && current.bottom - current.top == height;
+    matches || SetWindowPos(hwnd, insert_after, x, y, width, height, SWP_NOACTIVATE).is_ok()
+}
+
+fn client_scene_rect(hwnd: HWND) -> Option<Rect> {
+    let mut client = RECT::default();
+    unsafe { GetClientRect(hwnd, &mut client).ok()? };
+    let width = (client.right - client.left).max(0);
+    let height = (client.bottom - client.top).max(0);
+    (width > 0 && height > 0).then(|| Rect::new(0, 0, width, height))
+}
+
+unsafe fn hide_unready_pip_pairs(s: &OverlayState) {
+    let was_guarded = IN_OVERLAY.replace(true);
+    for pip in &s.pip_windows {
+        if !surface_is_ready(s, pip.label_hwnd) {
+            let _ = ShowWindow(pip.hwnd, SW_HIDE);
+            let _ = ShowWindow(pip.label_hwnd, SW_HIDE);
+        }
+    }
+    IN_OVERLAY.set(was_guarded);
+}
+
+unsafe fn hide_all_pip_pairs(s: &OverlayState) {
+    let was_guarded = IN_OVERLAY.replace(true);
+    for pip in &s.pip_windows {
+        let _ = ShowWindow(pip.hwnd, SW_HIDE);
+        let _ = ShowWindow(pip.label_hwnd, SW_HIDE);
+    }
+    IN_OVERLAY.set(was_guarded);
+}
+
+unsafe fn schedule_compositor_recovery(s: &OverlayState) {
+    let redraws = match s
+        .compositor
+        .as_ref()
+        .map(|compositor| compositor.recovery_redraw_hwnds())
+    {
+        Some(Ok(redraws)) => redraws,
+        Some(Err(error)) => {
+            debug_log(&format!(
+                "DirectComposition recovery scheduling failed: {error}"
+            ));
+            return;
+        }
+        None => return,
+    };
+    if redraws.is_empty() {
+        return;
+    }
+
+    hide_unready_pip_pairs(s);
+    for hwnd in redraws {
+        request_redraw(hwnd);
+    }
+    if SERVICING_COMPOSITOR_RECOVERY.get() {
+        return;
+    }
+    let first = COMPOSITOR_RECOVERY_POSTED.replace(true);
+    if !first
+        && PostMessageW(
+            s.active_label_hwnd,
+            WM_SERVICE_COMPOSITOR_RECOVERY,
+            WPARAM(0),
+            LPARAM(0),
+        )
+        .is_err()
+    {
+        COMPOSITOR_RECOVERY_POSTED.set(false);
+    }
+}
+
+unsafe fn ensure_compositor(s: &mut OverlayState) -> bool {
+    if !s.com_apartment.usable {
+        s.com_apartment = ComApartment::initialize();
+    }
+    if s.compositor.is_none() && s.com_apartment.usable {
+        match Compositor::new() {
+            Ok(compositor) => s.compositor = Some(compositor),
+            Err(error) => {
+                debug_log(&format!(
+                    "DirectComposition compositor retry failed: {error}"
+                ));
+                hide_all_pip_pairs(s);
+                return false;
+            }
+        }
+    }
+    let Some(compositor) = s.compositor.as_mut() else {
+        hide_all_pip_pairs(s);
+        return false;
+    };
+    if let Err(error) = compositor.recover_if_needed() {
+        debug_log(&format!("DirectComposition device retry failed: {error}"));
+        hide_all_pip_pairs(s);
+        return false;
+    }
+    schedule_compositor_recovery(s);
+    true
+}
+
+unsafe fn unregister_composition_surface(s: &mut OverlayState, hwnd: HWND) -> bool {
+    let Some(compositor) = s.compositor.as_mut() else {
+        return true;
+    };
+    match compositor.unregister_surface(hwnd) {
+        Ok(()) => {
+            clear_redraw_request(hwnd);
+            true
+        }
+        Err(first_error) => {
+            debug_log(&format!(
+                "DirectComposition surface teardown retry: {first_error}"
+            ));
+            if let Err(error) = compositor.recover_device() {
+                debug_log(&format!(
+                    "DirectComposition teardown recovery failed: {error}"
+                ));
+                return false;
+            }
+            match compositor.unregister_surface(hwnd) {
+                Ok(()) => {
+                    clear_redraw_request(hwnd);
+                    true
+                }
+                Err(error) => {
+                    debug_log(&format!(
+                        "DirectComposition surface teardown failed: {error}"
+                    ));
+                    false
+                }
+            }
+        }
+    }
+}
+
+unsafe fn retry_pending_composition_destroys(s: &mut OverlayState) {
+    let pending = std::mem::take(&mut s.pending_composition_destroys);
+    for hwnd in pending {
+        let detached = unregister_composition_surface(s, hwnd);
+        if detached && IN_OVERLAY.get() {
+            // DestroyWindow pumps messages, so only destroy while the outer
+            // overlay transaction guard blocks re-entrant state access.
+            let _ = DestroyWindow(hwnd);
+        } else {
+            s.pending_composition_destroys.push(hwnd);
+        }
+    }
+}
+
+unsafe fn ensure_surface(
+    s: &mut OverlayState,
+    hwnd: HWND,
+    width: i32,
+    height: i32,
+    opacity: f32,
+) -> bool {
+    if !ensure_compositor(s) {
+        retain_redraw_request(hwnd);
+        return false;
+    }
+    let result = {
+        let compositor = s.compositor.as_mut().expect("compositor ensured");
+        match compositor.has_surface(hwnd) {
+            Ok(true) => Ok(()),
+            Ok(false) => compositor.register_surface(
+                hwnd,
+                width.max(1) as u32,
+                height.max(1) as u32,
+                opacity,
+            ),
+            Err(error) => Err(error),
+        }
+    };
+    match result {
+        Ok(()) => true,
+        Err(error) => {
+            debug_log(&format!(
+                "DirectComposition surface registration/lookup failed: {error}"
+            ));
+            retain_redraw_request(hwnd);
+            service_compositor_recovery(s);
+            false
+        }
+    }
+}
+
+unsafe fn set_composition_opacity(s: &mut OverlayState, hwnd: HWND, alpha: u8) {
+    if !ensure_compositor(s) {
+        retain_redraw_request(hwnd);
+        return;
+    }
+    let result = {
+        let compositor = s.compositor.as_mut().expect("compositor ensured");
+        compositor
+            .set_surface_opacity(hwnd, f32::from(alpha) / 255.0)
+            .and_then(|()| compositor.flush())
+    };
+    if let Err(error) = result {
+        debug_log(&format!("DirectComposition opacity commit failed: {error}"));
+        retain_redraw_request(hwnd);
+        service_compositor_recovery(s);
+    }
+}
+
+fn surface_is_ready(s: &OverlayState, hwnd: HWND) -> bool {
+    s.compositor
+        .as_ref()
+        .and_then(|compositor| compositor.surface_is_attached(hwnd).ok())
+        .unwrap_or(false)
+}
+
+fn mark_redraw_pending(pending: &mut HashSet<isize>, hwnd: HWND) -> bool {
+    !hwnd.is_invalid() && pending.insert(hwnd.0 as isize)
+}
+
+fn take_redraw_pending(pending: &mut HashSet<isize>, hwnd: HWND) -> bool {
+    !hwnd.is_invalid() && pending.remove(&(hwnd.0 as isize))
+}
+
+unsafe fn request_redraw(hwnd: HWND) {
+    let first = REDRAW_PENDING.with(|pending| mark_redraw_pending(&mut pending.borrow_mut(), hwnd));
+    if first {
+        let _ = InvalidateRect(hwnd, None, false);
+    }
+}
+
+fn retain_redraw_request(hwnd: HWND) {
+    REDRAW_PENDING.with(|pending| {
+        mark_redraw_pending(&mut pending.borrow_mut(), hwnd);
+    });
+}
+
+fn has_redraw_request(hwnd: HWND) -> bool {
+    REDRAW_PENDING.with(|pending| pending.borrow().contains(&(hwnd.0 as isize)))
+}
+
+fn take_redraw_request(hwnd: HWND) -> bool {
+    REDRAW_PENDING.with(|pending| take_redraw_pending(&mut pending.borrow_mut(), hwnd))
+}
+
+fn clear_redraw_request(hwnd: HWND) {
+    REDRAW_PENDING.with(|pending| {
+        pending.borrow_mut().remove(&(hwnd.0 as isize));
+    });
+}
+
+unsafe fn service_compositor_recovery(s: &mut OverlayState) {
+    if SERVICING_COMPOSITOR_RECOVERY.replace(true) {
+        return;
+    }
+    COMPOSITOR_RECOVERY_POSTED.set(false);
+    let was_guarded = IN_OVERLAY.replace(true);
+    service_compositor_recovery_guarded(s);
+    IN_OVERLAY.set(was_guarded);
+    SERVICING_COMPOSITOR_RECOVERY.set(false);
+}
+
+unsafe fn suppress_toast_publication(s: &mut OverlayState) {
+    s.toast.scene_ready = false;
+    let _ = ShowWindow(s.toast.hwnd, SW_HIDE);
+    let _ = KillTimer(s.toast.hwnd, TIMER_TOAST_FADE);
+}
+
+unsafe fn service_compositor_recovery_guarded(s: &mut OverlayState) {
+    if !ensure_compositor(s) {
+        suppress_toast_publication(s);
+        return;
+    }
+    retry_pending_composition_destroys(s);
+    let redraws = match s
+        .compositor
+        .as_ref()
+        .expect("compositor ensured")
+        .recovery_redraw_hwnds()
+    {
+        Ok(redraws) => redraws,
+        Err(error) => {
+            debug_log(&format!(
+                "DirectComposition recovery handshake failed: {error}"
+            ));
+            suppress_toast_publication(s);
+            return;
+        }
+    };
+    for hwnd in redraws {
+        retain_redraw_request(hwnd);
+    }
+
+    // Each role gets at most one complete-frame attempt in this recovery pass.
+    // A second device loss retains dirty work for the normal polling retry
+    // rather than recursing indefinitely on persistent hardware failure.
+    if has_redraw_request(s.active_label_hwnd) {
+        render_active_label_surface(s);
+    }
+    if has_redraw_request(s.broadcast_label_hwnd) {
+        render_banner_surface(s);
+    }
+    if has_redraw_request(s.toast.hwnd) {
+        render_toast_surface(s);
+    }
+    for index in 0..s.pip_windows.len() {
+        if has_redraw_request(s.pip_windows[index].label_hwnd) {
+            render_pip_surface(s, index);
+        }
+    }
+
+    apply_pip_pair_visibility(s, overlay_visibility_allowed(s));
+    if toast_publication_allowed(
+        s.toast.phase,
+        s.toast.scene_ready,
+        overlay_visibility_allowed(s),
+        surface_is_ready(s, s.toast.hwnd),
+    ) {
+        let _ = ShowWindow(s.toast.hwnd, SW_SHOWNOACTIVATE);
+        let _ = SetTimer(s.toast.hwnd, TIMER_TOAST_FADE, TOAST_FADE_STEP_MS, None);
+    } else {
+        let _ = ShowWindow(s.toast.hwnd, SW_HIDE);
+        let _ = KillTimer(s.toast.hwnd, TIMER_TOAST_FADE);
+    }
+}
+
+fn timer_scene_values(timer: &timers::TimerOverlay, now: Instant) -> (String, String, f32) {
+    (
+        timer.label.to_string(),
+        format_timer_remaining(timer.remaining_time(now)),
+        timer.progress(now),
+    )
+}
+
+unsafe fn render_active_label_surface(s: &mut OverlayState) {
+    let Some(canvas) = client_scene_rect(s.active_label_hwnd) else {
+        return;
+    };
+    let _ = render_active_label_surface_for_size(s, canvas.width(), canvas.height());
+}
+
+unsafe fn render_active_label_surface_for_size(
+    s: &mut OverlayState,
+    width: i32,
+    height: i32,
+) -> bool {
+    if s.active_label_text.is_empty() {
+        return false;
+    }
+    let canvas = Rect::new(0, 0, width.max(1), height.max(1));
+    if !ensure_surface(s, s.active_label_hwnd, canvas.width(), canvas.height(), 1.0) {
+        return false;
+    }
+    let now = Instant::now();
+    let timer_values = active_timer(s, now).map(|timer| timer_scene_values(timer, now));
+    let timer = timer_values
+        .as_ref()
+        .map(|(label, remaining, progress)| TimerScene {
+            label,
+            remaining_text: remaining,
+            progress: *progress,
+        });
+    let model = label_model(
+        &s.active_label_text,
+        s.active_label_class.as_deref(),
+        s.active_label_number,
+        s.active_label_color,
+    );
+    let scene = ActiveLabelScene {
+        canvas,
+        label: LabelScene {
+            model,
+            style: LabelStyle::new(s.dpi_scale, s.label_height),
+            theme: &s.label_theme,
+            alpha: if s.active_label_hovered {
+                s.label_alpha / 2
+            } else {
+                s.label_alpha
+            },
+        },
+        timer,
+    };
+    match s
+        .compositor
+        .as_mut()
+        .expect("compositor ensured")
+        .render_active_label(s.active_label_hwnd, &scene)
+    {
+        Ok(()) => {
+            clear_redraw_request(s.active_label_hwnd);
+            true
+        }
+        Err(error) => {
+            debug_log(&format!(
+                "DirectComposition active-label render failed: {error}"
+            ));
+            retain_redraw_request(s.active_label_hwnd);
+            service_compositor_recovery(s);
+            false
+        }
+    }
+}
+
+unsafe fn render_pip_surface(s: &mut OverlayState, pip_index: usize) {
+    let Some(pip) = s.pip_windows.get(pip_index) else {
+        return;
+    };
+    let Some(canvas) = client_scene_rect(pip.label_hwnd) else {
+        return;
+    };
+    let _ = render_pip_surface_for_size(s, pip_index, canvas.width(), canvas.height());
+}
+
+unsafe fn render_pip_surface_for_size(
+    s: &mut OverlayState,
+    pip_index: usize,
+    width: i32,
+    height: i32,
+) -> bool {
+    let Some(pip) = s.pip_windows.get(pip_index) else {
+        return false;
+    };
+    let hwnd = pip.label_hwnd;
+    let canvas = Rect::new(0, 0, width.max(1), height.max(1));
+    if !ensure_surface(s, hwnd, canvas.width(), canvas.height(), 1.0) {
+        return false;
+    }
+    let pip = &s.pip_windows[pip_index];
+    let now = Instant::now();
+    let source_id = format!("pid:{}", pip.pid);
+    let timer_values = s
+        .timers
+        .visible_for(Some(&source_id), now)
+        .map(|timer| timer_scene_values(timer, now));
+    let timer = timer_values
+        .as_ref()
+        .map(|(label, remaining, progress)| TimerScene {
+            label,
+            remaining_text: remaining,
+            progress: *progress,
+        });
+    let now_ms = windows::Win32::System::SystemInformation::GetTickCount64();
+    let notification = s
+        .notifications
+        .get(&pip.pid)
+        .map(|notification| notification.visual_snapshot(now_ms, s.animations_enabled));
+    let reorder_dragging = s.reorder_drag.as_ref().is_some_and(|drag| drag.dragging);
+    let drag_source =
+        reorder_dragging && s.reorder_drag.as_ref().map(|drag| drag.from_index) == Some(pip_index);
+    let drop_target = reorder_dragging
+        && s.drop_target == Some(pip_index)
+        && s.reorder_drag.as_ref().map(|drag| drag.from_index) != Some(pip_index);
+    let model = label_model(
+        &pip.label,
+        pip.class.as_deref(),
+        pip.number,
+        color_for_number(pip.number),
+    );
+    let scene = PipScene {
+        canvas,
+        border_width: dpi(BORDER_WIDTH, s.dpi_scale),
+        scale: s.dpi_scale,
+        label: LabelScene {
+            model,
+            style: LabelStyle::new(s.dpi_scale, s.label_height),
+            theme: &s.label_theme,
+            alpha: s.label_alpha,
+        },
+        timer,
+        notification,
+        interaction: PipInteractionScene {
+            hovered: pip.hovered,
+            edit_mode: s.edit_mode,
+            reorder_dragging,
+            drag_source,
+            drop_target,
+        },
+    };
+    match s
+        .compositor
+        .as_mut()
+        .expect("compositor ensured")
+        .render_pip_scene(hwnd, &scene)
+    {
+        Ok(()) => {
+            clear_redraw_request(hwnd);
+            true
+        }
+        Err(error) => {
+            debug_log(&format!(
+                "DirectComposition PiP scene render failed: {error}"
+            ));
+            retain_redraw_request(hwnd);
+            service_compositor_recovery(s);
+            false
+        }
+    }
+}
+
+fn input_indicator_background() -> Color {
+    let value = if crate::broadcast::is_active() {
+        0x002030CC
+    } else {
+        match crate::broadcast::mouse_clutch_status() {
+            crate::broadcast::MouseClutchStatus::Inactive => 0x002030CC,
+            crate::broadcast::MouseClutchStatus::Active => 0x00906A28,
+            crate::broadcast::MouseClutchStatus::Releasing => 0x002080C8,
+        }
+    };
+    Color::from_colorref(value)
+}
+
+unsafe fn render_banner_surface(s: &mut OverlayState) {
+    let Some(bounds) = client_scene_rect(s.broadcast_label_hwnd) else {
+        return;
+    };
+    let _ = render_banner_surface_for_size(s, bounds.width(), bounds.height());
+}
+
+unsafe fn render_banner_surface_for_size(s: &mut OverlayState, width: i32, height: i32) -> bool {
+    let Some(text) = input_indicator_text() else {
+        return false;
+    };
+    let bounds = Rect::new(0, 0, width.max(1), height.max(1));
+    if !ensure_surface(
+        s,
+        s.broadcast_label_hwnd,
+        bounds.width(),
+        bounds.height(),
+        1.0,
+    ) {
+        return false;
+    }
+    let scene = StatusBannerScene {
+        bounds,
+        text,
+        background: input_indicator_background(),
+        alpha: s.label_alpha,
+        scale: s.dpi_scale,
+        logical_label_height: s.label_height,
+    };
+    match s
+        .compositor
+        .as_mut()
+        .expect("compositor ensured")
+        .render_status_banner(s.broadcast_label_hwnd, &scene)
+    {
+        Ok(()) => {
+            clear_redraw_request(s.broadcast_label_hwnd);
+            true
+        }
+        Err(error) => {
+            debug_log(&format!(
+                "DirectComposition status-banner render failed: {error}"
+            ));
+            retain_redraw_request(s.broadcast_label_hwnd);
+            service_compositor_recovery(s);
+            false
+        }
+    }
+}
+
+unsafe fn render_toast_surface(s: &mut OverlayState) {
+    s.toast.scene_ready = false;
+    let Some(bounds) = client_scene_rect(s.toast.hwnd) else {
+        suppress_toast_publication(s);
+        return;
+    };
+    let _ = render_toast_surface_for_size(s, bounds.width(), bounds.height());
+}
+
+unsafe fn render_toast_surface_for_size(s: &mut OverlayState, width: i32, height: i32) -> bool {
+    // An attachment left by an older toast cannot make this staged scene
+    // publishable. Only this render's successful Present1 restores readiness.
+    s.toast.scene_ready = false;
+    let bounds = Rect::new(0, 0, width.max(1), height.max(1));
+    if !ensure_surface(s, s.toast.hwnd, bounds.width(), bounds.height(), 1.0) {
+        return false;
+    }
+    let scene = ToastScene {
+        bounds,
+        text: &s.toast.text,
+        background: Color::from_colorref(TOAST_BG_COLOR),
+        alpha: s.toast.alpha,
+        scale: s.dpi_scale,
+        logical_height: s.toast.height,
+    };
+    match s
+        .compositor
+        .as_mut()
+        .expect("compositor ensured")
+        .render_toast(s.toast.hwnd, &scene)
+    {
+        Ok(()) => {
+            clear_redraw_request(s.toast.hwnd);
+            s.toast.scene_ready = true;
+            true
+        }
+        Err(error) => {
+            debug_log(&format!("DirectComposition toast render failed: {error}"));
+            retain_redraw_request(s.toast.hwnd);
+            service_compositor_recovery(s);
+            false
+        }
+    }
+}
+
+unsafe fn validate_composition_paint(hwnd: HWND) {
+    let _ = ValidateRect(hwnd, None);
+}
+
+// ---------------------------------------------------------------------------
 // Edit mode toggle
 // ---------------------------------------------------------------------------
 
@@ -3015,10 +3963,9 @@ unsafe fn toggle_edit_mode_inner(s: &mut OverlayState) {
     } else {
         s.edit_mode = true;
     }
-    // Repaint all PiP windows to show/hide edit indicators.
+    // Coalesce one complete composition redraw per PiP scene.
     for pw in &s.pip_windows {
-        let _ = InvalidateRect(pw.hwnd, None, true);
-        let _ = InvalidateRect(pw.label_hwnd, None, true);
+        request_redraw(pw.label_hwnd);
     }
 }
 
@@ -3036,264 +3983,8 @@ pub fn is_edit_mode() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Paint functions
+// Composition window procedures
 // ---------------------------------------------------------------------------
-
-unsafe fn paint_pip_window(hwnd: HWND, pip_idx: usize) {
-    let Some(s) = state().as_ref() else {
-        let mut ps = PAINTSTRUCT::default();
-        let _ = BeginPaint(hwnd, &mut ps);
-        let _ = EndPaint(hwnd, &ps);
-        return;
-    };
-    let Some(pw) = s.pip_windows.get(pip_idx) else {
-        let mut ps = PAINTSTRUCT::default();
-        let _ = BeginPaint(hwnd, &mut ps);
-        let _ = EndPaint(hwnd, &ps);
-        return;
-    };
-
-    let d = s.dpi_scale;
-    let border = dpi(BORDER_WIDTH, d);
-
-    let mut ps = PAINTSTRUCT::default();
-    let hdc = BeginPaint(hwnd, &mut ps);
-
-    // Black background.
-    let black_brush = HBRUSH(GetStockObject(BLACK_BRUSH).0);
-    let _ = FillRect(hdc, &ps.rcPaint, black_brush);
-
-    let mut client_rect = RECT::default();
-    let _ = GetClientRect(hwnd, &mut client_rect);
-
-    // Determine drag visual state.
-    let is_reorder_dragging = s.reorder_drag.as_ref().is_some_and(|drag| drag.dragging);
-    let is_drag_source =
-        is_reorder_dragging && s.reorder_drag.as_ref().map(|d| d.from_index) == Some(pip_idx);
-    let is_drop_target = is_reorder_dragging
-        && s.drop_target == Some(pip_idx)
-        && s.reorder_drag.as_ref().map(|d| d.from_index) != Some(pip_idx);
-
-    // Dimmed source during drag.
-    if is_drag_source {
-        let dim_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00333333));
-        let _ = FillRect(hdc, &client_rect, dim_brush);
-        let _ = windows::Win32::Graphics::Gdi::DeleteObject(dim_brush);
-    }
-
-    // Drop target highlight (yellow border).
-    if is_drop_target {
-        let swap_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x0000CCFF));
-        let _ = FrameRect(hdc, &client_rect, swap_brush);
-        for inset in 1..border + 1 {
-            let r = RECT {
-                left: client_rect.left + inset,
-                top: client_rect.top + inset,
-                right: client_rect.right - inset,
-                bottom: client_rect.bottom - inset,
-            };
-            let _ = FrameRect(hdc, &r, swap_brush);
-        }
-        let _ = windows::Win32::Graphics::Gdi::DeleteObject(swap_brush);
-    } else if pw.hovered && !is_reorder_dragging && !s.edit_mode {
-        // Normal hover highlight.
-        let white_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x00FFFFFF));
-        let _ = FrameRect(hdc, &client_rect, white_brush);
-        for inset in 1..border {
-            let r = RECT {
-                left: client_rect.left + inset,
-                top: client_rect.top + inset,
-                right: client_rect.right - inset,
-                bottom: client_rect.bottom - inset,
-            };
-            let _ = FrameRect(hdc, &r, white_brush);
-        }
-        let _ = windows::Win32::Graphics::Gdi::DeleteObject(white_brush);
-    }
-
-    // Notifications own the normal frame, while edit and reorder modes retain
-    // their stronger interaction indicators.
-    if !is_reorder_dragging && !s.edit_mode {
-        if let Some(notification) = s.notifications.get(&pw.pid) {
-            notifications::draw_border(
-                hdc,
-                client_rect,
-                border,
-                notification,
-                windows::Win32::System::SystemInformation::GetTickCount64(),
-                s.animations_enabled,
-            );
-        }
-    }
-
-    // Edit mode border indicator.
-    if s.edit_mode {
-        let edit_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(EDIT_BORDER_COLOR));
-        let _ = FrameRect(hdc, &client_rect, edit_brush);
-        let r2 = RECT {
-            left: client_rect.left + 1,
-            top: client_rect.top + 1,
-            right: client_rect.right - 1,
-            bottom: client_rect.bottom - 1,
-        };
-        let _ = FrameRect(hdc, &r2, edit_brush);
-        let _ = windows::Win32::Graphics::Gdi::DeleteObject(edit_brush);
-    }
-
-    let _ = EndPaint(hwnd, &ps);
-}
-
-unsafe fn paint_label(hwnd: HWND, text: &str, class: Option<&str>, bg_color: u32) {
-    let fallback_theme = LabelTheme::default();
-    let overlay = state();
-    let now = Instant::now();
-    let (d, number, lh, theme, timer) = overlay
-        .as_ref()
-        .map(|s| {
-            let timer = active_timer(s, now).map(|timer| {
-                (
-                    timer.label.to_string(),
-                    format_timer_remaining(timer.remaining_time(now)),
-                    timer.progress(now),
-                )
-            });
-            (
-                s.dpi_scale,
-                s.active_label_number,
-                s.label_height,
-                &s.label_theme,
-                timer,
-            )
-        })
-        .unwrap_or((1.0, 0, DEFAULT_LABEL_HEIGHT, &fallback_theme, None));
-    let mut ps = PAINTSTRUCT::default();
-    let hdc = BeginPaint(hwnd, &mut ps);
-    let mut bounds = RECT::default();
-    let _ = GetClientRect(hwnd, &mut bounds);
-
-    let style = LabelStyle::new(d, lh);
-    let label_bounds = RECT {
-        bottom: (bounds.top + style.height()).min(bounds.bottom),
-        ..bounds
-    };
-    let model = label_model(text, class, number, bg_color);
-    render::draw_label(
-        hdc,
-        bounds,
-        label_bounds,
-        &model,
-        style,
-        theme,
-        Color::from_colorref(LABEL_COLOR_KEY),
-    );
-
-    if let Some((timer_label, remaining, progress)) = timer {
-        let timer_bounds = RECT {
-            left: bounds.left,
-            top: label_bounds.bottom + dpi(TIMER_PANEL_GAP, d),
-            right: bounds.right,
-            bottom: bounds.bottom,
-        };
-        if timer_bounds.bottom > timer_bounds.top {
-            render::draw_timer_overlay(hdc, timer_bounds, &timer_label, &remaining, progress, d);
-        }
-    }
-
-    let _ = EndPaint(hwnd, &ps);
-}
-
-// ---------------------------------------------------------------------------
-// PiP label overlay helpers
-// ---------------------------------------------------------------------------
-
-unsafe fn paint_pip_label(hwnd: HWND) {
-    let raw_idx = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as usize;
-    if raw_idx == 0 {
-        return;
-    }
-    let pip_idx = raw_idx - 1;
-
-    let Some(s) = state().as_ref() else {
-        return;
-    };
-    let Some(pw) = s.pip_windows.get(pip_idx) else {
-        return;
-    };
-
-    let d = s.dpi_scale;
-    let style = LabelStyle::new(d, s.label_height);
-    let model = label_model(
-        &pw.label,
-        pw.class.as_deref(),
-        pw.number,
-        color_for_number(pw.number),
-    );
-    let notification = s.notifications.get(&pw.pid);
-    let now = Instant::now();
-    let source_id = format!("pid:{}", pw.pid);
-    let timer = s.timers.visible_for(Some(&source_id), now).map(|timer| {
-        (
-            timer.label.to_string(),
-            format_timer_remaining(timer.remaining_time(now)),
-            timer.progress(now),
-        )
-    });
-    let now_ms = windows::Win32::System::SystemInformation::GetTickCount64();
-
-    let mut ps = PAINTSTRUCT::default();
-    let hdc = BeginPaint(hwnd, &mut ps);
-
-    let mut rc = RECT::default();
-    let _ = GetClientRect(hwnd, &mut rc);
-    let label_h = style.height().min(rc.bottom - rc.top).max(1);
-    let max_label_w = (rc.right - rc.left).max(1);
-    let label_w = render::measure_label_width(hdc, &model, style, &s.label_theme, max_label_w);
-    let label_rc = RECT {
-        left: rc.left,
-        top: rc.top,
-        right: rc.left + label_w,
-        bottom: rc.top + label_h,
-    };
-
-    render::draw_label(
-        hdc,
-        rc,
-        label_rc,
-        &model,
-        style,
-        &s.label_theme,
-        Color::from_colorref(LABEL_COLOR_KEY),
-    );
-
-    let mut content_bottom = label_rc.bottom;
-    if let Some((timer_label, remaining, progress)) = timer {
-        let timer_bounds = RECT {
-            left: label_rc.left,
-            top: label_rc.bottom + dpi(TIMER_PANEL_GAP, d),
-            right: label_rc.right,
-            bottom: (label_rc.bottom + dpi(TIMER_PANEL_GAP + TIMER_PANEL_HEIGHT, d)).min(rc.bottom),
-        };
-        if timer_bounds.bottom - timer_bounds.top >= dpi(TIMER_PANEL_HEIGHT, d) {
-            render::draw_timer_overlay(hdc, timer_bounds, &timer_label, &remaining, progress, d);
-            content_bottom = timer_bounds.bottom;
-        }
-    }
-
-    if let Some(notification) = notification {
-        let unread_bottom =
-            notifications::draw_unread_dots(hdc, rc, content_bottom, d, notification);
-        if notification.preview_visible(now_ms) {
-            notifications::draw_preview(
-                hdc,
-                notifications::preview_bounds(rc, unread_bottom, d, notification),
-                d,
-                notification,
-            );
-        }
-    }
-
-    let _ = EndPaint(hwnd, &ps);
-}
 
 unsafe extern "system" fn pip_label_wnd_proc(
     hwnd: HWND,
@@ -3301,13 +3992,31 @@ unsafe extern "system" fn pip_label_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if IN_OVERLAY.get() {
+    if IN_OVERLAY.get()
+        && !matches!(
+            msg,
+            WM_PAINT | WM_ERASEBKGND | WM_NCHITTEST | WM_MOUSEACTIVATE
+        )
+    {
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
     match msg {
+        WM_NCHITTEST => LRESULT(HTTRANSPARENT as isize),
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
-            paint_pip_label(hwnd);
+            validate_composition_paint(hwnd);
+            let requested = !IN_OVERLAY.get() && take_redraw_request(hwnd);
+            if !IN_OVERLAY.get() {
+                let raw_idx = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as usize;
+                if raw_idx > 0 {
+                    if let Some(s) = state().as_mut() {
+                        if requested || !surface_is_ready(s, hwnd) {
+                            render_pip_surface(s, raw_idx - 1);
+                        }
+                    }
+                }
+            }
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -3324,215 +4033,32 @@ unsafe extern "system" fn broadcast_label_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if IN_OVERLAY.get() {
+    if IN_OVERLAY.get()
+        && !matches!(
+            msg,
+            WM_PAINT | WM_ERASEBKGND | WM_NCHITTEST | WM_MOUSEACTIVATE
+        )
+    {
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
     match msg {
+        WM_NCHITTEST => LRESULT(HTTRANSPARENT as isize),
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
-            paint_broadcast_label(hwnd);
+            validate_composition_paint(hwnd);
+            let requested = !IN_OVERLAY.get() && take_redraw_request(hwnd);
+            if !IN_OVERLAY.get() {
+                if let Some(s) = state().as_mut() {
+                    if requested || !surface_is_ready(s, hwnd) {
+                        render_banner_surface(s);
+                    }
+                }
+            }
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
-}
-
-unsafe fn paint_broadcast_label(hwnd: HWND) {
-    let (d, lh) = state()
-        .as_ref()
-        .map(|s| (s.dpi_scale, s.label_height))
-        .unwrap_or((1.0, DEFAULT_LABEL_HEIGHT));
-    let mut ps = PAINTSTRUCT::default();
-    let hdc = BeginPaint(hwnd, &mut ps);
-
-    let mut rc = RECT::default();
-    let _ = GetClientRect(hwnd, &mut rc);
-
-    // Fill with color key for transparent corners.
-    let key_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY));
-    let _ = FillRect(hdc, &rc, key_brush);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(key_brush);
-
-    // Keyboard Broadcast keeps its reserved red. Mouse-only activity uses teal;
-    // bounded release/drain uses amber. Text makes every state redundant.
-    let background = if crate::broadcast::is_active() {
-        0x002030CC
-    } else {
-        match crate::broadcast::mouse_clutch_status() {
-            crate::broadcast::MouseClutchStatus::Inactive => 0x002030CC,
-            crate::broadcast::MouseClutchStatus::Active => 0x00906A28,
-            crate::broadcast::MouseClutchStatus::Releasing => 0x002080C8,
-        }
-    };
-    let radius = dpi(8, d);
-    let bg_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(background));
-    let null_pen = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
-    let old_pen = SelectObject(hdc, null_pen);
-    let old_brush = SelectObject(hdc, bg_brush);
-    let _ = RoundRect(
-        hdc,
-        rc.left,
-        rc.top,
-        rc.right,
-        rc.bottom,
-        radius * 2,
-        radius * 2,
-    );
-    let _ = SelectObject(hdc, old_brush);
-    let _ = SelectObject(hdc, old_pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(bg_brush);
-
-    let font = CreateFontW(
-        dpi(lh - 12, d),
-        0,
-        0,
-        0,
-        FW_HEAVY.0 as i32,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        w!("Segoe UI"),
-    );
-    let old_font = SelectObject(hdc, font);
-    let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
-
-    let text = input_indicator_text().unwrap_or("Broadcasting");
-    let mut wide: Vec<u16> = text.encode_utf16().collect();
-    let pad = dpi(10, d);
-
-    // Shadow.
-    let mut shadow_rc = RECT {
-        left: rc.left + pad + dpi(1, d),
-        top: rc.top + dpi(1, d),
-        right: rc.right,
-        bottom: rc.bottom,
-    };
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000044));
-    let _ = DrawTextW(
-        hdc,
-        &mut wide,
-        &mut shadow_rc,
-        DT_LEFT | DT_SINGLELINE | DT_VCENTER,
-    );
-
-    // Main text (white).
-    let mut text_rc = RECT {
-        left: rc.left + pad,
-        top: rc.top,
-        right: rc.right,
-        bottom: rc.bottom,
-    };
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
-    let _ = DrawTextW(
-        hdc,
-        &mut wide,
-        &mut text_rc,
-        DT_LEFT | DT_SINGLELINE | DT_VCENTER,
-    );
-
-    let _ = SelectObject(hdc, old_font);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
-    let _ = EndPaint(hwnd, &ps);
-}
-
-// ---------------------------------------------------------------------------
-// Toast notification
-// ---------------------------------------------------------------------------
-
-unsafe fn paint_toast(hwnd: HWND) {
-    let Some(s) = state().as_ref() else {
-        let mut ps = PAINTSTRUCT::default();
-        let _ = BeginPaint(hwnd, &mut ps);
-        let _ = EndPaint(hwnd, &ps);
-        return;
-    };
-    let d = s.dpi_scale;
-    let mut ps = PAINTSTRUCT::default();
-    let hdc = BeginPaint(hwnd, &mut ps);
-
-    let mut rc = RECT::default();
-    let _ = GetClientRect(hwnd, &mut rc);
-
-    // Fill with color key for transparent corners.
-    let key_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(TOAST_COLOR_KEY));
-    let _ = FillRect(hdc, &rc, key_brush);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(key_brush);
-
-    // Rounded dark background.
-    let radius = dpi(8, d);
-    let bg_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(TOAST_BG_COLOR));
-    let null_pen = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
-    let old_pen = SelectObject(hdc, null_pen);
-    let old_brush = SelectObject(hdc, bg_brush);
-    let _ = RoundRect(
-        hdc,
-        rc.left,
-        rc.top,
-        rc.right,
-        rc.bottom,
-        radius * 2,
-        radius * 2,
-    );
-    let _ = SelectObject(hdc, old_brush);
-    let _ = SelectObject(hdc, old_pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(bg_brush);
-
-    let font_h = dpi(s.toast.height - 12, d).max(dpi(12, d));
-    let font = CreateFontW(
-        font_h,
-        0,
-        0,
-        0,
-        FW_BOLD.0 as i32,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        w!("Segoe UI"),
-    );
-    let old_font = SelectObject(hdc, font);
-    let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
-
-    let mut wide: Vec<u16> = s.toast.text.encode_utf16().collect();
-
-    // Shadow.
-    let mut shadow_rc = RECT {
-        left: rc.left + dpi(1, d),
-        top: rc.top + dpi(1, d),
-        right: rc.right + dpi(1, d),
-        bottom: rc.bottom + dpi(1, d),
-    };
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000044));
-    let _ = DrawTextW(
-        hdc,
-        &mut wide,
-        &mut shadow_rc,
-        DT_CENTER | DT_SINGLELINE | DT_VCENTER,
-    );
-
-    // Main text (white).
-    let mut text_rc = rc;
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
-    let _ = DrawTextW(
-        hdc,
-        &mut wide,
-        &mut text_rc,
-        DT_CENTER | DT_SINGLELINE | DT_VCENTER,
-    );
-
-    let _ = SelectObject(hdc, old_font);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
-    let _ = EndPaint(hwnd, &ps);
 }
 
 unsafe extern "system" fn toast_wnd_proc(
@@ -3541,12 +4067,36 @@ unsafe extern "system" fn toast_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if IN_OVERLAY.get() {
+    if IN_OVERLAY.get()
+        && !matches!(
+            msg,
+            WM_PAINT | WM_ERASEBKGND | WM_NCHITTEST | WM_MOUSEACTIVATE
+        )
+    {
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
     match msg {
+        WM_NCHITTEST => LRESULT(HTTRANSPARENT as isize),
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
-            paint_toast(hwnd);
+            validate_composition_paint(hwnd);
+            let requested = !IN_OVERLAY.get() && take_redraw_request(hwnd);
+            if !IN_OVERLAY.get() {
+                if let Some(s) = state().as_mut() {
+                    if requested || !surface_is_ready(s, hwnd) {
+                        render_toast_surface(s);
+                        if !toast_publication_allowed(
+                            s.toast.phase,
+                            s.toast.scene_ready,
+                            overlay_visibility_allowed(s),
+                            surface_is_ready(s, hwnd),
+                        ) {
+                            suppress_toast_publication(s);
+                        }
+                    }
+                }
+            }
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_TOAST_FADE => {
@@ -3554,47 +4104,35 @@ unsafe extern "system" fn toast_wnd_proc(
                 let _ = KillTimer(hwnd, TIMER_TOAST_FADE);
                 return LRESULT(0);
             };
+            if !toast_publication_allowed(
+                s.toast.phase,
+                s.toast.scene_ready,
+                overlay_visibility_allowed(s),
+                surface_is_ready(s, hwnd),
+            ) {
+                s.toast.phase = ToastPhase::Hidden;
+                suppress_toast_publication(s);
+                return LRESULT(0);
+            }
             let now = windows::Win32::System::SystemInformation::GetTickCount64();
-            match s.toast.phase {
-                ToastPhase::FadingIn => {
-                    let new_alpha = s.toast.alpha.saturating_add(TOAST_ALPHA_STEP);
-                    if new_alpha >= TOAST_MAX_ALPHA {
-                        s.toast.alpha = TOAST_MAX_ALPHA;
-                        s.toast.phase = ToastPhase::Visible;
-                        s.toast.phase_start = now;
-                    } else {
-                        s.toast.alpha = new_alpha;
-                    }
-                    let _ = SetLayeredWindowAttributes(
-                        hwnd,
-                        windows::Win32::Foundation::COLORREF(TOAST_COLOR_KEY),
-                        s.toast.alpha,
-                        LWA_ALPHA | LWA_COLORKEY,
-                    );
+            let transition = advance_toast_fade(
+                s.toast.phase,
+                s.toast.alpha,
+                s.toast.phase_start,
+                s.toast.duration_ms,
+                now,
+            );
+            s.toast.phase = transition.phase;
+            s.toast.alpha = transition.alpha;
+            s.toast.phase_start = transition.phase_start;
+            match transition.effect {
+                ToastFadeEffect::None => {}
+                ToastFadeEffect::UpdateOpacity(alpha) => {
+                    set_composition_opacity(s, hwnd, alpha);
                 }
-                ToastPhase::Visible => {
-                    if now - s.toast.phase_start >= s.toast.duration_ms as u64 {
-                        s.toast.phase = ToastPhase::FadingOut;
-                    }
-                }
-                ToastPhase::FadingOut => {
-                    let new_alpha = s.toast.alpha.saturating_sub(TOAST_ALPHA_STEP);
-                    if new_alpha == 0 {
-                        s.toast.alpha = 0;
-                        s.toast.phase = ToastPhase::Hidden;
-                        let _ = ShowWindow(hwnd, SW_HIDE);
-                        let _ = KillTimer(hwnd, TIMER_TOAST_FADE);
-                    } else {
-                        s.toast.alpha = new_alpha;
-                    }
-                    let _ = SetLayeredWindowAttributes(
-                        hwnd,
-                        windows::Win32::Foundation::COLORREF(TOAST_COLOR_KEY),
-                        s.toast.alpha,
-                        LWA_ALPHA | LWA_COLORKEY,
-                    );
-                }
-                ToastPhase::Hidden => {
+                ToastFadeEffect::HideAndStop => {
+                    s.toast.scene_ready = false;
+                    let _ = ShowWindow(hwnd, SW_HIDE);
                     let _ = KillTimer(hwnd, TIMER_TOAST_FADE);
                 }
             }
@@ -3605,16 +4143,12 @@ unsafe extern "system" fn toast_wnd_proc(
 }
 
 unsafe fn show_toast_inner(s: &mut OverlayState, text: &str) {
-    if !s.toast.enabled {
+    if !s.toast.enabled || !overlay_visibility_allowed(s) {
         return;
     }
 
-    s.toast.text = text.to_string();
-    s.toast.alpha = 0;
-    s.toast.phase = ToastPhase::FadingIn;
-    s.toast.phase_start = windows::Win32::System::SystemInformation::GetTickCount64();
-
-    // Position centered on the active EQ window, near the top.
+    // Complete every fallible model/geometry preparation step while the
+    // currently published toast remains authoritative.
     let active_hwnd = s
         .active_pid
         .and_then(|pid| s.eq_windows.iter().find(|w| w.pid == pid))
@@ -3624,69 +4158,91 @@ unsafe fn show_toast_inner(s: &mut OverlayState, text: &str) {
     };
 
     let mut eq_rect = RECT::default();
-    let _ = GetClientRect(eq_hwnd, &mut eq_rect);
+    if GetClientRect(eq_hwnd, &mut eq_rect).is_err() {
+        return;
+    }
     let mut top_left = POINT {
         x: eq_rect.left,
         y: eq_rect.top,
     };
-    let _ = ClientToScreen(eq_hwnd, &mut top_left);
+    if !ClientToScreen(eq_hwnd, &mut top_left).as_bool() {
+        return;
+    }
 
     let d = s.dpi_scale;
     let toast_h = dpi(s.toast.height, d);
-
-    // Measure text width.
-    let font_h = dpi(s.toast.height - 12, d).max(dpi(12, d));
-    let font = CreateFontW(
-        font_h,
-        0,
-        0,
-        0,
-        FW_BOLD.0 as i32,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        w!("Segoe UI"),
-    );
-    let hdc = windows::Win32::Graphics::Gdi::GetDC(s.toast.hwnd);
-    let old_font = SelectObject(hdc, font);
-    let wide: Vec<u16> = text.encode_utf16().collect();
-    let mut text_size = windows::Win32::Foundation::SIZE::default();
-    let _ = GetTextExtentPoint32W(hdc, &wide, &mut text_size);
-    let _ = SelectObject(hdc, old_font);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
-    let _ = windows::Win32::Graphics::Gdi::ReleaseDC(s.toast.hwnd, hdc);
-
+    if !ensure_compositor(s) {
+        return;
+    }
+    let text_width = match s
+        .compositor
+        .as_ref()
+        .expect("compositor ensured")
+        .measure_text(
+            text,
+            &UiTextRole::Toast.font(),
+            UiTextRole::Toast.height(d, (s.toast.height - 12).max(12)),
+        ) {
+        Ok(width) => width,
+        Err(error) => {
+            debug_log(&format!("DirectWrite toast measurement failed: {error}"));
+            return;
+        }
+    };
     let pad = dpi(20, d);
-    let toast_w = text_size.cx + pad * 2;
+    let toast_w = text_width + pad * 2;
     let eq_client_w = eq_rect.right - eq_rect.left;
     let toast_x = top_left.x + (eq_client_w - toast_w) / 2;
     let eq_client_h = eq_rect.bottom - eq_rect.top;
     let toast_y = top_left.y + eq_client_h / 3;
 
-    let _ = SetWindowPos(
+    // Replacement is fail-closed: no older attachment may remain visible once
+    // the new toast starts staging.
+    let _ = ShowWindow(s.toast.hwnd, SW_HIDE);
+    let _ = KillTimer(s.toast.hwnd, TIMER_TOAST_FADE);
+    s.toast.phase = ToastPhase::Hidden;
+    s.toast.scene_ready = false;
+    if !position_window_if_changed(
         s.toast.hwnd,
         HWND_TOPMOST,
         toast_x,
         toast_y,
         toast_w,
         toast_h,
-        SWP_NOACTIVATE,
-    );
+    ) {
+        return;
+    }
 
-    let _ = SetLayeredWindowAttributes(
-        s.toast.hwnd,
-        windows::Win32::Foundation::COLORREF(TOAST_COLOR_KEY),
-        0,
-        LWA_ALPHA | LWA_COLORKEY,
-    );
+    s.toast.text = text.to_string();
+    s.toast.alpha = 0;
+    s.toast.phase_start = 0;
+    if !render_toast_surface_for_size(s, toast_w, toast_h) {
+        s.toast.scene_ready = false;
+        suppress_toast_publication(s);
+        return;
+    }
 
+    // Foreground hooks can run while DirectComposition pumps Win32 messages.
+    // Publish only this successfully presented scene and only while it is
+    // still valid for the current overlay visibility policy.
+    if !overlay_visibility_allowed(s) {
+        s.toast.phase = ToastPhase::Hidden;
+        suppress_toast_publication(s);
+        return;
+    }
+    s.toast.phase = ToastPhase::FadingIn;
+    s.toast.phase_start = windows::Win32::System::SystemInformation::GetTickCount64();
+    if !toast_publication_allowed(
+        s.toast.phase,
+        s.toast.scene_ready,
+        true,
+        surface_is_ready(s, s.toast.hwnd),
+    ) {
+        s.toast.phase = ToastPhase::Hidden;
+        suppress_toast_publication(s);
+        return;
+    }
     let _ = ShowWindow(s.toast.hwnd, SW_SHOWNOACTIVATE);
-    let _ = InvalidateRect(s.toast.hwnd, None, true);
     let _ = SetTimer(s.toast.hwnd, TIMER_TOAST_FADE, TOAST_FADE_STEP_MS, None);
 }
 
@@ -3707,9 +4263,17 @@ unsafe extern "system" fn pip_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // Skip if we're inside a rebuild/poll to avoid re-entrant state access.
+    // Skip state access during rebuilds while still validating paint without
+    // asking the host to erase or author pixels.
     if IN_OVERLAY.get() {
-        return DefWindowProcW(hwnd, msg, wparam, lparam);
+        return match msg {
+            WM_ERASEBKGND => LRESULT(1),
+            WM_PAINT => {
+                validate_composition_paint(hwnd);
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        };
     }
 
     // Decode pip index from GWLP_USERDATA (1-based, 0 = not yet set).
@@ -3724,7 +4288,7 @@ unsafe extern "system" fn pip_wnd_proc(
             if let Some(s) = state().as_ref() {
                 let mut point = POINT::default();
                 let _ = GetCursorPos(&mut point);
-                let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut point);
+                let _ = ScreenToClient(hwnd, &mut point);
                 if notifications::has_invite_preview_at(s, pip_idx, point) {
                     return LRESULT(MA_NOACTIVATE as isize);
                 }
@@ -3740,7 +4304,7 @@ unsafe extern "system" fn pip_wnd_proc(
                     let mut pt = POINT::default();
                     let _ = GetCursorPos(&mut pt);
                     let mut client_pt = pt;
-                    let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut client_pt);
+                    let _ = ScreenToClient(hwnd, &mut client_pt);
 
                     let mut cr = RECT::default();
                     let _ = GetClientRect(hwnd, &mut cr);
@@ -3789,8 +4353,12 @@ unsafe extern "system" fn pip_wnd_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
 
+        WM_ERASEBKGND => LRESULT(1),
+
         WM_PAINT => {
-            paint_pip_window(hwnd, pip_idx);
+            // The host is exclusively a DWM thumbnail target. Authored pixels
+            // are presented by its aligned composition sibling.
+            validate_composition_paint(hwnd);
             LRESULT(0)
         }
 
@@ -3801,7 +4369,6 @@ unsafe extern "system" fn pip_wnd_proc(
 
             // --- Edit mode move/resize drag ---
             if s.edit_mode {
-                let border = dpi(BORDER_WIDTH, s.dpi_scale);
                 if let Some(ref md) = s.move_drag {
                     let mut cursor = POINT::default();
                     let _ = GetCursorPos(&mut cursor);
@@ -3830,24 +4397,7 @@ unsafe extern "system" fn pip_wnd_proc(
                         snap_point(new_x, new_y, w, h, &others, s.monitor_rect, s.snap_grid);
 
                     if let Some(pw) = s.pip_windows.get(idx) {
-                        let _ = SetWindowPos(
-                            pw.hwnd,
-                            HWND::default(),
-                            sx,
-                            sy,
-                            0,
-                            0,
-                            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                        );
-                        let _ = SetWindowPos(
-                            pw.label_hwnd,
-                            HWND_TOPMOST,
-                            sx + border,
-                            sy + border,
-                            0,
-                            0,
-                            SWP_NOSIZE | SWP_NOACTIVATE,
-                        );
+                        position_pip_pair(pw, sx, sy, w, h);
                     }
                     return LRESULT(0);
                 }
@@ -3889,16 +4439,9 @@ unsafe extern "system" fn pip_wnd_proc(
                     let nw = new_rect.right - new_rect.left;
                     let nh = new_rect.bottom - new_rect.top;
 
-                    if let Some(pw) = s.pip_windows.get(idx) {
-                        let _ = SetWindowPos(
-                            pw.hwnd,
-                            HWND::default(),
-                            new_rect.left,
-                            new_rect.top,
-                            nw,
-                            nh,
-                            SWP_NOZORDER | SWP_NOACTIVATE,
-                        );
+                    if render_pip_surface_for_size(s, idx, nw, nh) {
+                        let pw = &s.pip_windows[idx];
+                        position_pip_pair(pw, new_rect.left, new_rect.top, nw, nh);
 
                         // Update DWM thumbnail destination.
                         let thumb_rect = RECT {
@@ -3913,19 +4456,6 @@ unsafe extern "system" fn pip_wnd_proc(
                             ..Default::default()
                         };
                         let _ = DwmUpdateThumbnailProperties(pw.thumb, &props);
-                        let _ = InvalidateRect(pw.hwnd, None, true);
-                        // Reposition the full-width label and Tell overlay.
-                        let (lw, lh) = pip_label_overlay_size(s, nw, nh, border);
-                        let _ = SetWindowPos(
-                            pw.label_hwnd,
-                            HWND_TOPMOST,
-                            new_rect.left + border,
-                            new_rect.top + border,
-                            lw,
-                            lh,
-                            SWP_NOACTIVATE,
-                        );
-                        let _ = InvalidateRect(pw.label_hwnd, None, true);
                     }
                     return LRESULT(0);
                 }
@@ -3977,44 +4507,26 @@ unsafe extern "system" fn pip_wnd_proc(
                     s.strip_height = sh;
                     let d = s.dpi_scale;
                     let border = dpi(BORDER_WIDTH, d);
-                    for (i, pw) in s.pip_windows.iter().enumerate() {
-                        if let Some(rect) = rects.get(i) {
+                    for i in 0..s.pip_windows.len() {
+                        if let Some(rect) = rects.get(i).copied() {
                             let cw = rect.right - rect.left;
                             let ch = rect.bottom - rect.top;
-                            let _ = SetWindowPos(
-                                pw.hwnd,
-                                HWND::default(),
-                                rect.left,
-                                rect.top,
-                                cw,
-                                ch,
-                                SWP_NOZORDER | SWP_NOACTIVATE,
-                            );
-                            let thumb_rect = RECT {
-                                left: border,
-                                top: border,
-                                right: cw - border,
-                                bottom: ch - border,
-                            };
-                            let props = DWM_THUMBNAIL_PROPERTIES {
-                                dwFlags: DWM_TNP_RECTDESTINATION,
-                                rcDestination: thumb_rect,
-                                ..Default::default()
-                            };
-                            let _ = DwmUpdateThumbnailProperties(pw.thumb, &props);
-                            let _ = InvalidateRect(pw.hwnd, None, true);
-                            // Reposition the full-width label and Tell overlay.
-                            let (lw, lh) = pip_label_overlay_size(s, cw, ch, border);
-                            let _ = SetWindowPos(
-                                pw.label_hwnd,
-                                HWND_TOPMOST,
-                                rect.left + border,
-                                rect.top + border,
-                                lw,
-                                lh,
-                                SWP_NOACTIVATE,
-                            );
-                            let _ = InvalidateRect(pw.label_hwnd, None, true);
+                            if render_pip_surface_for_size(s, i, cw, ch) {
+                                let pw = &s.pip_windows[i];
+                                position_pip_pair(pw, rect.left, rect.top, cw, ch);
+                                let thumb_rect = RECT {
+                                    left: border,
+                                    top: border,
+                                    right: cw - border,
+                                    bottom: ch - border,
+                                };
+                                let props = DWM_THUMBNAIL_PROPERTIES {
+                                    dwFlags: DWM_TNP_RECTDESTINATION,
+                                    rcDestination: thumb_rect,
+                                    ..Default::default()
+                                };
+                                let _ = DwmUpdateThumbnailProperties(pw.thumb, &props);
+                            }
                         }
                     }
                     update_active_label(s);
@@ -4042,7 +4554,7 @@ unsafe extern "system" fn pip_wnd_proc(
                                 ..Default::default()
                             };
                             let _ = DwmUpdateThumbnailProperties(pw.thumb, &props);
-                            let _ = InvalidateRect(pw.hwnd, None, true);
+                            request_redraw(pw.label_hwnd);
                         }
                     }
                 }
@@ -4067,13 +4579,13 @@ unsafe extern "system" fn pip_wnd_proc(
                         // Invalidate old and new target.
                         if let Some(old_t) = s.drop_target {
                             if let Some(pw) = s.pip_windows.get(old_t) {
-                                let _ = InvalidateRect(pw.hwnd, None, true);
+                                request_redraw(pw.label_hwnd);
                             }
                         }
                         s.drop_target = new_target;
                         if let Some(new_t) = new_target {
                             if let Some(pw) = s.pip_windows.get(new_t) {
-                                let _ = InvalidateRect(pw.hwnd, None, true);
+                                request_redraw(pw.label_hwnd);
                             }
                         }
                     }
@@ -4097,7 +4609,7 @@ unsafe extern "system" fn pip_wnd_proc(
                         ..Default::default()
                     };
                     let _ = DwmUpdateThumbnailProperties(pw.thumb, &props);
-                    let _ = InvalidateRect(hwnd, None, true);
+                    request_redraw(pw.label_hwnd);
                 }
             }
 
@@ -4127,7 +4639,7 @@ unsafe extern "system" fn pip_wnd_proc(
                         ..Default::default()
                     };
                     let _ = DwmUpdateThumbnailProperties(pw.thumb, &props);
-                    let _ = InvalidateRect(hwnd, None, true);
+                    request_redraw(pw.label_hwnd);
                 }
             }
 
@@ -4308,6 +4820,12 @@ unsafe extern "system" fn pip_wnd_proc(
                             ..Default::default()
                         };
                         let _ = DwmUpdateThumbnailProperties(pw.thumb, &props);
+                        request_redraw(pw.label_hwnd);
+                    }
+                    if let Some(target) = old_drop_target {
+                        if let Some(pw) = s.pip_windows.get(target) {
+                            request_redraw(pw.label_hwnd);
+                        }
                     }
                     // Perform swap if target is valid.
                     if let Some(to_index) = old_drop_target {
@@ -4433,43 +4951,8 @@ unsafe extern "system" fn pip_wnd_proc(
 // Label window proc
 // ---------------------------------------------------------------------------
 
-unsafe fn invalidate_pip_border(hwnd: HWND, border: i32) {
-    let mut client = RECT::default();
-    if GetClientRect(hwnd, &mut client).is_err() || border <= 0 {
-        return;
-    }
-    let border = border
-        .min((client.right - client.left) / 2)
-        .min((client.bottom - client.top) / 2);
-    let regions = [
-        RECT {
-            left: client.left,
-            top: client.top,
-            right: client.right,
-            bottom: client.top + border,
-        },
-        RECT {
-            left: client.left,
-            top: client.bottom - border,
-            right: client.right,
-            bottom: client.bottom,
-        },
-        RECT {
-            left: client.left,
-            top: client.top + border,
-            right: client.left + border,
-            bottom: client.bottom - border,
-        },
-        RECT {
-            left: client.right - border,
-            top: client.top + border,
-            right: client.right,
-            bottom: client.bottom - border,
-        },
-    ];
-    for region in regions {
-        let _ = InvalidateRect(hwnd, Some(&region), false);
-    }
+fn forwards_active_label_mouse_message(message: u32) -> bool {
+    matches!(message, WM_LBUTTONDOWN | WM_LBUTTONUP)
 }
 
 unsafe fn tick_notification_animation(timer_hwnd: HWND) {
@@ -4485,14 +4968,32 @@ unsafe fn tick_timer_overlay(timer_hwnd: HWND) {
         let _ = KillTimer(timer_hwnd, TIMER_OVERLAY_TICK);
         return;
     };
-    let expired = s.timers.remove_expired(Instant::now());
+    let now = Instant::now();
+    let previous_owners = timer_owner_hwnds(s, now);
+    let expired = s.timers.remove_expired(now);
     if s.timers.is_empty() {
         let _ = KillTimer(timer_hwnd, TIMER_OVERLAY_TICK);
     }
     if expired {
+        // Timer appearance/expiry is structural for the active-label HWND;
+        // ordinary countdown ticks never move or resize any HWND.
         update_active_label(s);
     }
-    invalidate_timer_labels(s);
+    let current_owners = timer_owner_hwnds(s, now);
+    let pip_label_hwnds = s
+        .pip_windows
+        .iter()
+        .map(|pip| pip.label_hwnd)
+        .collect::<Vec<_>>();
+    for hwnd in timer_tick_redraw_targets(
+        expired,
+        s.active_label_hwnd,
+        &pip_label_hwnds,
+        &previous_owners,
+        &current_owners,
+    ) {
+        request_redraw(hwnd);
+    }
 }
 
 unsafe extern "system" fn label_wnd_proc(
@@ -4502,9 +5003,26 @@ unsafe extern "system" fn label_wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     if IN_OVERLAY.get() {
-        return DefWindowProcW(hwnd, msg, wparam, lparam);
+        return match msg {
+            WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+            WM_ERASEBKGND => LRESULT(1),
+            WM_PAINT => {
+                validate_composition_paint(hwnd);
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        };
     }
     match msg {
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_SERVICE_COMPOSITOR_RECOVERY => {
+            if let Some(s) = state().as_mut() {
+                service_compositor_recovery(s);
+            } else {
+                COMPOSITOR_RECOVERY_POSTED.set(false);
+            }
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == notifications::TIMER_ID => {
             tick_notification_animation(hwnd);
             LRESULT(0)
@@ -4518,30 +5036,25 @@ unsafe extern "system" fn label_wnd_proc(
             SetCursor(cursor);
             LRESULT(1)
         }
+        WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
-            let (text, class, color) = state()
-                .as_ref()
-                .map(|s| {
-                    (
-                        s.active_label_text.clone(),
-                        s.active_label_class.clone(),
-                        s.active_label_color,
-                    )
-                })
-                .unwrap_or((String::new(), None, LABEL_COLORS[0]));
-            if !text.is_empty() {
-                paint_label(hwnd, &text, class.as_deref(), color);
-            } else {
-                let mut ps = PAINTSTRUCT::default();
-                let _ = BeginPaint(hwnd, &mut ps);
-                let _ = EndPaint(hwnd, &ps);
+            validate_composition_paint(hwnd);
+            let requested = take_redraw_request(hwnd);
+            if let Some(s) = state().as_mut() {
+                if requested || !surface_is_ready(s, hwnd) {
+                    render_active_label_surface(s);
+                }
             }
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            let key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
-            let alpha = state().as_ref().map_or(204, |s| s.label_alpha);
-            let _ = SetLayeredWindowAttributes(hwnd, key, alpha / 2, LWA_ALPHA | LWA_COLORKEY);
+            if let Some(s) = state().as_mut() {
+                if !s.active_label_hovered {
+                    s.active_label_hovered = true;
+                    let alpha = s.label_alpha / 2;
+                    set_composition_opacity(s, hwnd, alpha);
+                }
+            }
             let mut tme = TRACKMOUSEEVENT {
                 cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
                 dwFlags: TME_LEAVE,
@@ -4552,9 +5065,11 @@ unsafe extern "system" fn label_wnd_proc(
             LRESULT(0)
         }
         WM_MOUSELEAVE => {
-            let key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
-            let alpha = state().as_ref().map_or(204, |s| s.label_alpha);
-            let _ = SetLayeredWindowAttributes(hwnd, key, alpha, LWA_ALPHA | LWA_COLORKEY);
+            if let Some(s) = state().as_mut() {
+                s.active_label_hovered = false;
+                let alpha = s.label_alpha;
+                set_composition_opacity(s, hwnd, alpha);
+            }
             LRESULT(0)
         }
         WM_RBUTTONUP => {
@@ -4575,23 +5090,25 @@ unsafe extern "system" fn label_wnd_proc(
             handle_menu_command(cmd_id);
             LRESULT(0)
         }
-        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN => {
+        message if forwards_active_label_mouse_message(message) => {
             let mut pt = POINT {
                 x: (lparam.0 & 0xFFFF) as i16 as i32,
                 y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
             };
             let _ = ClientToScreen(hwnd, &mut pt);
-            // Hide label so WindowFromPoint finds the window underneath.
-            let _ = ShowWindow(hwnd, SW_HIDE);
-            let below = WindowFromPoint(pt);
-            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-            if !below.is_invalid() && below != hwnd {
-                let _ = PostMessageW(
-                    below,
-                    msg,
-                    wparam,
-                    LPARAM((pt.x as i16 as u16 as isize) | ((pt.y as i16 as u16 as isize) << 16)),
-                );
+            let target = state().as_ref().and_then(|s| {
+                let pid = s.active_pid?;
+                s.eq_windows
+                    .iter()
+                    .find(|window| window.pid == pid)
+                    .map(|window| window.hwnd)
+            });
+            if let Some(target) = target.filter(|target| IsWindow(*target).as_bool()) {
+                let mut client = pt;
+                let _ = ScreenToClient(target, &mut client);
+                let packed =
+                    (client.x as i16 as u16 as isize) | ((client.y as i16 as u16 as isize) << 16);
+                let _ = PostMessageW(target, msg, wparam, LPARAM(packed));
             }
             LRESULT(0)
         }
@@ -4660,20 +5177,6 @@ pub fn force_rebuild() {
             .min(100);
         s.label_alpha = ((opacity as u16 * 255) / 100) as u8;
         s.label_theme = configured_label_theme(&cfg);
-        // Update layered window attributes for floating labels.
-        let key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
-        let _ = SetLayeredWindowAttributes(
-            s.active_label_hwnd,
-            key,
-            s.label_alpha,
-            LWA_ALPHA | LWA_COLORKEY,
-        );
-        let _ = SetLayeredWindowAttributes(
-            s.broadcast_label_hwnd,
-            key,
-            s.label_alpha,
-            LWA_ALPHA | LWA_COLORKEY,
-        );
         // Handle hide_from_alt_tab setting change.
         let old_hide = s.hide_from_alt_tab;
         s.hide_from_alt_tab = cfg.hide_from_alt_tab;
@@ -4731,10 +5234,36 @@ pub fn cleanup() {
             if !s.event_hook.is_invalid() {
                 let _ = UnhookWinEvent(s.event_hook);
             }
-            for pw in s.pip_windows.drain(..) {
+            let pips = std::mem::take(&mut s.pip_windows);
+            let pending_composition_destroys = std::mem::take(&mut s.pending_composition_destroys);
+            if let Some(mut compositor) = s.compositor.take() {
+                for pip in &pips {
+                    if let Err(error) = compositor.unregister_surface(pip.label_hwnd) {
+                        debug_log(&format!("DirectComposition PiP cleanup failed: {error}"));
+                    }
+                }
+                for hwnd in pending_composition_destroys.iter().copied().chain([
+                    s.active_label_hwnd,
+                    s.broadcast_label_hwnd,
+                    s.toast.hwnd,
+                ]) {
+                    if let Err(error) = compositor.unregister_surface(hwnd) {
+                        debug_log(&format!("DirectComposition cleanup failed: {error}"));
+                    }
+                }
+                // shutdown detaches any registration whose individual commit
+                // failed before its owning HWND is destroyed below.
+                if let Err(error) = compositor.shutdown() {
+                    debug_log(&format!("DirectComposition shutdown failed: {error}"));
+                }
+            }
+            for pw in pips {
                 let _ = DwmUnregisterThumbnail(pw.thumb);
                 let _ = DestroyWindow(pw.label_hwnd);
                 let _ = DestroyWindow(pw.hwnd);
+            }
+            for hwnd in pending_composition_destroys {
+                let _ = DestroyWindow(hwnd);
             }
             let _ = KillTimer(s.active_label_hwnd, notifications::TIMER_ID);
             let _ = KillTimer(s.active_label_hwnd, TIMER_OVERLAY_TICK);
@@ -4744,6 +5273,9 @@ pub fn cleanup() {
             let _ = DestroyWindow(s.toast.hwnd);
         }
         *state_unguarded() = None;
+        COMPOSITOR_RECOVERY_POSTED.set(false);
+        SERVICING_COMPOSITOR_RECOVERY.set(false);
+        REDRAW_PENDING.with(|pending| pending.borrow_mut().clear());
     }
 }
 
@@ -4771,12 +5303,171 @@ mod tests {
     }
 
     #[test]
+    fn redraw_requests_coalesce_until_one_frame_claims_the_hwnd() {
+        let hwnd = HWND(0x1234usize as *mut _);
+        let mut pending = HashSet::new();
+        assert!(mark_redraw_pending(&mut pending, hwnd));
+        assert!(!mark_redraw_pending(&mut pending, hwnd));
+        assert!(take_redraw_pending(&mut pending, hwnd));
+        assert!(!take_redraw_pending(&mut pending, hwnd));
+        assert!(!mark_redraw_pending(&mut pending, HWND::default()));
+    }
+
+    #[test]
+    fn staged_toast_cannot_publish_a_previous_attached_frame() {
+        assert!(!toast_publication_allowed(
+            ToastPhase::Hidden,
+            false,
+            true,
+            true,
+        ));
+        // Even an accidentally advanced phase cannot compensate for a frame
+        // that did not complete rendering for the staged toast.
+        assert!(!toast_publication_allowed(
+            ToastPhase::FadingIn,
+            false,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn completed_toast_frame_requires_every_publication_gate() {
+        assert!(toast_publication_allowed(
+            ToastPhase::FadingIn,
+            true,
+            true,
+            true,
+        ));
+        assert!(!toast_publication_allowed(
+            ToastPhase::Hidden,
+            true,
+            true,
+            true,
+        ));
+        assert!(!toast_publication_allowed(
+            ToastPhase::FadingIn,
+            true,
+            false,
+            true,
+        ));
+        assert!(!toast_publication_allowed(
+            ToastPhase::FadingIn,
+            true,
+            true,
+            false,
+        ));
+    }
+
+    #[test]
+    fn toast_fade_in_saturates_and_starts_visible_duration_at_that_tick() {
+        assert_eq!(
+            advance_toast_fade(ToastPhase::FadingIn, 25, 10, 2_000, 40),
+            ToastFadeTransition {
+                phase: ToastPhase::FadingIn,
+                alpha: 50,
+                phase_start: 10,
+                effect: ToastFadeEffect::UpdateOpacity(50),
+            }
+        );
+        assert_eq!(
+            advance_toast_fade(ToastPhase::FadingIn, 210, 10, 2_000, 40),
+            ToastFadeTransition {
+                phase: ToastPhase::Visible,
+                alpha: TOAST_MAX_ALPHA,
+                phase_start: 40,
+                effect: ToastFadeEffect::UpdateOpacity(TOAST_MAX_ALPHA),
+            }
+        );
+    }
+
+    #[test]
+    fn toast_visible_duration_transitions_at_the_inclusive_threshold() {
+        assert_eq!(
+            advance_toast_fade(ToastPhase::Visible, 220, 100, 2_000, 2_099).phase,
+            ToastPhase::Visible
+        );
+        let transition = advance_toast_fade(ToastPhase::Visible, 220, 100, 2_000, 2_100);
+        assert_eq!(transition.phase, ToastPhase::FadingOut);
+        assert_eq!(transition.effect, ToastFadeEffect::None);
+    }
+
+    #[test]
+    fn toast_fade_out_updates_opacity_then_hides_and_stops_at_zero() {
+        assert_eq!(
+            advance_toast_fade(ToastPhase::FadingOut, 50, 100, 2_000, 200).effect,
+            ToastFadeEffect::UpdateOpacity(25)
+        );
+        assert_eq!(
+            advance_toast_fade(ToastPhase::FadingOut, 25, 100, 2_000, 200),
+            ToastFadeTransition {
+                phase: ToastPhase::Hidden,
+                alpha: 0,
+                phase_start: 100,
+                effect: ToastFadeEffect::HideAndStop,
+            }
+        );
+    }
+
+    #[test]
+    fn hidden_toast_always_requests_hide_and_timer_stop() {
+        assert_eq!(
+            advance_toast_fade(ToastPhase::Hidden, 12, 100, 2_000, 200),
+            ToastFadeTransition {
+                phase: ToastPhase::Hidden,
+                alpha: 0,
+                phase_start: 100,
+                effect: ToastFadeEffect::HideAndStop,
+            }
+        );
+    }
+
+    #[test]
     fn timer_countdown_rounds_up_to_the_next_tenth() {
         assert_eq!(format_timer_remaining(Duration::from_secs(10)), "10.0s");
         assert_eq!(format_timer_remaining(Duration::from_millis(9901)), "10.0s");
         assert_eq!(format_timer_remaining(Duration::from_millis(9900)), "9.9s");
         assert_eq!(format_timer_remaining(Duration::from_millis(1)), "0.1s");
         assert_eq!(format_timer_remaining(Duration::ZERO), "0.0s");
+    }
+
+    #[test]
+    fn expired_timer_redraws_every_pip_even_after_visible_owners_are_empty() {
+        let active = HWND(1usize as *mut _);
+        let first_pip = HWND(2usize as *mut _);
+        let expired_owner = HWND(3usize as *mut _);
+
+        assert_eq!(
+            timer_tick_redraw_targets(true, active, &[first_pip, expired_owner], &[], &[],),
+            vec![first_pip, expired_owner]
+        );
+        assert_eq!(
+            timer_tick_redraw_targets(
+                false,
+                active,
+                &[first_pip, expired_owner],
+                &[expired_owner],
+                &[expired_owner],
+            ),
+            vec![expired_owner]
+        );
+    }
+
+    #[test]
+    fn overlay_visibility_policy_requires_user_client_and_foreground_permission() {
+        assert!(overlay_visibility_policy(false, true, false, true));
+        assert!(overlay_visibility_policy(false, true, true, false));
+        assert!(!overlay_visibility_policy(true, true, true, true));
+        assert!(!overlay_visibility_policy(false, false, true, true));
+        assert!(!overlay_visibility_policy(false, true, false, false));
+    }
+
+    #[test]
+    fn active_label_forwards_only_matched_left_button_messages() {
+        assert!(forwards_active_label_mouse_message(WM_LBUTTONDOWN));
+        assert!(forwards_active_label_mouse_message(WM_LBUTTONUP));
+        assert!(!forwards_active_label_mouse_message(WM_RBUTTONDOWN));
+        assert!(!forwards_active_label_mouse_message(WM_RBUTTONUP));
     }
 
     #[test]

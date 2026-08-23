@@ -1,21 +1,21 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, SelectObject, SetStretchBltMode, StretchBlt,
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HALFTONE, SRCCOPY,
-};
-
-/// A decoded class icon ready for GDI blitting.
-struct ClassIcon {
-    hbitmap: windows::Win32::Graphics::Gdi::HBITMAP,
-    width: i32,
-    height: i32,
+/// Immutable decoded class-icon pixels shared by render backends.
+///
+/// Pixels remain straight-alpha RGBA on the CPU. Direct2D upload converts them
+/// to premultiplied BGRA for the device generation that owns the bitmap.
+pub(crate) struct ClassIconData {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Box<[u8]>,
 }
 
-// SAFETY: The HBITMAPs are created once during init and only read via StretchBlt afterwards.
-unsafe impl Send for ClassIcon {}
-unsafe impl Sync for ClassIcon {}
+impl ClassIconData {
+    pub(crate) fn premultiplied_bgra(&self) -> Vec<u8> {
+        premultiplied_bgra(&self.rgba)
+    }
+}
 
 // Embed all 16 class icon PNGs.
 const BRD_PNG: &[u8] = include_bytes!("../assets/class_icons/brd.png");
@@ -35,105 +35,112 @@ const SHM_PNG: &[u8] = include_bytes!("../assets/class_icons/shm.png");
 const WAR_PNG: &[u8] = include_bytes!("../assets/class_icons/war.png");
 const WIZ_PNG: &[u8] = include_bytes!("../assets/class_icons/wiz.png");
 
-static ICONS: OnceLock<HashMap<&'static str, ClassIcon>> = OnceLock::new();
+const ICON_PNGS: &[(&str, &[u8])] = &[
+    ("BRD", BRD_PNG),
+    ("BST", BST_PNG),
+    ("BER", BER_PNG),
+    ("CLR", CLR_PNG),
+    ("DRU", DRU_PNG),
+    ("ENC", ENC_PNG),
+    ("MAG", MAG_PNG),
+    ("MNK", MNK_PNG),
+    ("NEC", NEC_PNG),
+    ("PAL", PAL_PNG),
+    ("RNG", RNG_PNG),
+    ("ROG", ROG_PNG),
+    ("SHK", SHK_PNG),
+    ("SHM", SHM_PNG),
+    ("WAR", WAR_PNG),
+    ("WIZ", WIZ_PNG),
+];
 
-/// Decode a PNG from memory and create a GDI HBITMAP (top-down BGRA DIB).
-fn load_icon(png_bytes: &[u8]) -> ClassIcon {
-    let img = image::load_from_memory(png_bytes)
+static ICONS: OnceLock<HashMap<&'static str, ClassIconData>> = OnceLock::new();
+
+fn decode_icon(png_bytes: &[u8]) -> ClassIconData {
+    let image = image::load_from_memory(png_bytes)
         .expect("failed to decode class icon")
         .to_rgba8();
-    let (w, h) = (img.width() as i32, img.height() as i32);
-
-    unsafe {
-        let bmi = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: w,
-                biHeight: -h, // top-down
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-        let hbitmap = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
-            .expect("CreateDIBSection failed for class icon");
-
-        // Copy pixels, converting RGBA → BGRA.
-        let dst = std::slice::from_raw_parts_mut(bits as *mut u8, (w * h * 4) as usize);
-        for (src_px, dst_px) in img.pixels().zip(dst.chunks_exact_mut(4)) {
-            let [r, g, b, a] = src_px.0;
-            dst_px[0] = b;
-            dst_px[1] = g;
-            dst_px[2] = r;
-            dst_px[3] = a;
-        }
-
-        ClassIcon {
-            hbitmap,
-            width: w,
-            height: h,
-        }
+    ClassIconData {
+        width: image.width(),
+        height: image.height(),
+        rgba: image.into_raw().into_boxed_slice(),
     }
 }
 
-fn icons() -> &'static HashMap<&'static str, ClassIcon> {
+fn icons() -> &'static HashMap<&'static str, ClassIconData> {
     ICONS.get_or_init(|| {
-        let pairs: Vec<(&str, &[u8])> = vec![
-            ("BRD", BRD_PNG),
-            ("BST", BST_PNG),
-            ("BER", BER_PNG),
-            ("CLR", CLR_PNG),
-            ("DRU", DRU_PNG),
-            ("ENC", ENC_PNG),
-            ("MAG", MAG_PNG),
-            ("MNK", MNK_PNG),
-            ("NEC", NEC_PNG),
-            ("PAL", PAL_PNG),
-            ("RNG", RNG_PNG),
-            ("ROG", ROG_PNG),
-            ("SHK", SHK_PNG),
-            ("SHM", SHM_PNG),
-            ("WAR", WAR_PNG),
-            ("WIZ", WIZ_PNG),
-        ];
-        pairs.into_iter().map(|(k, v)| (k, load_icon(v))).collect()
+        ICON_PNGS
+            .iter()
+            .map(|&(abbreviation, png)| (abbreviation, decode_icon(png)))
+            .collect()
     })
 }
 
-/// Draw a class icon scaled to fit within a square of `size` pixels at (x, y).
-/// Returns `true` if an icon was drawn.
-pub unsafe fn draw_class_icon(
-    hdc: windows::Win32::Graphics::Gdi::HDC,
-    class_abbrev: &str,
-    x: i32,
-    y: i32,
-    size: i32,
-) -> bool {
-    let Some(icon) = icons().get(class_abbrev) else {
-        return false;
-    };
+/// Look up a decoded icon and its stable catalog key.
+pub(crate) fn class_icon(
+    class_abbreviation: &str,
+) -> Option<(&'static str, &'static ClassIconData)> {
+    icons()
+        .get_key_value(class_abbreviation)
+        .map(|(&abbreviation, icon)| (abbreviation, icon))
+}
 
-    let mem_dc = CreateCompatibleDC(hdc);
-    let old = SelectObject(mem_dc, icon.hbitmap);
-    let _ = SetStretchBltMode(hdc, HALFTONE);
-    let _ = StretchBlt(
-        hdc,
-        x,
-        y,
-        size,
-        size,
-        mem_dc,
-        0,
-        0,
-        icon.width,
-        icon.height,
-        SRCCOPY,
-    );
-    let _ = SelectObject(mem_dc, old);
-    let _ = DeleteDC(mem_dc);
-    true
+/// Convert straight RGBA bytes to Direct2D's BGRA8 premultiplied layout.
+pub(crate) fn premultiplied_bgra(rgba: &[u8]) -> Vec<u8> {
+    assert_eq!(rgba.len() % 4, 0, "RGBA pixels must be four-byte aligned");
+    let mut bgra = Vec::with_capacity(rgba.len());
+    for pixel in rgba.chunks_exact(4) {
+        let alpha = u16::from(pixel[3]);
+        let premultiply = |component: u8| ((u16::from(component) * alpha + 127) / 255) as u8;
+        bgra.extend_from_slice(&[
+            premultiply(pixel[2]),
+            premultiply(pixel[1]),
+            premultiply(pixel[0]),
+            pixel[3],
+        ]);
+    }
+    bgra
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_contains_every_embedded_class_icon() {
+        assert_eq!(icons().len(), ICON_PNGS.len());
+        for &(abbreviation, _) in ICON_PNGS {
+            let (key, icon) = class_icon(abbreviation).expect("embedded class icon");
+            assert_eq!(key, abbreviation);
+            assert!(icon.width > 0);
+            assert!(icon.height > 0);
+            assert_eq!(
+                icon.rgba.len(),
+                (icon.width * icon.height * 4) as usize,
+                "{abbreviation} must contain one straight RGBA pixel per texel"
+            );
+        }
+        assert!(class_icon("UNKNOWN").is_none());
+    }
+
+    #[test]
+    fn premultiplied_bgra_handles_opaque_transparent_and_partial_alpha() {
+        let rgba = [
+            10, 20, 30, 255, // opaque
+            200, 100, 50, 128, // half alpha
+            255, 127, 63, 0, // transparent color channels are cleared
+        ];
+        assert_eq!(
+            premultiplied_bgra(&rgba),
+            vec![30, 20, 10, 255, 25, 50, 100, 128, 0, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn icon_method_uses_the_same_premultiplied_conversion() {
+        let (_, icon) = class_icon("WAR").expect("warrior icon");
+        let converted = icon.premultiplied_bgra();
+        assert_eq!(converted.len(), icon.rgba.len());
+        assert_eq!(converted.len(), (icon.width * icon.height * 4) as usize);
+    }
 }
