@@ -9,6 +9,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use super::hosts::update_active_label;
 use super::menu::{handle_menu_command, show_char_menu};
 use super::notifications;
+use super::pip_transition::{tick as tick_pip_transition, TIMER_ID as TIMER_PIP_TRANSITION};
 use super::runtime::{self, is_busy, try_with_state, try_with_state_mut};
 use super::state::OverlayState;
 use super::surfaces::{
@@ -121,6 +122,12 @@ unsafe fn tick_timer_overlay(timer_hwnd: HWND) {
     }
 }
 
+unsafe fn tick_pip_motion(timer_hwnd: HWND) {
+    if try_with_state_mut(|state| unsafe { tick_pip_transition(state, timer_hwnd) }).is_err() {
+        let _ = KillTimer(timer_hwnd, TIMER_PIP_TRANSITION);
+    }
+}
+
 unsafe fn tick_timer_overlay_inner(s: &mut OverlayState, timer_hwnd: HWND) {
     let now = Instant::now();
     let previous_owners = timer_owner_hwnds(s, now);
@@ -182,6 +189,10 @@ pub(super) unsafe extern "system" fn label_wnd_proc(
         }
         WM_TIMER if wparam.0 == TIMER_OVERLAY_TICK => {
             tick_timer_overlay(hwnd);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_PIP_TRANSITION => {
+            tick_pip_motion(hwnd);
             LRESULT(0)
         }
         WM_SETCURSOR => {

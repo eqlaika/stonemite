@@ -30,8 +30,9 @@ use crate::diagnostics::debug_log;
 // DirectComposition scene publication and redraw scheduling
 // ---------------------------------------------------------------------------
 
-pub(super) unsafe fn position_pip_pair(
-    pip: &PipWindowEntry,
+pub(super) unsafe fn position_window_pair(
+    hwnd: HWND,
+    label_hwnd: HWND,
     x: i32,
     y: i32,
     width: i32,
@@ -41,7 +42,7 @@ pub(super) unsafe fn position_pip_pair(
         let batch = BeginDeferWindowPos(2)?;
         let batch = DeferWindowPos(
             batch,
-            pip.hwnd,
+            hwnd,
             HWND::default(),
             x,
             y,
@@ -51,7 +52,7 @@ pub(super) unsafe fn position_pip_pair(
         )?;
         let batch = DeferWindowPos(
             batch,
-            pip.label_hwnd,
+            label_hwnd,
             HWND_TOPMOST,
             x,
             y,
@@ -63,7 +64,7 @@ pub(super) unsafe fn position_pip_pair(
     })();
     if deferred.is_err() {
         let _ = SetWindowPos(
-            pip.hwnd,
+            hwnd,
             HWND::default(),
             x,
             y,
@@ -72,7 +73,7 @@ pub(super) unsafe fn position_pip_pair(
             SWP_NOZORDER | SWP_NOACTIVATE,
         );
         let _ = SetWindowPos(
-            pip.label_hwnd,
+            label_hwnd,
             HWND_TOPMOST,
             x,
             y,
@@ -81,6 +82,16 @@ pub(super) unsafe fn position_pip_pair(
             SWP_NOACTIVATE,
         );
     }
+}
+
+pub(super) unsafe fn position_pip_pair(
+    pip: &PipWindowEntry,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) {
+    position_window_pair(pip.hwnd, pip.label_hwnd, x, y, width, height);
 }
 
 pub(super) unsafe fn position_window_if_changed(
@@ -779,28 +790,32 @@ pub(super) unsafe fn overlay_visibility_allowed(s: &OverlayState) -> bool {
     )
 }
 
+unsafe fn apply_one_pip_pair_visibility(s: &OverlayState, pip: &PipWindowEntry, visible: bool) {
+    if visible && surface_is_ready(s, pip.label_hwnd) {
+        let _ = ShowWindow(pip.hwnd, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(pip.label_hwnd, SW_SHOWNOACTIVATE);
+        // Interactions with a PiP can promote it above its sibling.
+        let _ = SetWindowPos(
+            pip.label_hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    } else {
+        let _ = ShowWindow(pip.hwnd, SW_HIDE);
+        let _ = ShowWindow(pip.label_hwnd, SW_HIDE);
+        if visible {
+            request_redraw(pip.label_hwnd);
+        }
+    }
+}
+
 pub(super) unsafe fn apply_pip_pair_visibility(s: &OverlayState, visible: bool) {
     for pip in &s.presentation.pip_windows {
-        if visible && surface_is_ready(s, pip.label_hwnd) {
-            let _ = ShowWindow(pip.hwnd, SW_SHOWNOACTIVATE);
-            let _ = ShowWindow(pip.label_hwnd, SW_SHOWNOACTIVATE);
-            // Interactions with a PiP can promote it above its sibling.
-            let _ = SetWindowPos(
-                pip.label_hwnd,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-        } else {
-            let _ = ShowWindow(pip.hwnd, SW_HIDE);
-            let _ = ShowWindow(pip.label_hwnd, SW_HIDE);
-            if visible {
-                request_redraw(pip.label_hwnd);
-            }
-        }
+        apply_one_pip_pair_visibility(s, pip, visible);
     }
 }
 

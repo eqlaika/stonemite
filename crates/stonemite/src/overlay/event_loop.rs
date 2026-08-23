@@ -85,7 +85,18 @@ unsafe fn poll_inner(s: &mut OverlayState) {
             .map(|w| w.hwnd)
             .unwrap_or(s.presentation.active_label_hwnd);
         let new_dpi = dpi_scale(dpi_hwnd);
-        if foreground_changed || hwnd_changed || (new_dpi - s.layout.dpi_scale).abs() > 0.001 {
+        let presentation_incomplete = s.presentation.pip_transition.is_some()
+            || s.presentation.pip_windows.iter().map(|pip| pip.pid).ne(s
+                .clients
+                .pips()
+                .iter()
+                .copied())
+            || s.presentation.pip_windows.iter().any(|pip| pip.thumb == 0);
+        if foreground_changed
+            || hwnd_changed
+            || presentation_incomplete
+            || (new_dpi - s.layout.dpi_scale).abs() > 0.001
+        {
             s.layout.dpi_scale = new_dpi;
             rebuild_thumbnails(s);
         } else {

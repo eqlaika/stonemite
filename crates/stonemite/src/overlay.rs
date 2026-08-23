@@ -14,6 +14,7 @@ mod lifecycle;
 mod menu;
 mod notifications;
 mod pip_interaction;
+mod pip_transition;
 mod presentation;
 mod render;
 mod runtime;

@@ -16,6 +16,7 @@ use super::interaction::InteractionState;
 use super::layout::LayoutState;
 use super::notifications::{self, NotificationCenter};
 use super::pip_interaction::pip_wnd_proc;
+use super::pip_transition::force_finish as finish_pip_transition;
 use super::presentation::{ComApartment, PresentationState};
 use super::render::Compositor;
 use super::runtime::{self, try_with_state_mut};
@@ -191,6 +192,7 @@ unsafe fn initialize_state() -> (OverlayState, HWND) {
             compositor,
             com_apartment,
             pip_windows: Vec::new(),
+            pip_transition: None,
             pending_composition_destroys: Vec::new(),
             active_label_hwnd: label_hwnd,
             active_label_text: String::new(),
@@ -309,6 +311,7 @@ pub(super) fn cleanup() {
         if !s.event_hook.is_invalid() {
             let _ = UnhookWinEvent(s.event_hook);
         }
+        finish_pip_transition(s);
         let pips = std::mem::take(&mut s.presentation.pip_windows);
         let pending_composition_destroys =
             std::mem::take(&mut s.presentation.pending_composition_destroys);

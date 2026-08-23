@@ -11,7 +11,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::appearance::BORDER_WIDTH;
-use super::client_controller::swap_to_inner;
+use super::client_controller::activate_pid_inner;
 use super::control_bridge::publish;
 use super::geometry::scale;
 use super::hosts::{
@@ -45,6 +45,17 @@ const VK_SHIFT_CODE: i32 = 0x10;
 
 fn reorder_thumbnail_alpha(normal_alpha: u8) -> u8 {
     normal_alpha.min(THUMB_OPACITY_DRAG_MAX)
+}
+
+fn client_reorder_indices(
+    client_pips: &[u32],
+    presented_from_pid: u32,
+    presented_to_pid: u32,
+) -> Option<(usize, usize)> {
+    client_pips
+        .iter()
+        .position(|pid| *pid == presented_from_pid)
+        .zip(client_pips.iter().position(|pid| *pid == presented_to_pid))
 }
 
 fn cursor_for_resize_edge(edge: ResizeEdge) -> *const u16 {
@@ -645,58 +656,68 @@ unsafe fn pip_wnd_proc_inner(
                             request_redraw(pw.label_hwnd);
                         }
                     }
-                    // Perform swap if target is valid.
+                    // Perform the swap by client identity, not by presentation
+                    // index. A transient host-creation failure may compact the
+                    // rendered list, but it must never redirect an interaction
+                    // to a different EQ client.
                     if let Some(to_index) = old_drop_target {
-                        if to_index != drag.from_index
-                            && to_index < s.clients.pips().len()
-                            && drag.from_index < s.clients.pips().len()
-                        {
-                            // When auto-order is on, swap window numbers so the
-                            // sort keeps the user's intended arrangement.
-                            if config::Config::load().auto_order {
-                                let pid_a = s
-                                    .clients
-                                    .pip_at(drag.from_index)
-                                    .expect("drag source index was validated");
-                                let pid_b = s
-                                    .clients
-                                    .pip_at(to_index)
-                                    .expect("drop target index was validated");
-                                let num_a = s
-                                    .clients
-                                    .windows
-                                    .iter()
-                                    .find(|w| w.pid == pid_a)
-                                    .map(|w| w.number);
-                                let num_b = s
-                                    .clients
-                                    .windows
-                                    .iter()
-                                    .find(|w| w.pid == pid_b)
-                                    .map(|w| w.number);
-                                if let (Some(na), Some(nb)) = (num_a, num_b) {
-                                    if let Some(wa) =
-                                        s.clients.windows.iter_mut().find(|w| w.pid == pid_a)
-                                    {
-                                        wa.number = nb;
-                                    }
-                                    if let Some(wb) =
-                                        s.clients.windows.iter_mut().find(|w| w.pid == pid_b)
-                                    {
-                                        wb.number = na;
+                        let pids = s
+                            .presentation
+                            .pip_windows
+                            .get(drag.from_index)
+                            .zip(s.presentation.pip_windows.get(to_index))
+                            .map(|(from, to)| (from.pid, to.pid));
+                        if let Some((pid_a, pid_b)) = pids.filter(|(a, b)| a != b) {
+                            if let Some((from_client_index, to_client_index)) =
+                                client_reorder_indices(s.clients.pips(), pid_a, pid_b)
+                            {
+                                // When auto-order is on, swap window numbers so
+                                // the sort keeps the user's intended arrangement.
+                                if config::Config::load().auto_order {
+                                    let num_a = s
+                                        .clients
+                                        .windows
+                                        .iter()
+                                        .find(|w| w.pid == pid_a)
+                                        .map(|w| w.number);
+                                    let num_b = s
+                                        .clients
+                                        .windows
+                                        .iter()
+                                        .find(|w| w.pid == pid_b)
+                                        .map(|w| w.number);
+                                    if let (Some(na), Some(nb)) = (num_a, num_b) {
+                                        if let Some(wa) =
+                                            s.clients.windows.iter_mut().find(|w| w.pid == pid_a)
+                                        {
+                                            wa.number = nb;
+                                        }
+                                        if let Some(wb) =
+                                            s.clients.windows.iter_mut().find(|w| w.pid == pid_b)
+                                        {
+                                            wb.number = na;
+                                        }
                                     }
                                 }
+                                let swapped =
+                                    s.clients.swap_pips(from_client_index, to_client_index);
+                                debug_assert!(swapped);
+                                rebuild_thumbnails(s);
+                                update_visibility(s);
+                                publish(s);
                             }
-                            let swapped = s.clients.swap_pips(drag.from_index, to_index);
-                            debug_assert!(swapped);
-                            rebuild_thumbnails(s);
-                            update_visibility(s);
-                            publish(s);
                         }
                     }
                 } else {
-                    // Simple click → activate window.
-                    let _ = swap_to_inner(s, drag.from_index);
+                    // Simple click → activate the presented identity.
+                    if let Some(pid) = s
+                        .presentation
+                        .pip_windows
+                        .get(drag.from_index)
+                        .map(|pip| pip.pid)
+                    {
+                        let _ = activate_pid_inner(s, pid);
+                    }
                 }
             }
 
@@ -772,5 +793,12 @@ mod tests {
     fn reorder_never_brightens_a_thumbnail() {
         assert_eq!(reorder_thumbnail_alpha(25), 25);
         assert_eq!(reorder_thumbnail_alpha(204), THUMB_OPACITY_DRAG_MAX);
+    }
+
+    #[test]
+    fn compacted_presentation_reorders_by_identity_not_rendered_index() {
+        let client_pips = [10, 20, 30, 40];
+        assert_eq!(client_reorder_indices(&client_pips, 30, 10), Some((2, 0)));
+        assert_eq!(client_reorder_indices(&client_pips, 99, 10), None);
     }
 }

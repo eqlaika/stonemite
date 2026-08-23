@@ -2,6 +2,7 @@ use windows::Win32::Foundation::{HWND, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
 use super::labels::{Color, LabelTheme};
+use super::pip_transition::PipTransition;
 use super::render::Compositor;
 use super::toast::ToastState;
 use crate::diagnostics::debug_log;
@@ -32,6 +33,7 @@ pub(super) struct BannerSceneKey {
 pub(super) struct PipWindowEntry {
     pub(super) hwnd: HWND,
     pub(super) label_hwnd: HWND,
+    pub(super) source_hwnd: HWND,
     pub(super) pid: u32,
     pub(super) thumb: isize,
     pub(super) label: String,
@@ -83,6 +85,7 @@ pub(super) struct PresentationState {
     pub(super) compositor: Option<Compositor>,
     pub(super) com_apartment: ComApartment,
     pub(super) pip_windows: Vec<PipWindowEntry>,
+    pub(super) pip_transition: Option<PipTransition>,
     pub(super) pending_composition_destroys: Vec<HWND>,
     pub(super) active_label_hwnd: HWND,
     pub(super) active_label_text: String,

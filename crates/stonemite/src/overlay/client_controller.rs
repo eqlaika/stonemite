@@ -153,7 +153,7 @@ pub(super) unsafe fn activate_pid(target_pid: u32) -> CommandResult {
     }
 }
 
-unsafe fn activate_pid_inner(s: &mut OverlayState, target_pid: u32) -> CommandResult {
+pub(super) unsafe fn activate_pid_inner(s: &mut OverlayState, target_pid: u32) -> CommandResult {
     let Some(target_window) = s
         .clients
         .windows
