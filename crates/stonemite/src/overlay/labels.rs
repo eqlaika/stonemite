@@ -23,6 +23,85 @@ impl Color {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct FontSpec {
+    pub family: String,
+    /// Percentage of the established automatic character-name size.
+    pub scale_percent: u32,
+    /// Standard numeric font weight (400 regular through 900 heavy).
+    pub weight: u16,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct LabelTheme {
+    pub name_font: FontSpec,
+    pub badge_font: FontSpec,
+    pub text_color: Color,
+    pub text_shadow_color: Color,
+    pub badge_text_color: Color,
+    pub corner_radius: i32,
+    pub badge_inset: i32,
+    pub badge_left_padding: i32,
+    pub item_gap: i32,
+    pub right_padding: i32,
+    pub text_shadow_offset: i32,
+    pub name_font_height_reduction: i32,
+    pub badge_font_height_reduction: i32,
+}
+
+impl LabelTheme {
+    pub(super) fn with_name_font(family: String, scale_percent: u32, weight: u16) -> Self {
+        Self {
+            name_font: FontSpec {
+                family,
+                scale_percent,
+                weight,
+            },
+            ..Self::default()
+        }
+    }
+}
+
+impl Default for LabelTheme {
+    fn default() -> Self {
+        Self {
+            name_font: FontSpec {
+                family: "Segoe UI".to_owned(),
+                scale_percent: 100,
+                weight: 700,
+            },
+            badge_font: FontSpec {
+                family: "Segoe UI".to_owned(),
+                scale_percent: 100,
+                weight: 900,
+            },
+            text_color: Color {
+                red: 255,
+                green: 255,
+                blue: 255,
+            },
+            text_shadow_color: Color {
+                red: 0,
+                green: 0,
+                blue: 0,
+            },
+            badge_text_color: Color {
+                red: 255,
+                green: 255,
+                blue: 255,
+            },
+            corner_radius: 8,
+            badge_inset: 6,
+            badge_left_padding: 4,
+            item_gap: 6,
+            right_padding: 10,
+            text_shadow_offset: 1,
+            name_font_height_reduction: 12,
+            badge_font_height_reduction: 14,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct LabelModel<'a> {
     pub text: &'a str,
@@ -54,12 +133,16 @@ impl LabelStyle {
         self.pixels(self.logical_height)
     }
 
-    pub(super) fn badge_font_height(self) -> i32 {
-        self.pixels(self.logical_height - 14)
+    pub(super) fn badge_font_height(self, theme: &LabelTheme) -> i32 {
+        let logical_height = self.logical_height - theme.badge_font_height_reduction;
+        (f64::from(logical_height) * f64::from(theme.badge_font.scale_percent) / 100.0 * self.scale)
+            .round() as i32
     }
 
-    pub(super) fn name_font_height(self) -> i32 {
-        self.pixels(self.logical_height - 12)
+    pub(super) fn name_font_height(self, theme: &LabelTheme) -> i32 {
+        let logical_height = self.logical_height - theme.name_font_height_reduction;
+        (f64::from(logical_height) * f64::from(theme.name_font.scale_percent) / 100.0 * self.scale)
+            .round() as i32
     }
 }
 
@@ -105,10 +188,15 @@ pub(super) struct LabelLayout {
 }
 
 impl LabelLayout {
-    pub(super) fn new(bounds: Rect, style: LabelStyle, has_class: bool) -> Self {
+    pub(super) fn new(
+        bounds: Rect,
+        style: LabelStyle,
+        theme: &LabelTheme,
+        has_class: bool,
+    ) -> Self {
         let label_height = bounds.height();
-        let badge_diameter = label_height - style.pixels(6);
-        let badge_left = bounds.left + style.pixels(4);
+        let badge_diameter = label_height - style.pixels(theme.badge_inset);
+        let badge_left = bounds.left + style.pixels(theme.badge_left_padding);
         let badge_top = bounds.top + (label_height - badge_diameter) / 2;
         let badge = Rect::new(
             badge_left,
@@ -117,7 +205,7 @@ impl LabelLayout {
             badge_top + badge_diameter,
         );
 
-        let after_badge = badge.right + style.pixels(6);
+        let after_badge = badge.right + style.pixels(theme.item_gap);
         let icon = has_class.then(|| {
             Rect::new(
                 after_badge,
@@ -127,7 +215,7 @@ impl LabelLayout {
             )
         });
         let text_left = icon
-            .map(|icon| icon.right + style.pixels(6))
+            .map(|icon| icon.right + style.pixels(theme.item_gap))
             .unwrap_or(after_badge);
         let text = Rect::new(text_left, bounds.top, bounds.right, bounds.bottom);
 
@@ -136,8 +224,11 @@ impl LabelLayout {
             badge,
             icon,
             text,
-            text_shadow: text.offset_origin(style.pixels(1), style.pixels(1)),
-            corner_radius: style.pixels(8),
+            text_shadow: text.offset_origin(
+                style.pixels(theme.text_shadow_offset),
+                style.pixels(theme.text_shadow_offset),
+            ),
+            corner_radius: style.pixels(theme.corner_radius),
         }
     }
 }
@@ -147,16 +238,22 @@ impl LabelLayout {
 pub(super) fn required_width(
     text_width: i32,
     style: LabelStyle,
+    theme: &LabelTheme,
     has_class: bool,
     max_width: i32,
 ) -> i32 {
     let badge_width = style.height();
     let icon_width = if has_class {
-        badge_width + style.pixels(6)
+        badge_width + style.pixels(theme.item_gap)
     } else {
         0
     };
-    (badge_width + style.pixels(6) + icon_width + text_width + style.pixels(10)).min(max_width)
+    (badge_width
+        + style.pixels(theme.item_gap)
+        + icon_width
+        + text_width
+        + style.pixels(theme.right_padding))
+    .min(max_width)
 }
 
 #[cfg(test)]
@@ -167,7 +264,12 @@ mod tests {
 
     #[test]
     fn lays_out_badge_and_text_without_class_icon() {
-        let layout = LabelLayout::new(Rect::new(0, 0, 200, 48), STYLE, false);
+        let layout = LabelLayout::new(
+            Rect::new(0, 0, 200, 48),
+            STYLE,
+            &LabelTheme::default(),
+            false,
+        );
 
         assert_eq!(layout.background, Rect::new(0, 0, 200, 48));
         assert_eq!(layout.badge, Rect::new(4, 3, 46, 45));
@@ -179,7 +281,12 @@ mod tests {
 
     #[test]
     fn reserves_badge_sized_class_icon() {
-        let layout = LabelLayout::new(Rect::new(10, 20, 230, 68), STYLE, true);
+        let layout = LabelLayout::new(
+            Rect::new(10, 20, 230, 68),
+            STYLE,
+            &LabelTheme::default(),
+            true,
+        );
 
         assert_eq!(layout.badge, Rect::new(14, 23, 56, 65));
         assert_eq!(layout.icon, Some(Rect::new(62, 23, 104, 65)));
@@ -188,21 +295,44 @@ mod tests {
 
     #[test]
     fn required_width_preserves_padding_and_cap() {
-        assert_eq!(required_width(100, STYLE, false, i32::MAX), 164);
-        assert_eq!(required_width(100, STYLE, true, i32::MAX), 218);
-        assert_eq!(required_width(100, STYLE, true, 180), 180);
+        let theme = LabelTheme::default();
+        assert_eq!(required_width(100, STYLE, &theme, false, i32::MAX), 164);
+        assert_eq!(required_width(100, STYLE, &theme, true, i32::MAX), 218);
+        assert_eq!(required_width(100, STYLE, &theme, true, 180), 180);
     }
 
     #[test]
     fn scales_geometry_for_dpi() {
         let style = LabelStyle::new(1.5, 48);
-        let layout = LabelLayout::new(Rect::new(0, 0, 300, 72), style, true);
+        let layout = LabelLayout::new(
+            Rect::new(0, 0, 300, 72),
+            style,
+            &LabelTheme::default(),
+            true,
+        );
 
         assert_eq!(style.height(), 72);
         assert_eq!(layout.badge, Rect::new(6, 4, 69, 67));
         assert_eq!(layout.icon, Some(Rect::new(78, 4, 141, 67)));
         assert_eq!(layout.text.left, 150);
         assert_eq!(layout.corner_radius, 12);
+    }
+
+    #[test]
+    fn typography_preserves_defaults_and_scales_character_names() {
+        let default_theme = LabelTheme::default();
+        assert_eq!(STYLE.name_font_height(&default_theme), 36);
+        assert_eq!(STYLE.badge_font_height(&default_theme), 34);
+
+        let larger = LabelTheme::with_name_font("Tahoma".to_owned(), 120, 600);
+        assert_eq!(STYLE.name_font_height(&larger), 43);
+        assert_eq!(STYLE.badge_font_height(&larger), 34);
+        assert_eq!(larger.name_font.family, "Tahoma");
+        assert_eq!(larger.name_font.weight, 600);
+
+        let fractional_dpi = LabelStyle::new(1.25, 48);
+        let slightly_larger = LabelTheme::with_name_font("Segoe UI".to_owned(), 105, 700);
+        assert_eq!(fractional_dpi.name_font_height(&slightly_larger), 47);
     }
 
     #[test]

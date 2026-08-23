@@ -2,6 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_EQ_DIR: &str = r"C:\Users\Public\Daybreak Game Company\Installed Games\EverQuest";
+pub const DEFAULT_PIP_LABEL_FONT_FAMILY: &str = "Segoe UI";
+pub const DEFAULT_PIP_LABEL_FONT_SCALE: u32 = 100;
+pub const MIN_PIP_LABEL_FONT_SCALE: u32 = 60;
+pub const MAX_PIP_LABEL_FONT_SCALE: u32 = 120;
+pub const MAX_PIP_LABEL_FONT_FAMILY_LEN: usize = 31;
 
 /// Screen edge where the PiP strip is anchored.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -16,6 +21,82 @@ pub enum PipEdge {
 impl Default for PipEdge {
     fn default() -> Self {
         Self::Right
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LabelFontWeight {
+    Regular,
+    Semibold,
+    Bold,
+    Heavy,
+}
+
+impl Default for LabelFontWeight {
+    fn default() -> Self {
+        Self::Bold
+    }
+}
+
+fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RawString {
+        Value(String),
+        Other(serde::de::IgnoredAny),
+    }
+
+    Ok(match RawString::deserialize(deserializer)? {
+        RawString::Value(value) => Some(value),
+        RawString::Other(_) => None,
+    })
+}
+
+fn deserialize_optional_u32<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RawNumber {
+        Number(u64),
+        Text(String),
+        Other(serde::de::IgnoredAny),
+    }
+
+    Ok(match RawNumber::deserialize(deserializer)? {
+        RawNumber::Number(value) => u32::try_from(value).ok(),
+        RawNumber::Text(value) => value.parse().ok(),
+        RawNumber::Other(_) => None,
+    })
+}
+
+impl<'de> Deserialize<'de> for LabelFontWeight {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum RawWeight {
+            Name(String),
+            Number(u16),
+            Other(serde::de::IgnoredAny),
+        }
+
+        Ok(match RawWeight::deserialize(deserializer)? {
+            RawWeight::Name(value) if value.eq_ignore_ascii_case("regular") => Self::Regular,
+            RawWeight::Name(value) if value.eq_ignore_ascii_case("semibold") => Self::Semibold,
+            RawWeight::Name(value) if value.eq_ignore_ascii_case("heavy") => Self::Heavy,
+            RawWeight::Number(400) => Self::Regular,
+            RawWeight::Number(600) => Self::Semibold,
+            RawWeight::Number(900) => Self::Heavy,
+            RawWeight::Name(_) | RawWeight::Number(_) | RawWeight::Other(_) => Self::Bold,
+        })
     }
 }
 
@@ -124,6 +205,15 @@ pub struct Config {
     /// PiP label opacity as a percentage (0–100). None = default (80).
     #[serde(default)]
     pub pip_label_opacity: Option<u32>,
+    /// Installed Windows font family used for character names.
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
+    pub pip_label_font_family: Option<String>,
+    /// Character-name font size relative to the current automatic size.
+    #[serde(default, deserialize_with = "deserialize_optional_u32")]
+    pub pip_label_font_scale: Option<u32>,
+    /// Character-name font weight.
+    #[serde(default)]
+    pub pip_label_font_weight: Option<LabelFontWeight>,
     /// Automatically order PiP windows by slot number in auto layout mode.
     #[serde(default = "default_auto_order")]
     pub auto_order: bool,
@@ -278,6 +368,9 @@ impl Default for Config {
             snap_grid: default_snap_grid(),
             pip_label_height: None,
             pip_label_opacity: None,
+            pip_label_font_family: None,
+            pip_label_font_scale: None,
+            pip_label_font_weight: None,
             auto_order: default_auto_order(),
             box_order: Vec::new(),
             hide_from_alt_tab: default_hide_from_alt_tab(),
@@ -310,6 +403,28 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn effective_pip_label_font_family(&self) -> &str {
+        self.pip_label_font_family
+            .as_deref()
+            .map(str::trim)
+            .filter(|family| {
+                !family.is_empty()
+                    && family.encode_utf16().count() <= MAX_PIP_LABEL_FONT_FAMILY_LEN
+                    && !family.chars().any(char::is_control)
+            })
+            .unwrap_or(DEFAULT_PIP_LABEL_FONT_FAMILY)
+    }
+
+    pub fn effective_pip_label_font_scale(&self) -> u32 {
+        self.pip_label_font_scale
+            .unwrap_or(DEFAULT_PIP_LABEL_FONT_SCALE)
+            .clamp(MIN_PIP_LABEL_FONT_SCALE, MAX_PIP_LABEL_FONT_SCALE)
+    }
+
+    pub fn effective_pip_label_font_weight(&self) -> LabelFontWeight {
+        self.pip_label_font_weight.unwrap_or_default()
+    }
+
     /// Return the config directory: %APPDATA%\Stonemite\
     pub fn dir() -> Option<PathBuf> {
         std::env::var_os("APPDATA").map(|appdata| Path::new(&appdata).join("Stonemite"))
@@ -700,6 +815,28 @@ box_order = [
         assert_eq!(config.eq_dir, DEFAULT_EQ_DIR);
         assert_eq!(config.trushar.bind, "127.0.0.1:19720");
         assert_eq!(config.trushar.auth_token, None);
+    }
+
+    #[test]
+    fn malformed_label_typography_falls_back_without_discarding_config() {
+        let config: Config = toml::from_str(
+            "eq_dir = 'D:\\EverQuest'\npip_label_font_family = 42\npip_label_font_scale = 'huge'\npip_label_font_weight = 'medium'\n",
+        )
+        .unwrap();
+
+        assert_eq!(config.eq_dir, r"D:\EverQuest");
+        assert_eq!(
+            config.effective_pip_label_font_family(),
+            DEFAULT_PIP_LABEL_FONT_FAMILY
+        );
+        assert_eq!(
+            config.effective_pip_label_font_scale(),
+            DEFAULT_PIP_LABEL_FONT_SCALE
+        );
+        assert_eq!(
+            config.effective_pip_label_font_weight(),
+            LabelFontWeight::Bold
+        );
     }
 
     #[test]

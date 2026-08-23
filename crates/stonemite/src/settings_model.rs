@@ -2,7 +2,10 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Account, BoxIdentity, Config, PipEdge, TrusharConfig};
+use crate::config::{
+    Account, BoxIdentity, Config, LabelFontWeight, PipEdge, TrusharConfig,
+    MAX_PIP_LABEL_FONT_FAMILY_LEN, MAX_PIP_LABEL_FONT_SCALE, MIN_PIP_LABEL_FONT_SCALE,
+};
 use crate::crypt;
 
 const SERVER_OPTIONS: &[&str] = &[
@@ -48,6 +51,8 @@ pub struct SettingsOptions {
     pub servers: Vec<OptionItem>,
     pub known_characters: Vec<BoxIdentity>,
     pub pip_edges: Vec<OptionItem>,
+    pub label_font_families: Vec<String>,
+    pub label_font_weights: Vec<OptionItem>,
     pub notification_sounds: Vec<OptionItem>,
     pub filter_modes: Vec<OptionItem>,
 }
@@ -136,6 +141,9 @@ pub struct PipSettings {
     pub edge: PipEdge,
     pub label_height: u32,
     pub label_opacity: u32,
+    pub font_family: String,
+    pub font_scale: u32,
+    pub font_weight: LabelFontWeight,
     pub auto_order: bool,
     pub hide_hotkey: String,
 }
@@ -195,8 +203,16 @@ impl SettingsPayload {
                 }),
         );
         normalize_known_characters(&mut known_characters);
+        let mut label_font_families = crate::font_catalog::installed_font_families();
+        if !label_font_families
+            .iter()
+            .any(|family| family.eq_ignore_ascii_case(&draft.pip.font_family))
+        {
+            label_font_families.push(draft.pip.font_family.clone());
+            label_font_families.sort_by_key(|family| family.to_lowercase());
+        }
         Ok(Self {
-            options: SettingsOptions::new(known_characters),
+            options: SettingsOptions::new(known_characters, label_font_families),
             runtime: SettingsRuntime {
                 version: crate::build_info::version().to_owned(),
                 trusik_enabled: config.trusik,
@@ -208,7 +224,7 @@ impl SettingsPayload {
 }
 
 impl SettingsOptions {
-    fn new(known_characters: Vec<BoxIdentity>) -> Self {
+    fn new(known_characters: Vec<BoxIdentity>, label_font_families: Vec<String>) -> Self {
         Self {
             servers: SERVER_OPTIONS
                 .iter()
@@ -227,6 +243,19 @@ impl SettingsOptions {
                 ("left", "Left"),
                 ("top", "Top"),
                 ("bottom", "Bottom"),
+            ]
+            .into_iter()
+            .map(|(value, label)| OptionItem {
+                value: value.to_owned(),
+                label: label.to_owned(),
+            })
+            .collect(),
+            label_font_families,
+            label_font_weights: [
+                ("regular", "Regular"),
+                ("semibold", "Semibold"),
+                ("bold", "Bold"),
+                ("heavy", "Heavy"),
             ]
             .into_iter()
             .map(|(value, label)| OptionItem {
@@ -302,6 +331,9 @@ impl SettingsDraft {
                 edge: config.pip_edge,
                 label_height: config.pip_label_height.unwrap_or(48),
                 label_opacity: config.pip_label_opacity.unwrap_or(80),
+                font_family: config.effective_pip_label_font_family().to_owned(),
+                font_scale: config.effective_pip_label_font_scale(),
+                font_weight: config.effective_pip_label_font_weight(),
                 auto_order: config.auto_order,
                 hide_hotkey: config.hide_hotkey.clone(),
             },
@@ -389,6 +421,7 @@ impl SettingsDraft {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        let label_font_family = self.pip.font_family.trim().to_owned();
         let config = Config {
             eq_dir: self.general.eq_directory,
             hide_hotkey: self.pip.hide_hotkey,
@@ -421,6 +454,9 @@ impl SettingsDraft {
             accounts,
             pip_label_height: Some(self.pip.label_height),
             pip_label_opacity: Some(self.pip.label_opacity),
+            pip_label_font_family: Some(label_font_family),
+            pip_label_font_scale: Some(self.pip.font_scale),
+            pip_label_font_weight: Some(self.pip.font_weight),
             auto_order: self.pip.auto_order,
             box_order,
             hide_from_alt_tab: self.general.hide_from_alt_tab,
@@ -445,6 +481,24 @@ impl SettingsDraft {
         validate_range("Update interval", self.general.updates.interval_days, 1, 30)?;
         validate_range("PiP label height", self.pip.label_height, 24, 64)?;
         validate_range("PiP label opacity", self.pip.label_opacity, 10, 100)?;
+        validate_range(
+            "PiP label font scale",
+            self.pip.font_scale,
+            MIN_PIP_LABEL_FONT_SCALE,
+            MAX_PIP_LABEL_FONT_SCALE,
+        )?;
+        let font_family = self.pip.font_family.trim();
+        if font_family.is_empty() {
+            return Err("PiP label font family is required".to_owned());
+        }
+        if font_family.encode_utf16().count() > MAX_PIP_LABEL_FONT_FAMILY_LEN {
+            return Err(format!(
+                "PiP label font family must be at most {MAX_PIP_LABEL_FONT_FAMILY_LEN} characters"
+            ));
+        }
+        if font_family.chars().any(char::is_control) {
+            return Err("PiP label font family cannot contain control characters".to_owned());
+        }
         if self.hotkeys.swap_hotkeys.len() != 6 {
             return Err("Exactly six window hotkeys are required".to_owned());
         }
@@ -584,6 +638,15 @@ mod tests {
         assert_eq!(draft.hotkeys.swap_hotkeys.len(), 6);
         assert!(draft.box_order.is_empty());
         assert_eq!(draft.pip.edge, PipEdge::Right);
+        assert_eq!(
+            draft.pip.font_family,
+            crate::config::DEFAULT_PIP_LABEL_FONT_FAMILY
+        );
+        assert_eq!(
+            draft.pip.font_scale,
+            crate::config::DEFAULT_PIP_LABEL_FONT_SCALE
+        );
+        assert_eq!(draft.pip.font_weight, LabelFontWeight::Bold);
         assert_eq!(draft.general.toast.duration_seconds, 2.0);
     }
 
@@ -595,6 +658,46 @@ mod tests {
             draft.validate(),
             Err("Toast height must be between 24 and 128".to_owned())
         );
+    }
+
+    #[test]
+    fn label_typography_is_validated_trimmed_and_persisted() {
+        let mut draft = SettingsDraft::from_config(&Config::default()).unwrap();
+        draft.pip.font_family = "  Tahoma  ".to_owned();
+        draft.pip.font_scale = 115;
+        draft.pip.font_weight = LabelFontWeight::Semibold;
+        let (config, _) = draft.into_config(Config::default()).unwrap();
+        assert_eq!(config.pip_label_font_family.as_deref(), Some("Tahoma"));
+        assert_eq!(config.pip_label_font_scale, Some(115));
+        assert_eq!(
+            config.pip_label_font_weight,
+            Some(LabelFontWeight::Semibold)
+        );
+
+        let mut invalid = SettingsDraft::from_config(&Config::default()).unwrap();
+        invalid.pip.font_scale = 121;
+        assert_eq!(
+            invalid.validate(),
+            Err("PiP label font scale must be between 60 and 120".to_owned())
+        );
+        invalid.pip.font_scale = 100;
+        invalid.pip.font_family = " ".to_owned();
+        assert_eq!(
+            invalid.validate(),
+            Err("PiP label font family is required".to_owned())
+        );
+
+        let malformed = Config {
+            pip_label_font_family: Some(" ".to_owned()),
+            pip_label_font_scale: Some(999),
+            ..Config::default()
+        };
+        let normalized = SettingsDraft::from_config(&malformed).unwrap();
+        assert_eq!(
+            normalized.pip.font_family,
+            crate::config::DEFAULT_PIP_LABEL_FONT_FAMILY
+        );
+        assert_eq!(normalized.pip.font_scale, MAX_PIP_LABEL_FONT_SCALE);
     }
 
     #[test]
@@ -670,8 +773,10 @@ mod tests {
 
     #[test]
     fn payload_option_values_match_serialized_enums() {
-        let options = SettingsOptions::new(Vec::new());
+        let options = SettingsOptions::new(Vec::new(), vec!["Segoe UI".to_owned()]);
         assert_eq!(options.pip_edges[0].value, "right");
+        assert_eq!(options.label_font_families, ["Segoe UI"]);
+        assert_eq!(options.label_font_weights[2].value, "bold");
         assert_eq!(options.filter_modes[0].value, "blacklist");
     }
 }

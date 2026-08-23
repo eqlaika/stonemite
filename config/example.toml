@@ -26,6 +26,12 @@ pip_edge = "right"
 # PiP label opacity as a percentage, 0–100 (default 80)
 # pip_label_opacity = 80
 
+# Character-name typography. Family must be an installed Windows font;
+# scale is 60–120% of the automatic size; weight is regular, semibold, bold, or heavy.
+# pip_label_font_family = "Segoe UI"
+# pip_label_font_scale = 100
+# pip_label_font_weight = "bold"
+
 # Automatically order PiP windows by slot number (default true)
 # auto_order = true
 

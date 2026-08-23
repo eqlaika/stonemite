@@ -33,18 +33,20 @@ export function Field({
   label,
   description,
   htmlFor,
+  descriptionId,
   children,
 }: {
   label: string;
   description?: string;
   htmlFor?: string;
+  descriptionId?: string;
   children: ReactNode;
 }) {
   return (
     <div className="field-row">
       <div className="field-copy">
         <label htmlFor={htmlFor}>{label}</label>
-        {description ? <p>{description}</p> : null}
+        {description ? <p id={descriptionId}>{description}</p> : null}
       </div>
       <div className="field-control">{children}</div>
     </div>
@@ -67,6 +69,7 @@ export function RangeInput({
   suffix,
   onChange,
   ariaLabel,
+  ariaDescribedBy,
 }: {
   value: number;
   min: number;
@@ -75,6 +78,7 @@ export function RangeInput({
   suffix?: string;
   onChange: (value: number) => void;
   ariaLabel: string;
+  ariaDescribedBy?: string;
 }) {
   return (
     <div className="range-control">
@@ -85,6 +89,7 @@ export function RangeInput({
         step={step}
         value={value}
         aria-label={ariaLabel}
+        aria-describedby={ariaDescribedBy}
         onChange={(event) => onChange(Number(event.currentTarget.value))}
       />
       <output>{`${value}${suffix ?? ""}`}</output>

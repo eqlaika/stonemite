@@ -6,7 +6,7 @@ mod labels;
 mod notifications;
 mod render;
 
-use labels::{Color, LabelModel, LabelStyle};
+use labels::{Color, LabelModel, LabelStyle, LabelTheme};
 use notifications::{EnabledKinds, Notification};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -233,6 +233,8 @@ struct OverlayState {
     label_height: i32,
     /// Configured label alpha (0–255).
     label_alpha: u8,
+    /// Renderer-independent typography and visual metrics for character labels.
+    label_theme: LabelTheme,
     event_hook: HWINEVENTHOOK,
     monitor_rect: RECT,
     dpi_scale: f64,
@@ -648,6 +650,23 @@ fn label_model<'a>(
         background: Color::from_colorref(background),
         badge_background: Color::from_colorref(badge_color_for_number(number)),
     }
+}
+
+fn label_font_weight(weight: config::LabelFontWeight) -> u16 {
+    match weight {
+        config::LabelFontWeight::Regular => 400,
+        config::LabelFontWeight::Semibold => 600,
+        config::LabelFontWeight::Bold => 700,
+        config::LabelFontWeight::Heavy => 900,
+    }
+}
+
+fn configured_label_theme(cfg: &config::Config) -> LabelTheme {
+    LabelTheme::with_name_font(
+        cfg.effective_pip_label_font_family().to_owned(),
+        cfg.effective_pip_label_font_scale(),
+        label_font_weight(cfg.effective_pip_label_font_weight()),
+    )
 }
 
 fn format_label(w: &EqWindow) -> String {
@@ -1137,6 +1156,7 @@ unsafe fn init_inner() -> HWND {
         .pip_label_height
         .map(|v| v as i32)
         .unwrap_or(DEFAULT_LABEL_HEIGHT);
+    let label_theme = configured_label_theme(&cfg);
 
     *state_unguarded() = Some(OverlayState {
         pip_windows: Vec::new(),
@@ -1152,6 +1172,7 @@ unsafe fn init_inner() -> HWND {
         broadcast_label_hwnd: bc_hwnd,
         label_height,
         label_alpha,
+        label_theme,
         event_hook: hook,
         monitor_rect: RECT::default(),
         dpi_scale: get_dpi_scale(label_hwnd),
@@ -1893,7 +1914,7 @@ unsafe fn update_active_label(s: &mut OverlayState) {
     );
 
     let hdc = windows::Win32::Graphics::Gdi::GetDC(s.active_label_hwnd);
-    let text_width = render::measure_label_width(hdc, &model, style, i32::MAX);
+    let text_width = render::measure_label_width(hdc, &model, style, &s.label_theme, i32::MAX);
     let _ = windows::Win32::Graphics::Gdi::ReleaseDC(s.active_label_hwnd, hdc);
 
     // When PiP edge is left, anchor the label at top-right so the strip doesn't cover it.
@@ -3072,10 +3093,19 @@ unsafe fn paint_pip_window(hwnd: HWND, pip_idx: usize) {
 }
 
 unsafe fn paint_label(hwnd: HWND, text: &str, class: Option<&str>, bg_color: u32) {
-    let (d, number, lh) = state()
+    let fallback_theme = LabelTheme::default();
+    let overlay = state();
+    let (d, number, lh, theme) = overlay
         .as_ref()
-        .map(|s| (s.dpi_scale, s.active_label_number, s.label_height))
-        .unwrap_or((1.0, 0, DEFAULT_LABEL_HEIGHT));
+        .map(|s| {
+            (
+                s.dpi_scale,
+                s.active_label_number,
+                s.label_height,
+                &s.label_theme,
+            )
+        })
+        .unwrap_or((1.0, 0, DEFAULT_LABEL_HEIGHT, &fallback_theme));
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
     let mut bounds = RECT::default();
@@ -3088,6 +3118,7 @@ unsafe fn paint_label(hwnd: HWND, text: &str, class: Option<&str>, bg_color: u32
         bounds,
         &model,
         LabelStyle::new(d, lh),
+        theme,
         Color::from_colorref(LABEL_COLOR_KEY),
     );
 
@@ -3130,7 +3161,7 @@ unsafe fn paint_pip_label(hwnd: HWND) {
     let _ = GetClientRect(hwnd, &mut rc);
     let label_h = style.height().min(rc.bottom - rc.top).max(1);
     let max_label_w = (rc.right - rc.left).max(1);
-    let label_w = render::measure_label_width(hdc, &model, style, max_label_w);
+    let label_w = render::measure_label_width(hdc, &model, style, &s.label_theme, max_label_w);
     let label_rc = RECT {
         left: rc.left,
         top: rc.top,
@@ -3144,6 +3175,7 @@ unsafe fn paint_pip_label(hwnd: HWND) {
         label_rc,
         &model,
         style,
+        &s.label_theme,
         Color::from_colorref(LABEL_COLOR_KEY),
     );
 
@@ -4508,6 +4540,7 @@ pub fn force_rebuild() {
             .unwrap_or(DEFAULT_LABEL_OPACITY)
             .min(100);
         s.label_alpha = ((opacity as u16 * 255) / 100) as u8;
+        s.label_theme = configured_label_theme(&cfg);
         // Update layered window attributes for floating labels.
         let key = windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY);
         let _ = SetLayeredWindowAttributes(

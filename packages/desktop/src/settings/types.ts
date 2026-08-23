@@ -1,4 +1,5 @@
 export type PipEdge = "right" | "left" | "top" | "bottom";
+export type LabelFontWeight = "regular" | "semibold" | "bold" | "heavy";
 export type BroadcastFilterMode = "blacklist" | "whitelist";
 
 export interface OptionItem<T extends string = string> {
@@ -53,6 +54,9 @@ export interface PipSettings {
   edge: PipEdge;
   labelHeight: number;
   labelOpacity: number;
+  fontFamily: string;
+  fontScale: number;
+  fontWeight: LabelFontWeight;
   autoOrder: boolean;
   hideHotkey: string;
 }
@@ -93,6 +97,8 @@ export interface SettingsOptions {
   servers: OptionItem[];
   knownCharacters: BoxIdentity[];
   pipEdges: OptionItem<PipEdge>[];
+  labelFontFamilies: string[];
+  labelFontWeights: OptionItem<LabelFontWeight>[];
   notificationSounds: OptionItem[];
   filterModes: OptionItem<BroadcastFilterMode>[];
 }

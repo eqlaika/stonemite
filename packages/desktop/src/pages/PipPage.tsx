@@ -8,8 +8,84 @@ import {
 import { HotkeyCapture } from "../components/HotkeyCapture";
 import { SettingsPage } from "../components/SettingsPage";
 import { useSettings } from "../settings/SettingsContext";
-import type { PipEdge, SettingsDraft } from "../settings/types";
+import type {
+  LabelFontWeight,
+  OptionItem,
+  PipEdge,
+  PipSettings,
+  SettingsDraft,
+} from "../settings/types";
 import "./PipPage.css";
+
+export function LabelTypographyControls({
+  value,
+  fontFamilies,
+  weightOptions,
+  onChange,
+}: {
+  value: PipSettings;
+  fontFamilies: string[];
+  weightOptions: OptionItem<LabelFontWeight>[];
+  onChange: (update: Partial<PipSettings>) => void;
+}) {
+  return (
+    <>
+      <Field
+        label="Font family"
+        description="Choose from the font families installed on this PC."
+        htmlFor="pip-label-font-family"
+        descriptionId="pip-label-font-family-help"
+      >
+        <SelectInput<string>
+          id="pip-label-font-family"
+          value={value.fontFamily}
+          aria-describedby="pip-label-font-family-help"
+          options={fontFamilies.map((family) => ({
+            value: family,
+            label: family,
+          }))}
+          onChange={(event) =>
+            onChange({ fontFamily: event.currentTarget.value })
+          }
+        />
+      </Field>
+      <Field
+        label="Weight"
+        description="Set the visual emphasis of character names."
+        htmlFor="pip-label-font-weight"
+        descriptionId="pip-label-font-weight-help"
+      >
+        <SelectInput<LabelFontWeight>
+          id="pip-label-font-weight"
+          value={value.fontWeight}
+          aria-describedby="pip-label-font-weight-help"
+          options={weightOptions}
+          onChange={(event) =>
+            onChange({
+              fontWeight: event.currentTarget.value as LabelFontWeight,
+            })
+          }
+        />
+      </Field>
+      <Field
+        label="Text size"
+        description="Scale character names within the current label height."
+        descriptionId="pip-label-font-size-help"
+      >
+        <RangeInput
+          value={value.fontScale}
+          min={60}
+          max={120}
+          step={5}
+          suffix="%"
+          ariaLabel="Character name font size"
+          ariaDescribedBy="pip-label-font-size-help"
+          onChange={(fontScale) => onChange({ fontScale })}
+        />
+      </Field>
+    </>
+  );
+}
 
 export function PipPage() {
   const { draft, setDraft, options } = useSettings();
@@ -85,6 +161,20 @@ export function PipPage() {
             }
           />
         </Field>
+      </FormSection>
+
+      <FormSection
+        title="Typography"
+        description="Choose how character names appear on active and PiP labels."
+      >
+        <LabelTypographyControls
+          value={draft.pip}
+          fontFamilies={options.labelFontFamilies}
+          weightOptions={options.labelFontWeights}
+          onChange={(update) =>
+            updatePip((pip) => ({ ...pip, ...update }))
+          }
+        />
       </FormSection>
 
       <FormSection
