@@ -649,6 +649,7 @@ unsafe fn add_beziers(
     sink.AddBeziers(&segments);
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn draw_text(
     context: &ID2D1DeviceContext,
     resources: &TextResources,

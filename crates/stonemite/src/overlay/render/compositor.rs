@@ -307,7 +307,7 @@ impl DeviceResources {
     fn log_removed_reason(&self, context: &str) {
         let result = unsafe { self.graphics.d3d_device.GetDeviceRemovedReason() };
         if let Err(reason) = result {
-            super::super::debug_log(&format!(
+            crate::diagnostics::debug_log(&format!(
                 "DirectComposition {context}; device removed reason: {reason}"
             ));
         }
@@ -1236,7 +1236,7 @@ impl Compositor {
     }
 
     fn log_failure(&self, context: &str, error: &WindowsError) {
-        super::super::debug_log(&format!("DirectComposition {context}: {error}"));
+        crate::diagnostics::debug_log(&format!("DirectComposition {context}: {error}"));
         if classify_hresult(error.code()) == FailureClass::DeviceLost {
             if let Some(device) = self.device.as_ref() {
                 device.log_removed_reason(context);

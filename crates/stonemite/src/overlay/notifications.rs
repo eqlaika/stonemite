@@ -3,12 +3,21 @@
 //! Static icon geometry is adapted from the Lucide and Lucide Animated frames
 //! already used by the Stream Deck integration.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 
-use super::dpi;
+use super::activation::target_has_keyboard_focus;
+use super::appearance::BORDER_WIDTH;
+use super::clients::focused_foreground_pid;
+use super::geometry::scale as pixels;
 use super::labels::{Color, LabelStyle, Rect};
+use super::scene_layout::pip_content_stack_layout;
+use super::state::OverlayState;
+use super::surfaces::request_redraw;
+use super::toast_controller::show_toast_inner;
+use crate::diagnostics::debug_log;
 
 pub(super) const TIMER_ID: usize = 43;
 pub(super) const ANIMATION_STEP_MS: u32 = 16;
@@ -69,6 +78,62 @@ impl EnabledKinds {
             Kind::Resurrection => self.resurrections,
             Kind::Death => self.deaths,
         }
+    }
+}
+
+/// Notification policy and durable per-client unread state.
+pub(super) struct NotificationCenter {
+    pub(super) entries: HashMap<u32, Notification>,
+    pub(super) visual_enabled: bool,
+    pub(super) sound_enabled: bool,
+    pub(super) sound: String,
+    pub(super) enabled_kinds: EnabledKinds,
+    pub(super) animations_enabled: bool,
+}
+
+impl NotificationCenter {
+    pub(super) fn new(cfg: &crate::config::Config, animations_enabled: bool) -> Self {
+        Self {
+            entries: HashMap::new(),
+            visual_enabled: cfg.tell_visual_enabled,
+            sound_enabled: cfg.tell_sound_enabled,
+            sound: crate::sound::normalized_id(&cfg.tell_sound).to_owned(),
+            enabled_kinds: EnabledKinds {
+                tells: cfg.notify_tells,
+                group_invites: cfg.notify_group_invites,
+                raid_invites: cfg.notify_raid_invites,
+                resurrections: cfg.notify_resurrections,
+                deaths: cfg.notify_deaths,
+            },
+            animations_enabled,
+        }
+    }
+
+    pub(super) fn acknowledge(&mut self, pid: u32) -> bool {
+        self.entries.remove(&pid).is_some()
+    }
+
+    /// Apply notification-related settings and report whether the selected
+    /// notification kinds changed.
+    pub(super) fn apply_config(
+        &mut self,
+        cfg: &crate::config::Config,
+        animations_enabled: bool,
+    ) -> bool {
+        let enabled_kinds = EnabledKinds {
+            tells: cfg.notify_tells,
+            group_invites: cfg.notify_group_invites,
+            raid_invites: cfg.notify_raid_invites,
+            resurrections: cfg.notify_resurrections,
+            deaths: cfg.notify_deaths,
+        };
+        let selection_changed = self.enabled_kinds != enabled_kinds;
+        self.visual_enabled = cfg.tell_visual_enabled;
+        self.sound_enabled = cfg.tell_sound_enabled;
+        self.sound = crate::sound::normalized_id(&cfg.tell_sound).to_owned();
+        self.enabled_kinds = enabled_kinds;
+        self.animations_enabled = animations_enabled;
+        selection_changed
     }
 }
 
@@ -369,6 +434,29 @@ impl NotificationContentLayout {
     }
 }
 
+pub(super) fn notification_content_layout(
+    snapshot: &NotificationVisualSnapshot,
+    canvas: Rect,
+    border_width: i32,
+    style: LabelStyle,
+    timer_progress: Option<f32>,
+    measured_preview_text_width: i32,
+) -> NotificationContentLayout {
+    let stack = pip_content_stack_layout(
+        canvas,
+        border_width,
+        style,
+        canvas.inset(border_width.max(0)).width().max(0),
+        timer_progress,
+    );
+    snapshot.content_layout(
+        stack.content,
+        stack.content_bottom,
+        style.scale,
+        measured_preview_text_width,
+    )
+}
+
 fn rect_contains(rect: Rect, point: (i32, i32)) -> bool {
     point.0 >= rect.left && point.0 < rect.right && point.1 >= rect.top && point.1 < rect.bottom
 }
@@ -449,11 +537,11 @@ impl NotificationVisualSnapshot {
         scale: f64,
         measured_text_width: i32,
     ) -> NotificationContentLayout {
-        let dot_diameter = dpi(UNREAD_DOT_DIAMETER, scale).max(6);
-        let ring = dpi(UNREAD_DOT_RING, scale).max(1);
-        let gap = dpi(UNREAD_DOT_GAP, scale).max(1);
+        let dot_diameter = pixels(UNREAD_DOT_DIAMETER, scale).max(6);
+        let ring = pixels(UNREAD_DOT_RING, scale).max(1);
+        let gap = pixels(UNREAD_DOT_GAP, scale).max(1);
         let stride = dot_diameter + 2 * ring + gap;
-        let row_top = label_bottom + dpi(PREVIEW_GAP, scale);
+        let row_top = label_bottom + pixels(PREVIEW_GAP, scale);
         let dot_y = row_top + ring;
         let max_dots = ((client.width().max(0) + gap) / stride).max(0) as usize;
         let first_visible = self.unread_colors.len().saturating_sub(max_dots);
@@ -501,12 +589,12 @@ fn rect_from_win32(rect: RECT) -> Rect {
 }
 
 fn invite_button_rects_neutral(preview: Rect, scale: f64) -> Option<(Rect, Rect)> {
-    let pad = dpi(PREVIEW_PADDING, scale);
-    let gap = dpi(ACTION_BUTTON_GAP, scale);
-    let height = dpi(ACTION_BUTTON_HEIGHT, scale);
-    let accept_width = dpi(ACCEPT_BUTTON_WIDTH, scale);
-    let dismiss_width = dpi(DISMISS_BUTTON_WIDTH, scale);
-    let left = preview.left + pad + dpi(PREVIEW_ICON_SIZE + 9, scale);
+    let pad = pixels(PREVIEW_PADDING, scale);
+    let gap = pixels(ACTION_BUTTON_GAP, scale);
+    let height = pixels(ACTION_BUTTON_HEIGHT, scale);
+    let accept_width = pixels(ACCEPT_BUTTON_WIDTH, scale);
+    let dismiss_width = pixels(DISMISS_BUTTON_WIDTH, scale);
+    let left = preview.left + pad + pixels(PREVIEW_ICON_SIZE + 9, scale);
     let top = preview.bottom - pad - height;
     if top <= preview.top + pad || left + accept_width + gap + dismiss_width + pad > preview.right {
         return None;
@@ -523,7 +611,7 @@ fn invite_button_rects_neutral(preview: Rect, scale: f64) -> Option<(Rect, Rect)
 }
 
 fn unread_row_bottom(label_bottom: i32, scale: f64) -> i32 {
-    label_bottom + dpi(PREVIEW_GAP, scale) + dpi(UNREAD_ROW_HEIGHT, scale)
+    label_bottom + pixels(PREVIEW_GAP, scale) + pixels(UNREAD_ROW_HEIGHT, scale)
 }
 
 fn preview_available_bounds(
@@ -532,22 +620,22 @@ fn preview_available_bounds(
     scale: f64,
     invite_actions: bool,
 ) -> Rect {
-    let minimum_top = minimum_top + dpi(PREVIEW_GAP, scale);
-    let margin = dpi(PREVIEW_MARGIN, scale);
-    let shadow_x = dpi(PREVIEW_SHADOW_X, scale);
-    let shadow_y = dpi(PREVIEW_SHADOW_Y, scale);
+    let minimum_top = minimum_top + pixels(PREVIEW_GAP, scale);
+    let margin = pixels(PREVIEW_MARGIN, scale);
+    let shadow_x = pixels(PREVIEW_SHADOW_X, scale);
+    let shadow_y = pixels(PREVIEW_SHADOW_Y, scale);
     let preview_bottom = client.bottom - margin - shadow_y;
     let bounds_for_height = |height| {
         Rect::new(
             client.left + margin,
-            (preview_bottom - dpi(height, scale)).max(minimum_top),
+            (preview_bottom - pixels(height, scale)).max(minimum_top),
             client.right - margin - shadow_x,
             preview_bottom,
         )
     };
     let action_preview = bounds_for_height(ACTION_PREVIEW_HEIGHT);
     if invite_actions
-        && action_preview.height() >= dpi(84, scale)
+        && action_preview.height() >= pixels(84, scale)
         && invite_button_rects_neutral(action_preview, scale).is_some()
     {
         action_preview
@@ -581,7 +669,7 @@ fn button_visual(
         text_color: Color::from_colorref(text_color),
         hovered,
         pressed,
-        radius: dpi(7, scale).max(3),
+        radius: pixels(7, scale).max(3),
     }
 }
 
@@ -593,23 +681,23 @@ fn preview_layout(
     measured_text_width: i32,
 ) -> Option<NotificationPreviewLayout> {
     let available = preview_available_bounds(client, minimum_top, scale, snapshot.invite_actions);
-    if available.width() < dpi(120, scale) || available.height() < dpi(32, scale) {
+    if available.width() < pixels(120, scale) || available.height() < pixels(32, scale) {
         return None;
     }
     let available_buttons = snapshot
         .invite_actions
         .then(|| invite_button_rects_neutral(available, scale))
         .flatten();
-    let pad = dpi(PREVIEW_PADDING, scale);
-    let icon_size = dpi(PREVIEW_ICON_SIZE, scale).min(available.height() - 2 * pad);
-    let gap = dpi(9, scale);
-    let desired_width = 2 * pad + icon_size + gap + measured_text_width + dpi(12, scale);
+    let pad = pixels(PREVIEW_PADDING, scale);
+    let icon_size = pixels(PREVIEW_ICON_SIZE, scale).min(available.height() - 2 * pad);
+    let gap = pixels(9, scale);
+    let desired_width = 2 * pad + icon_size + gap + measured_text_width + pixels(12, scale);
     let preview_width =
-        if available_buttons.is_some() || desired_width >= available.width() - dpi(24, scale) {
+        if available_buttons.is_some() || desired_width >= available.width() - pixels(24, scale) {
             available.width()
         } else {
             desired_width
-                .max(dpi(PREVIEW_MIN_WIDTH, scale))
+                .max(pixels(PREVIEW_MIN_WIDTH, scale))
                 .min(available.width())
         };
     let surface = Rect::new(
@@ -618,10 +706,10 @@ fn preview_layout(
         available.left + preview_width,
         available.bottom,
     );
-    let far_x = dpi(PREVIEW_SHADOW_X, scale);
-    let far_y = dpi(PREVIEW_SHADOW_Y, scale);
+    let far_x = pixels(PREVIEW_SHADOW_X, scale);
+    let far_y = pixels(PREVIEW_SHADOW_Y, scale);
     let content_bottom = available_buttons
-        .map(|(accept, _)| accept.top - dpi(4, scale))
+        .map(|(accept, _)| accept.top - pixels(4, scale))
         .unwrap_or(surface.bottom);
     let icon_left = surface.left + pad;
     let icon_top = surface.top + (content_bottom - surface.top - icon_size) / 2;
@@ -666,7 +754,7 @@ fn preview_layout(
         far_shadow_color: Color::from_colorref(PREVIEW_SHADOW_FAR),
         near_shadow_color: Color::from_colorref(PREVIEW_SHADOW_NEAR),
         surface_color: Color::from_colorref(PREVIEW_BACKGROUND),
-        radius: dpi(10, scale).max(4),
+        radius: pixels(10, scale).max(4),
         buttons,
     })
 }
@@ -691,15 +779,15 @@ fn contrasting_text_color(background: u32) -> u32 {
 /// inside the preview but not over a button; the whole surface consumes clicks
 /// so notification interaction can never fall through to PiP activation.
 unsafe fn invite_interaction_at_point(
-    state: &super::OverlayState,
+    state: &OverlayState,
     pip_index: usize,
     point: POINT,
 ) -> Option<(u32, Option<InviteAction>)> {
-    if state.edit_mode {
+    if state.interaction.edit_mode {
         return None;
     }
-    let pip = state.pip_windows.get(pip_index)?;
-    let notification = state.notifications.get(&pip.pid)?;
+    let pip = state.presentation.pip_windows.get(pip_index)?;
+    let notification = state.notification_center.entries.get(&pip.pid)?;
     if !notification.invite_actions || notification.preview_complete {
         return None;
     }
@@ -714,13 +802,13 @@ unsafe fn invite_interaction_at_point(
         .map(|timer| timer.progress(now));
     let snapshot = notification.visual_snapshot(
         windows::Win32::System::SystemInformation::GetTickCount64(),
-        state.animations_enabled,
+        state.notification_center.animations_enabled,
     );
-    let layout = super::scenes::notification_content_layout(
+    let layout = notification_content_layout(
         &snapshot,
         rect_from_win32(client),
-        dpi(super::BORDER_WIDTH, state.dpi_scale),
-        LabelStyle::new(state.dpi_scale, state.label_height),
+        pixels(BORDER_WIDTH, state.layout.dpi_scale),
+        LabelStyle::new(state.layout.dpi_scale, state.presentation.label_height),
         timer_progress,
         0,
     );
@@ -730,7 +818,7 @@ unsafe fn invite_interaction_at_point(
 }
 
 pub(super) unsafe fn has_invite_preview_at(
-    state: &super::OverlayState,
+    state: &OverlayState,
     pip_index: usize,
     point: POINT,
 ) -> bool {
@@ -738,7 +826,7 @@ pub(super) unsafe fn has_invite_preview_at(
 }
 
 pub(super) unsafe fn has_invite_action_at(
-    state: &super::OverlayState,
+    state: &OverlayState,
     pip_index: usize,
     point: POINT,
 ) -> bool {
@@ -747,13 +835,9 @@ pub(super) unsafe fn has_invite_action_at(
         .is_some()
 }
 
-pub(super) unsafe fn update_invite_hover(
-    state: &mut super::OverlayState,
-    pip_index: usize,
-    point: POINT,
-) {
+pub(super) unsafe fn update_invite_hover(state: &mut OverlayState, pip_index: usize, point: POINT) {
     let hit = invite_interaction_at_point(state, pip_index, point);
-    let Some(pip) = state.pip_windows.get(pip_index) else {
+    let Some(pip) = state.presentation.pip_windows.get(pip_index) else {
         return;
     };
     let pid = pip.pid;
@@ -761,71 +845,72 @@ pub(super) unsafe fn update_invite_hover(
     let hovered = hit
         .filter(|(hit_pid, _)| *hit_pid == pid)
         .and_then(|(_, action)| action);
-    if let Some(notification) = state.notifications.get_mut(&pid) {
+    if let Some(notification) = state.notification_center.entries.get_mut(&pid) {
         if notification.hovered_action != hovered {
             notification.hovered_action = hovered;
-            super::request_redraw(label_hwnd);
+            request_redraw(label_hwnd);
         }
     }
 }
 
-pub(super) unsafe fn clear_invite_interaction(state: &mut super::OverlayState, pip_index: usize) {
-    let Some(pip) = state.pip_windows.get(pip_index) else {
+pub(super) unsafe fn clear_invite_interaction(state: &mut OverlayState, pip_index: usize) {
+    let Some(pip) = state.presentation.pip_windows.get(pip_index) else {
         return;
     };
     let pid = pip.pid;
     let label_hwnd = pip.label_hwnd;
-    if let Some(notification) = state.notifications.get_mut(&pid) {
+    if let Some(notification) = state.notification_center.entries.get_mut(&pid) {
         if notification.hovered_action.take().is_some()
             || notification.pressed_action.take().is_some()
             || std::mem::take(&mut notification.invite_preview_pressed)
         {
-            super::request_redraw(label_hwnd);
+            request_redraw(label_hwnd);
         }
     }
 }
 
 pub(super) unsafe fn press_invite_action(
-    state: &mut super::OverlayState,
+    state: &mut OverlayState,
     pip_index: usize,
     point: POINT,
 ) -> bool {
     let Some((pid, action)) = invite_interaction_at_point(state, pip_index, point) else {
         return false;
     };
-    let Some(pip) = state.pip_windows.get(pip_index) else {
+    let Some(pip) = state.presentation.pip_windows.get(pip_index) else {
         return false;
     };
     let label_hwnd = pip.label_hwnd;
-    if let Some(notification) = state.notifications.get_mut(&pid) {
+    if let Some(notification) = state.notification_center.entries.get_mut(&pid) {
         notification.invite_preview_pressed = true;
         notification.hovered_action = action;
         notification.pressed_action = action;
-        super::request_redraw(label_hwnd);
+        request_redraw(label_hwnd);
         true
     } else {
         false
     }
 }
 
-pub(super) fn invite_action_pressed(state: &super::OverlayState, pip_index: usize) -> bool {
+pub(super) fn invite_action_pressed(state: &OverlayState, pip_index: usize) -> bool {
     state
+        .presentation
         .pip_windows
         .get(pip_index)
-        .and_then(|pip| state.notifications.get(&pip.pid))
+        .and_then(|pip| state.notification_center.entries.get(&pip.pid))
         .is_some_and(|notification| notification.invite_preview_pressed)
 }
 
 pub(super) unsafe fn release_invite_action(
-    state: &mut super::OverlayState,
+    state: &mut OverlayState,
     pip_index: usize,
     point: POINT,
 ) -> Option<(u32, InviteAction)> {
     let hit = invite_interaction_at_point(state, pip_index, point);
-    let pip = state.pip_windows.get(pip_index)?;
+    let pip = state.presentation.pip_windows.get(pip_index)?;
     let pid = pip.pid;
     let label_hwnd = pip.label_hwnd;
-    let notification = state.notifications.get_mut(&pid)?;
+    let notification = state.notification_center.entries.get_mut(&pid)?;
     if !std::mem::take(&mut notification.invite_preview_pressed) {
         return None;
     }
@@ -834,32 +919,41 @@ pub(super) unsafe fn release_invite_action(
         .filter(|(hit_pid, _)| *hit_pid == pid)
         .and_then(|(_, action)| action);
     notification.hovered_action = hovered;
-    super::request_redraw(label_hwnd);
+    request_redraw(label_hwnd);
     hovered
         .filter(|action| Some(*action) == pressed)
         .map(|action| (pid, action))
 }
 
 unsafe fn remove_group_invites(
-    state: &mut super::OverlayState,
+    state: &mut OverlayState,
     pid: u32,
     remove_from: fn(&mut Notification) -> bool,
 ) {
-    let remove = state.notifications.get_mut(&pid).is_some_and(remove_from);
+    let remove = state
+        .notification_center
+        .entries
+        .get_mut(&pid)
+        .is_some_and(remove_from);
     if remove {
-        state.notifications.remove(&pid);
+        state.notification_center.entries.remove(&pid);
     }
-    if let Some(pip) = state.pip_windows.iter().find(|pip| pip.pid == pid) {
-        super::request_redraw(pip.label_hwnd);
+    if let Some(pip) = state
+        .presentation
+        .pip_windows
+        .iter()
+        .find(|pip| pip.pid == pid)
+    {
+        request_redraw(pip.label_hwnd);
     }
 }
 
-unsafe fn dismiss_invite(state: &mut super::OverlayState, pid: u32) {
+unsafe fn dismiss_invite(state: &mut OverlayState, pid: u32) {
     remove_group_invites(state, pid, Notification::dismiss_invite);
 }
 
-fn resolve_group_invites(state: &mut super::OverlayState, source: &crate::log_watcher::LogSource) {
-    let Some(pid) = pid_for_log_source(&state.eq_windows, source) else {
+fn resolve_group_invites(state: &mut OverlayState, source: &crate::log_watcher::LogSource) {
+    let Some(pid) = pid_for_log_source(&state.clients.windows, source) else {
         return;
     };
     unsafe {
@@ -868,7 +962,7 @@ fn resolve_group_invites(state: &mut super::OverlayState, source: &crate::log_wa
 }
 
 pub(super) unsafe fn execute_invite_action(
-    state: &mut super::OverlayState,
+    state: &mut OverlayState,
     pid: u32,
     action: InviteAction,
 ) {
@@ -876,16 +970,21 @@ pub(super) unsafe fn execute_invite_action(
         InviteAction::Accept => match crate::control::send_invite_follow(pid) {
             Ok(()) => dismiss_invite(state, pid),
             Err(error) => {
-                if let Some(notification) = state.notifications.get_mut(&pid) {
+                if let Some(notification) = state.notification_center.entries.get_mut(&pid) {
                     notification.invite_actions = false;
                     notification.hovered_action = None;
                     notification.pressed_action = None;
                     notification.invite_preview_pressed = false;
                 }
-                if let Some(pip) = state.pip_windows.iter().find(|pip| pip.pid == pid) {
-                    super::request_redraw(pip.label_hwnd);
+                if let Some(pip) = state
+                    .presentation
+                    .pip_windows
+                    .iter()
+                    .find(|pip| pip.pid == pid)
+                {
+                    request_redraw(pip.label_hwnd);
                 }
-                super::show_toast_inner(
+                show_toast_inner(
                     state,
                     &format!("Could not accept the group invitation: {}", error.message),
                 );
@@ -921,26 +1020,27 @@ fn pid_for_log_source(
 }
 
 fn resolve_eq_color(
-    state: &mut super::OverlayState,
+    state: &mut OverlayState,
     source: &crate::log_watcher::LogSource,
     id: crate::eq_chat_colors::ChatColorId,
     fallback: crate::eq_chat_colors::RgbColor,
 ) -> u32 {
     match state
+        .telemetry
         .chat_colors
         .resolve(id, &source.character, &source.server)
     {
         Ok(Some(color)) => color.colorref(),
         Ok(None) => fallback.colorref(),
         Err(error) => {
-            super::debug_log(&format!("eq_chat_colors: {error}"));
+            debug_log(&format!("eq_chat_colors: {error}"));
             fallback.colorref()
         }
     }
 }
 
 pub(super) fn apply_log_event(
-    state: &mut super::OverlayState,
+    state: &mut OverlayState,
     event: &crate::log_watcher::ParsedLogEvent,
 ) {
     if matches!(
@@ -1026,37 +1126,41 @@ fn visual_delivery(
 }
 
 fn apply(
-    state: &mut super::OverlayState,
+    state: &mut OverlayState,
     source: &crate::log_watcher::LogSource,
     kind: Kind,
     text: String,
     color: u32,
 ) {
-    if !state.notification_kinds.contains(kind) {
+    if !state.notification_center.enabled_kinds.contains(kind) {
         return;
     }
-    let Some(pid) = pid_for_log_source(&state.eq_windows, source) else {
-        super::debug_log(&format!(
+    let Some(pid) = pid_for_log_source(&state.clients.windows, source) else {
+        debug_log(&format!(
             "eq_logs: notification source {} is no longer attached to an EQ window",
             source.id.as_str()
         ));
         return;
     };
 
-    if state.tell_sound_enabled {
-        let _ = crate::sound::play(&state.tell_sound);
+    if state.notification_center.sound_enabled {
+        let _ = crate::sound::play(&state.notification_center.sound);
     }
 
     let focused_eq_pid = unsafe {
-        super::focused_foreground_pid(
-            &state.eq_windows,
+        focused_foreground_pid(
+            &state.clients.windows,
             windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow(),
-            |hwnd| super::target_has_keyboard_focus(hwnd),
+            |hwnd| target_has_keyboard_focus(hwnd),
         )
     };
-    match visual_delivery(pid, focused_eq_pid, state.tell_visual_enabled) {
+    match visual_delivery(
+        pid,
+        focused_eq_pid,
+        state.notification_center.visual_enabled,
+    ) {
         VisualDelivery::SuppressFocused => {
-            state.notifications.remove(&pid);
+            state.notification_center.entries.remove(&pid);
             return;
         }
         VisualDelivery::SuppressDisabled => return,
@@ -1065,18 +1169,23 @@ fn apply(
 
     let invite_actions = kind == Kind::GroupInvite && crate::control::invite_follow_available(pid);
     let now_ms = unsafe { windows::Win32::System::SystemInformation::GetTickCount64() };
-    let previous = state.notifications.remove(&pid);
-    state.notifications.insert(
+    let previous = state.notification_center.entries.remove(&pid);
+    state.notification_center.entries.insert(
         pid,
         Notification::push(previous, kind, text, color, now_ms, invite_actions),
     );
 
     unsafe {
-        if let Some(pip) = state.pip_windows.iter().find(|pip| pip.pid == pid) {
-            super::request_redraw(pip.label_hwnd);
+        if let Some(pip) = state
+            .presentation
+            .pip_windows
+            .iter()
+            .find(|pip| pip.pid == pid)
+        {
+            request_redraw(pip.label_hwnd);
         }
         let _ = windows::Win32::UI::WindowsAndMessaging::SetTimer(
-            state.active_label_hwnd,
+            state.presentation.active_label_hwnd,
             TIMER_ID,
             ANIMATION_STEP_MS,
             None,
@@ -1084,20 +1193,21 @@ fn apply(
     }
 }
 
-pub(super) unsafe fn tick(state: &mut super::OverlayState, timer_hwnd: HWND) {
+pub(super) unsafe fn tick(state: &mut OverlayState, timer_hwnd: HWND) {
     let now_ms = windows::Win32::System::SystemInformation::GetTickCount64();
-    let animations_enabled = state.animations_enabled;
-    for pip in &state.pip_windows {
-        if let Some(notification) = state.notifications.get_mut(&pip.pid) {
+    let animations_enabled = state.notification_center.animations_enabled;
+    for pip in &state.presentation.pip_windows {
+        if let Some(notification) = state.notification_center.entries.get_mut(&pip.pid) {
             let (redraw_border, redraw_preview) =
                 notification.redraws_for_tick(now_ms, animations_enabled);
             if redraw_border || redraw_preview {
-                super::request_redraw(pip.label_hwnd);
+                request_redraw(pip.label_hwnd);
             }
         }
     }
     if !state
-        .notifications
+        .notification_center
+        .entries
         .values()
         .any(|notification| notification.preview_visible(now_ms))
     {
@@ -1347,7 +1457,7 @@ mod tests {
             true,
         );
         let snapshot = notification.visual_snapshot(2_001, false);
-        let layout = super::super::scenes::notification_content_layout(
+        let layout = super::notification_content_layout(
             &snapshot,
             Rect::new(0, 0, 420, 180),
             3,
@@ -1373,8 +1483,8 @@ mod tests {
             assert_eq!(layout.unread_dots.len(), 1);
             assert_eq!(layout.unread_dots[0].dot.width(), expected_dot);
             let preview = layout.preview.expect("preview at supported DPI");
-            assert_eq!(preview.radius, dpi(10, scale).max(4));
-            assert_eq!(preview.icon.width(), dpi(PREVIEW_ICON_SIZE, scale));
+            assert_eq!(preview.radius, pixels(10, scale).max(4));
+            assert_eq!(preview.icon.width(), pixels(PREVIEW_ICON_SIZE, scale));
         }
     }
 

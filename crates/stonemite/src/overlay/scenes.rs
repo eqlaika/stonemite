@@ -7,9 +7,8 @@ use super::labels::{Color, FontSpec, LabelModel, LabelStyle, LabelTheme, Rect};
 use super::notifications::{
     NotificationBorderLayout, NotificationContentLayout, NotificationVisualSnapshot,
 };
-
-pub(super) const TIMER_PANEL_GAP: i32 = 4;
-pub(super) const TIMER_PANEL_HEIGHT: i32 = 42;
+pub(super) use super::scene_layout::TimerLayout;
+use super::scene_layout::{pip_content_stack_layout, TIMER_PANEL_GAP};
 /// The DWM thumbnail is already reduced to its legacy drag opacity. This
 /// restrained overlay adds the gray drag cue without obscuring live imagery.
 pub(super) const REORDER_DIM_ALPHA: u8 = 64;
@@ -81,63 +80,6 @@ pub(super) struct TimerScene<'a> {
     pub progress: f32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct TimerLayout {
-    pub panel: Rect,
-    pub track: Rect,
-    pub fill: Rect,
-    pub label_text: Rect,
-    pub remaining_text: Rect,
-    pub corner_radius: i32,
-    pub font_height: i32,
-}
-
-impl TimerLayout {
-    pub(super) fn new(bounds: Rect, scale: f64, progress: f32) -> Self {
-        let pixels = |logical: i32| (f64::from(logical) * scale).round() as i32;
-        let panel = bounds;
-        let inset = pixels(8).max(1);
-        let bar_height = pixels(4).max(1);
-        let track_bottom = (panel.bottom - inset).max(panel.top);
-        let track = Rect::new(
-            (panel.left + inset).min(panel.right),
-            (track_bottom - bar_height).max(panel.top),
-            (panel.right - inset).max((panel.left + inset).min(panel.right)),
-            track_bottom,
-        )
-        .intersect(panel);
-        let remaining_fraction = 1.0 - progress.clamp(0.0, 1.0);
-        let fill_right = track.left
-            + ((track.width().max(0) as f32 * remaining_fraction).round() as i32)
-                .clamp(0, track.width().max(0));
-        let fill = Rect::new(track.left, track.top, fill_right, track.bottom);
-        let text_bottom = (track.top - pixels(2)).max(panel.top);
-        let remaining_width = pixels(62).min(panel.width().max(0));
-        let split = (panel.right - remaining_width).max(panel.left + inset);
-        Self {
-            panel,
-            track,
-            fill,
-            label_text: Rect::new(
-                (panel.left + inset).min(panel.right),
-                panel.top,
-                split.min(panel.right),
-                text_bottom,
-            )
-            .intersect(panel),
-            remaining_text: Rect::new(
-                split.min(panel.right),
-                panel.top,
-                (panel.right - inset).max(split.min(panel.right)),
-                text_bottom,
-            )
-            .intersect(panel),
-            corner_radius: pixels(7).max(1),
-            font_height: UiTextRole::Timer.height(scale, 0),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct PipInteractionScene {
     pub hovered: bool,
@@ -177,74 +119,7 @@ pub(super) struct PipSceneLayout {
     pub notification_content: Option<NotificationContentLayout>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct PipContentStackLayout {
-    pub content: Rect,
-    pub label_bounds: Rect,
-    pub timer: Option<TimerLayout>,
-    pub content_bottom: i32,
-}
-
-/// Shared vertical layout for drawing and interaction. In particular, timer
-/// fit decides the notification's minimum top in exactly one place.
-pub(super) fn pip_content_stack_layout(
-    canvas: Rect,
-    border_width: i32,
-    style: LabelStyle,
-    measured_label_width: i32,
-    timer_progress: Option<f32>,
-) -> PipContentStackLayout {
-    let content = canvas.inset(border_width.max(0));
-    let label_height = style.height().min(content.height()).max(0);
-    let label_bounds = Rect::new(
-        content.left,
-        content.top,
-        content.left + measured_label_width.clamp(0, content.width().max(0)),
-        content.top + label_height,
-    );
-    let timer = timer_progress.and_then(|progress| {
-        let top = label_bounds.bottom + style.pixels(TIMER_PANEL_GAP);
-        let bottom = top + style.pixels(TIMER_PANEL_HEIGHT);
-        (bottom <= content.bottom).then(|| {
-            TimerLayout::new(
-                Rect::new(label_bounds.left, top, label_bounds.right, bottom),
-                style.scale,
-                progress,
-            )
-        })
-    });
-    PipContentStackLayout {
-        content,
-        label_bounds,
-        timer,
-        content_bottom: timer.map_or(label_bounds.bottom, |timer| timer.panel.bottom),
-    }
-}
-
-pub(super) fn notification_content_layout(
-    snapshot: &NotificationVisualSnapshot,
-    canvas: Rect,
-    border_width: i32,
-    style: LabelStyle,
-    timer_progress: Option<f32>,
-    measured_preview_text_width: i32,
-) -> NotificationContentLayout {
-    let stack = pip_content_stack_layout(
-        canvas,
-        border_width,
-        style,
-        canvas.inset(border_width.max(0)).width().max(0),
-        timer_progress,
-    );
-    snapshot.content_layout(
-        stack.content,
-        stack.content_bottom,
-        style.scale,
-        measured_preview_text_width,
-    )
-}
-
-impl<'a> PipScene<'a> {
+impl PipScene<'_> {
     pub(super) fn content_alpha(&self) -> u8 {
         if self.notification.is_some() {
             self.label.alpha.max(super::notifications::LABEL_MIN_ALPHA)
@@ -562,7 +437,6 @@ mod tests {
     #[test]
     fn reorder_dim_is_deliberately_translucent_over_the_dwm_thumbnail() {
         assert_eq!(REORDER_DIM_ALPHA, 64);
-        assert!(REORDER_DIM_ALPHA < 255);
     }
 
     #[test]
@@ -580,14 +454,23 @@ mod tests {
         };
         let canvas = Rect::new(0, 0, 420, 180);
         let style = LabelStyle::new(1.0, 48);
-        let unconstrained = notification_content_layout(&snapshot, canvas, 3, style, None, 180);
+        let unconstrained = super::super::notifications::notification_content_layout(
+            &snapshot, canvas, 3, style, None, 180,
+        );
         assert_eq!(
             unconstrained.preview.as_ref().unwrap().buttons.len(),
             2,
             "the same PiP has action buttons without a timer"
         );
 
-        let constrained = notification_content_layout(&snapshot, canvas, 3, style, Some(0.5), 180);
+        let constrained = super::super::notifications::notification_content_layout(
+            &snapshot,
+            canvas,
+            3,
+            style,
+            Some(0.5),
+            180,
+        );
         let preview = constrained.preview.expect("plain fallback remains visible");
         assert!(preview.buttons.is_empty());
         assert_eq!(preview.surface.height(), 49);

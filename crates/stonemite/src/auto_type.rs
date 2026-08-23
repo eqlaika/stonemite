@@ -17,7 +17,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW, VkKeyScanW, MAPVK_VK_TO_VSC};
 
-use crate::overlay::debug_log;
+use crate::diagnostics::debug_log;
 
 /// How long to hold each key down.
 const KEY_DOWN_MS: u64 = 50;

@@ -10,6 +10,7 @@ mod class_icons;
 mod config;
 mod control;
 mod crypt;
+mod diagnostics;
 mod eq_characters;
 mod eq_chat_colors;
 mod eq_keymap;
@@ -115,7 +116,7 @@ unsafe extern "system" fn crash_handler(info: *mut ExceptionPointers) -> i32 {
             },
             mod_name,
         );
-        overlay::debug_log(&msg);
+        diagnostics::debug_log(&msg);
     }
     0 // EXCEPTION_CONTINUE_SEARCH
 }
@@ -124,7 +125,7 @@ fn main() {
     // Log panics to debug.log so crashes during login are diagnosable.
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("PANIC: {info}");
-        overlay::debug_log(&msg);
+        diagnostics::debug_log(&msg);
     }));
 
     // Install a vectored exception handler to catch access violations and
@@ -205,7 +206,7 @@ fn main() {
     }
 
     // Initialize overlay (creates the overlay window, hidden until EQ windows are detected).
-    overlay::init();
+    overlay::initialize();
 
     // Initialize broadcast engine if trusik is enabled.
     if config.trusik {
@@ -224,7 +225,7 @@ fn main() {
     broadcast::cleanup();
 
     // Cleanup overlay before exit.
-    overlay::cleanup();
+    overlay::shutdown();
 
     if restart_requested {
         unsafe {

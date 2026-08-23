@@ -358,7 +358,7 @@ pub fn start(
         pairing: None,
         pairing_auth_token: None,
     });
-    crate::overlay::publish_control_snapshot();
+    crate::overlay::broadcast_state_changed();
 
     if !config.enabled {
         return None;
@@ -424,7 +424,7 @@ pub fn pairing_is_open() -> bool {
 fn report_start_failure(detail: &str) {
     let message = format!("trushar disabled: {detail}");
     eprintln!("{message}");
-    crate::overlay::debug_log(&message);
+    crate::diagnostics::debug_log(&message);
     crate::overlay::show_toast("trushar could not start; see debug.log");
 }
 
@@ -565,7 +565,7 @@ fn activate_on_ui(target: ClientTarget) -> Result<CommandOutcome, ControlError> 
         ));
     };
     let private_key = resolve_target_private_key(state, &target)?;
-    unsafe { crate::overlay::activate_pid(private_key as u32) }
+    crate::overlay::activate_pid(private_key as u32)
 }
 
 fn swap_window_numbers_on_ui(target: ClientTarget) -> Result<CommandOutcome, ControlError> {
@@ -576,7 +576,7 @@ fn swap_window_numbers_on_ui(target: ClientTarget) -> Result<CommandOutcome, Con
         ));
     };
     let private_key = resolve_target_private_key(state, &target)?;
-    unsafe { crate::overlay::swap_active_window_numbers(private_key as u32) }
+    crate::overlay::swap_active_window_numbers(private_key as u32)
 }
 
 pub fn set_broadcast_on_ui(
@@ -591,7 +591,7 @@ pub fn set_broadcast_on_ui(
     }
     crate::broadcast::set_active(enabled)
         .map_err(|message| ControlError::new(ErrorCode::BroadcastOperationFailed, message))?;
-    crate::overlay::refresh_broadcast_label();
+    crate::overlay::broadcast_state_changed();
     if show_notification {
         crate::overlay::show_toast(if enabled {
             "Key broadcasting enabled"
@@ -599,7 +599,6 @@ pub fn set_broadcast_on_ui(
             "Key broadcasting disabled"
         });
     }
-    crate::overlay::publish_control_snapshot();
     Ok(CommandOutcome::BroadcastSet { enabled })
 }
 
@@ -614,15 +613,13 @@ fn update_mouse_clutch_hold_on_ui(
 ) -> Result<CommandOutcome, ControlError> {
     let held = crate::broadcast::update_remote_mouse_clutch_hold(owner, operation, sequence)
         .map_err(map_mouse_clutch_error)?;
-    crate::overlay::refresh_broadcast_label();
-    crate::overlay::publish_control_snapshot();
+    crate::overlay::broadcast_state_changed();
     Ok(CommandOutcome::MouseClutchHoldUpdated { held })
 }
 
 fn end_mouse_clutch_session_on_ui(session_id: u64, sequence: u64) -> Result<(), ControlError> {
     crate::broadcast::end_remote_mouse_clutch_session(session_id, sequence);
-    crate::overlay::refresh_broadcast_label();
-    crate::overlay::publish_control_snapshot();
+    crate::overlay::broadcast_state_changed();
     Ok(())
 }
 

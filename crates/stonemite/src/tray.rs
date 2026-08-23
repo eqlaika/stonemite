@@ -238,10 +238,10 @@ unsafe fn run_inner() {
     let eq_dir = config.eq_directory();
     let trushar_server = control::start(hwnd, &config.trushar, eq_dir);
     if let Err(error) = log_watcher::start(hwnd) {
-        overlay::debug_log(&format!("eq_logs: {error}"));
+        crate::diagnostics::debug_log(&format!("eq_logs: {error}"));
         eprintln!("{error}");
     }
-    overlay::publish_log_sources();
+    overlay::sync_log_sources();
 
     // Message loop.
     let mut msg = MSG::default();
@@ -284,11 +284,10 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_TIMER => {
             if wparam.0 == TIMER_POLL_EQ {
-                overlay::poll();
+                overlay::tick();
             } else if wparam.0 == TIMER_MOUSE_CLUTCH {
                 if broadcast::tick() {
-                    overlay::refresh_broadcast_label();
-                    overlay::publish_control_snapshot();
+                    overlay::broadcast_state_changed();
                 }
             } else if wparam.0 == control::TIMER_CONTROL_INPUT {
                 control::advance_input();
@@ -300,7 +299,7 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         x if x == log_watcher::WM_LOG_READY => {
-            if !overlay::drain_log_events() {
+            if !overlay::try_drain_log_events() {
                 let _ = PostMessageW(hwnd, log_watcher::WM_LOG_READY, WPARAM(0), LPARAM(0));
             }
             LRESULT(0)
@@ -316,7 +315,7 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_HOTKEY => {
             let id = wparam.0 as i32;
-            if id == HOTKEY_HIDE_OVERLAY && overlay::is_eq_active() {
+            if id == HOTKEY_HIDE_OVERLAY && overlay::is_app_foreground() {
                 overlay::toggle_hidden();
             } else if id == HOTKEY_BROADCAST_TOGGLE {
                 control::toggle_broadcast_on_ui(true);
@@ -385,8 +384,7 @@ unsafe extern "system" fn wnd_proc(
             register_hotkeys(hwnd, &cfg);
             // Reload overlay config (pip_edge, etc.), update the watched Logs
             // directory, and rebuild layout.
-            overlay::publish_log_sources();
-            overlay::force_rebuild();
+            overlay::reload_config();
             LRESULT(0)
         }
         x if x == settings_dialog::WM_RESTART_REQUESTED => {
@@ -715,14 +713,14 @@ fn launch_eq(username: Option<&str>, password: Option<&str>) {
         eprintln!("eqgame.exe not found in {}", eq_dir.display());
         return;
     }
-    overlay::debug_log(&format!(
+    crate::diagnostics::debug_log(&format!(
         "launch_eq: user={:?} has_password={}",
         username,
         password.is_some()
     ));
     if cfg.trusik {
         if let Err(error) = crate::trusik_deploy::deploy(&eq_dir) {
-            overlay::debug_log(&format!(
+            crate::diagnostics::debug_log(&format!(
                 "launch_eq: input proxy update failed before spawn: {error}"
             ));
             overlay::show_toast(
@@ -739,13 +737,13 @@ fn launch_eq(username: Option<&str>, password: Option<&str>) {
     match cmd.spawn() {
         Ok(child) => {
             let pid = child.id();
-            overlay::debug_log(&format!("launch_eq: spawned pid={pid}"));
+            crate::diagnostics::debug_log(&format!("launch_eq: spawned pid={pid}"));
             if let Some(pw) = password {
                 crate::auto_type::spawn(pid, pw.to_string());
             }
         }
         Err(e) => {
-            overlay::debug_log(&format!("launch_eq: spawn failed: {e}"));
+            crate::diagnostics::debug_log(&format!("launch_eq: spawn failed: {e}"));
         }
     }
 }
