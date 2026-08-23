@@ -34,10 +34,17 @@ pub(crate) struct LogPipeline {
 
 impl LogPipeline {
     pub fn new(event_bus: broadcast::Sender<Arc<LogEnvelope>>) -> Self {
+        #[allow(unused_mut)]
+        let mut triggers = TriggerEngine::new();
+        #[cfg(debug_assertions)]
+        {
+            let errors = triggers.replace_definitions(vec![super::triggers::qa_timer_definition()]);
+            debug_assert!(errors.is_empty());
+        }
         Self {
             parsers: ParserRegistry::default(),
             telemetry: TelemetryReducer::new(),
-            triggers: TriggerEngine::new(),
+            triggers,
             next_sequence: 0,
             event_bus,
         }
@@ -97,6 +104,35 @@ mod tests {
             timestamp: None,
             body: Arc::from(body),
         }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn development_qa_phrase_starts_a_visible_timer_action() {
+        let (sender, _) = broadcast::channel(8);
+        let mut pipeline = LogPipeline::new(sender);
+        let envelope = pipeline.process(raw("You say, 'Stonemite timer'")).envelope;
+
+        assert_eq!(envelope.trigger_activations.len(), 1);
+        assert_eq!(
+            envelope.trigger_activations[0].scope,
+            super::super::TriggerScope::AllClients
+        );
+        assert_eq!(
+            envelope.trigger_activations[0].source.id.as_str(),
+            "client-1"
+        );
+        assert!(matches!(
+            &envelope.trigger_activations[0].presentation[0],
+            super::super::PresentationAction::StartTimer(request)
+                if request.label.as_ref() == "QA timer"
+                    && request.duration == std::time::Duration::from_secs(10)
+        ));
+
+        let remote = pipeline
+            .process(raw("Kafka says, 'Stonemite timer'"))
+            .envelope;
+        assert!(remote.trigger_activations.is_empty());
     }
 
     #[test]

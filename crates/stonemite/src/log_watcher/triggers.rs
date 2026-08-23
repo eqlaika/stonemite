@@ -55,6 +55,28 @@ pub struct TimerRequest {
     pub duration: Duration,
 }
 
+#[cfg(debug_assertions)]
+pub(super) const QA_TIMER_PHRASE: &str = "stonemite timer";
+
+#[cfg(debug_assertions)]
+pub(super) fn qa_timer_definition() -> TriggerDefinition {
+    TriggerDefinition {
+        id: Arc::from("qa-timer-trigger"),
+        // Nearby clients also log normal /say text. Restrict the QA hook to
+        // the originating client's local echo so only that box starts.
+        matcher: TriggerMatcher::RawRegex(Arc::from(format!(
+            r"(?i)^You say, .*{}",
+            regex::escape(QA_TIMER_PHRASE)
+        ))),
+        scope: TriggerScope::AllClients,
+        presentation: vec![PresentationAction::StartTimer(TimerRequest {
+            id: Arc::from("qa-timer"),
+            label: Arc::from("QA timer"),
+            duration: Duration::from_secs(10),
+        })],
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TriggerActivation {
     pub trigger_id: Arc<str>,
@@ -249,5 +271,12 @@ mod tests {
         let activations = engine.evaluate(&line("client-7", "Bob TELLS YOU, hello"), &[]);
         assert_eq!(activations.len(), 1);
         assert_eq!(activations[0].presentation.len(), 2);
+        assert!(matches!(
+            &activations[0].presentation[1],
+            PresentationAction::StartTimer(request)
+                if request.id.as_ref() == "tell-visible"
+                    && request.label.as_ref() == "Tell"
+                    && request.duration == Duration::from_secs(5)
+        ));
     }
 }

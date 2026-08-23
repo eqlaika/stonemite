@@ -1,13 +1,15 @@
 use std::cell::{Cell, UnsafeCell};
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod labels;
 mod notifications;
 mod render;
+mod timers;
 
 use labels::{Color, LabelModel, LabelStyle, LabelTheme};
 use notifications::{EnabledKinds, Notification};
+use timers::TimerOverlayState;
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
@@ -137,6 +139,11 @@ const TOAST_MAX_ALPHA: u8 = 220;
 const TOAST_BG_COLOR: u32 = 0x00403020;
 /// Timer ID for toast animation.
 const TIMER_TOAST_FADE: usize = 42;
+/// Timer ID and cadence for visible display-only countdowns.
+const TIMER_OVERLAY_TICK: usize = 44;
+const TIMER_OVERLAY_INTERVAL_MS: u32 = 100;
+const TIMER_PANEL_GAP: i32 = 4;
+const TIMER_PANEL_HEIGHT: i32 = 42;
 const WM_CLEAR_INVITE_CAPTURE: u32 = WM_USER + 44;
 /// Color key for toast layered window.
 const TOAST_COLOR_KEY: u32 = 0x00FF00FF;
@@ -283,6 +290,8 @@ struct OverlayState {
     log_telemetry: HashMap<(String, String), log_watcher::CharacterTelemetry>,
     /// Durable unread notification state keyed by EQ process, surviving PiP rebuilds.
     notifications: HashMap<u32, Notification>,
+    /// Passive display-only timers started by log trigger activations.
+    timers: TimerOverlayState,
     tell_visual_enabled: bool,
     tell_sound_enabled: bool,
     tell_sound: String,
@@ -667,6 +676,23 @@ fn configured_label_theme(cfg: &config::Config) -> LabelTheme {
         cfg.effective_pip_label_font_scale(),
         label_font_weight(cfg.effective_pip_label_font_weight()),
     )
+}
+
+fn active_timer(s: &OverlayState, now: Instant) -> Option<&timers::TimerOverlay> {
+    let source_id = s.active_pid.map(|pid| format!("pid:{pid}"));
+    s.timers.visible_for(source_id.as_deref(), now)
+}
+
+fn format_timer_remaining(remaining: Duration) -> String {
+    let tenths = (remaining.as_millis() + 99) / 100;
+    format!("{}.{:01}s", tenths / 10, tenths % 10)
+}
+
+unsafe fn invalidate_timer_labels(s: &OverlayState) {
+    let _ = InvalidateRect(s.active_label_hwnd, None, false);
+    for pip in &s.pip_windows {
+        let _ = InvalidateRect(pip.label_hwnd, None, false);
+    }
 }
 
 fn format_label(w: &EqWindow) -> String {
@@ -1214,6 +1240,7 @@ unsafe fn init_inner() -> HWND {
         trusik_identities: HashMap::new(),
         log_telemetry: HashMap::new(),
         notifications: HashMap::new(),
+        timers: TimerOverlayState::default(),
         tell_visual_enabled: cfg.tell_visual_enabled,
         tell_sound_enabled: cfg.tell_sound_enabled,
         tell_sound: sound::normalized_id(&cfg.tell_sound).to_owned(),
@@ -1522,11 +1549,16 @@ pub fn drain_log_events() -> bool {
 
 fn apply_log_batches(s: &mut OverlayState, batches: Vec<log_watcher::LogBatch>) {
     let mut class_changed = false;
+    let mut timers_changed = false;
+    let now = Instant::now();
     for batch in batches {
         for diagnostic in batch.diagnostics {
             debug_log(&format!("eq_logs: {diagnostic}"));
         }
         for envelope in batch.envelopes {
+            timers_changed |= s
+                .timers
+                .apply_activations(&envelope.trigger_activations, now);
             for event in envelope.events.iter() {
                 notifications::apply_log_event(s, event);
             }
@@ -1567,6 +1599,22 @@ fn apply_log_batches(s: &mut OverlayState, batches: Vec<log_watcher::LogBatch>) 
 
     if class_changed {
         unsafe { rebuild_thumbnails(s) };
+    }
+    if timers_changed {
+        unsafe {
+            if s.timers.is_empty() {
+                let _ = KillTimer(s.active_label_hwnd, TIMER_OVERLAY_TICK);
+            } else {
+                let _ = SetTimer(
+                    s.active_label_hwnd,
+                    TIMER_OVERLAY_TICK,
+                    TIMER_OVERLAY_INTERVAL_MS,
+                    None,
+                );
+            }
+            update_active_label(s);
+            invalidate_timer_labels(s);
+        }
     }
 }
 
@@ -1906,6 +1954,9 @@ unsafe fn update_active_label(s: &mut OverlayState) {
     let lh = s.label_height;
     let style = LabelStyle::new(d, lh);
     let label_h = style.height();
+    let timer_height = active_timer(s, Instant::now())
+        .map(|_| dpi(TIMER_PANEL_GAP + TIMER_PANEL_HEIGHT, d))
+        .unwrap_or(0);
     let model = label_model(
         &s.active_label_text,
         s.active_label_class.as_deref(),
@@ -1930,7 +1981,7 @@ unsafe fn update_active_label(s: &mut OverlayState) {
         label_x,
         top_left.y,
         text_width,
-        label_h,
+        label_h + timer_height,
         SWP_NOACTIVATE,
     );
 
@@ -3095,32 +3146,58 @@ unsafe fn paint_pip_window(hwnd: HWND, pip_idx: usize) {
 unsafe fn paint_label(hwnd: HWND, text: &str, class: Option<&str>, bg_color: u32) {
     let fallback_theme = LabelTheme::default();
     let overlay = state();
-    let (d, number, lh, theme) = overlay
+    let now = Instant::now();
+    let (d, number, lh, theme, timer) = overlay
         .as_ref()
         .map(|s| {
+            let timer = active_timer(s, now).map(|timer| {
+                (
+                    timer.label.to_string(),
+                    format_timer_remaining(timer.remaining_time(now)),
+                    timer.progress(now),
+                )
+            });
             (
                 s.dpi_scale,
                 s.active_label_number,
                 s.label_height,
                 &s.label_theme,
+                timer,
             )
         })
-        .unwrap_or((1.0, 0, DEFAULT_LABEL_HEIGHT, &fallback_theme));
+        .unwrap_or((1.0, 0, DEFAULT_LABEL_HEIGHT, &fallback_theme, None));
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
     let mut bounds = RECT::default();
     let _ = GetClientRect(hwnd, &mut bounds);
 
+    let style = LabelStyle::new(d, lh);
+    let label_bounds = RECT {
+        bottom: (bounds.top + style.height()).min(bounds.bottom),
+        ..bounds
+    };
     let model = label_model(text, class, number, bg_color);
     render::draw_label(
         hdc,
         bounds,
-        bounds,
+        label_bounds,
         &model,
-        LabelStyle::new(d, lh),
+        style,
         theme,
         Color::from_colorref(LABEL_COLOR_KEY),
     );
+
+    if let Some((timer_label, remaining, progress)) = timer {
+        let timer_bounds = RECT {
+            left: bounds.left,
+            top: label_bounds.bottom + dpi(TIMER_PANEL_GAP, d),
+            right: bounds.right,
+            bottom: bounds.bottom,
+        };
+        if timer_bounds.bottom > timer_bounds.top {
+            render::draw_timer_overlay(hdc, timer_bounds, &timer_label, &remaining, progress, d);
+        }
+    }
 
     let _ = EndPaint(hwnd, &ps);
 }
@@ -3152,6 +3229,15 @@ unsafe fn paint_pip_label(hwnd: HWND) {
         color_for_number(pw.number),
     );
     let notification = s.notifications.get(&pw.pid);
+    let now = Instant::now();
+    let source_id = format!("pid:{}", pw.pid);
+    let timer = s.timers.visible_for(Some(&source_id), now).map(|timer| {
+        (
+            timer.label.to_string(),
+            format_timer_remaining(timer.remaining_time(now)),
+            timer.progress(now),
+        )
+    });
     let now_ms = windows::Win32::System::SystemInformation::GetTickCount64();
 
     let mut ps = PAINTSTRUCT::default();
@@ -3179,9 +3265,23 @@ unsafe fn paint_pip_label(hwnd: HWND) {
         Color::from_colorref(LABEL_COLOR_KEY),
     );
 
+    let mut content_bottom = label_rc.bottom;
+    if let Some((timer_label, remaining, progress)) = timer {
+        let timer_bounds = RECT {
+            left: label_rc.left,
+            top: label_rc.bottom + dpi(TIMER_PANEL_GAP, d),
+            right: label_rc.right,
+            bottom: (label_rc.bottom + dpi(TIMER_PANEL_GAP + TIMER_PANEL_HEIGHT, d)).min(rc.bottom),
+        };
+        if timer_bounds.bottom - timer_bounds.top >= dpi(TIMER_PANEL_HEIGHT, d) {
+            render::draw_timer_overlay(hdc, timer_bounds, &timer_label, &remaining, progress, d);
+            content_bottom = timer_bounds.bottom;
+        }
+    }
+
     if let Some(notification) = notification {
         let unread_bottom =
-            notifications::draw_unread_dots(hdc, rc, label_rc.bottom, d, notification);
+            notifications::draw_unread_dots(hdc, rc, content_bottom, d, notification);
         if notification.preview_visible(now_ms) {
             notifications::draw_preview(
                 hdc,
@@ -4380,6 +4480,21 @@ unsafe fn tick_notification_animation(timer_hwnd: HWND) {
     notifications::tick(s, timer_hwnd);
 }
 
+unsafe fn tick_timer_overlay(timer_hwnd: HWND) {
+    let Some(s) = state().as_mut() else {
+        let _ = KillTimer(timer_hwnd, TIMER_OVERLAY_TICK);
+        return;
+    };
+    let expired = s.timers.remove_expired(Instant::now());
+    if s.timers.is_empty() {
+        let _ = KillTimer(timer_hwnd, TIMER_OVERLAY_TICK);
+    }
+    if expired {
+        update_active_label(s);
+    }
+    invalidate_timer_labels(s);
+}
+
 unsafe extern "system" fn label_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -4392,6 +4507,10 @@ unsafe extern "system" fn label_wnd_proc(
     match msg {
         WM_TIMER if wparam.0 == notifications::TIMER_ID => {
             tick_notification_animation(hwnd);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_OVERLAY_TICK => {
+            tick_timer_overlay(hwnd);
             LRESULT(0)
         }
         WM_SETCURSOR => {
@@ -4618,6 +4737,7 @@ pub fn cleanup() {
                 let _ = DestroyWindow(pw.hwnd);
             }
             let _ = KillTimer(s.active_label_hwnd, notifications::TIMER_ID);
+            let _ = KillTimer(s.active_label_hwnd, TIMER_OVERLAY_TICK);
             let _ = DestroyWindow(s.active_label_hwnd);
             let _ = DestroyWindow(s.broadcast_label_hwnd);
             let _ = KillTimer(s.toast.hwnd, TIMER_TOAST_FADE);
@@ -4648,6 +4768,15 @@ mod tests {
         window.server = Some(server.into());
         window.character = Some(character.into());
         window
+    }
+
+    #[test]
+    fn timer_countdown_rounds_up_to_the_next_tenth() {
+        assert_eq!(format_timer_remaining(Duration::from_secs(10)), "10.0s");
+        assert_eq!(format_timer_remaining(Duration::from_millis(9901)), "10.0s");
+        assert_eq!(format_timer_remaining(Duration::from_millis(9900)), "9.9s");
+        assert_eq!(format_timer_remaining(Duration::from_millis(1)), "0.1s");
+        assert_eq!(format_timer_remaining(Duration::ZERO), "0.0s");
     }
 
     #[test]

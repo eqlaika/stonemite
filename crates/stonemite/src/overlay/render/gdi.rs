@@ -9,7 +9,7 @@ use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
     CreateFontW, CreatePen, CreateSolidBrush, DrawTextW, Ellipse, FillRect, GetTextExtentPoint32W,
     RoundRect, SelectObject, SetBkMode, SetTextColor, BACKGROUND_MODE, DT_CENTER, DT_LEFT,
-    DT_SINGLELINE, DT_VCENTER, HDC, HFONT, PS_NULL,
+    DT_RIGHT, DT_SINGLELINE, DT_VCENTER, HDC, HFONT, PS_NULL,
 };
 
 use super::super::labels::{
@@ -171,4 +171,120 @@ pub(in crate::overlay) unsafe fn draw_label(
     }
     let _ = SelectObject(hdc, old_name_font);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(name_font);
+}
+
+pub(in crate::overlay) unsafe fn draw_timer_overlay(
+    hdc: HDC,
+    bounds: RECT,
+    label: &str,
+    remaining_text: &str,
+    progress: f32,
+    scale: f64,
+) {
+    let pixels = |logical: i32| (f64::from(logical) * scale).round() as i32;
+    let panel_color = Color {
+        red: 26,
+        green: 31,
+        blue: 42,
+    };
+    let track_color = Color {
+        red: 9,
+        green: 12,
+        blue: 18,
+    };
+    let progress_color = Color {
+        red: 93,
+        green: 173,
+        blue: 255,
+    };
+
+    let panel_brush = CreateSolidBrush(colorref(panel_color));
+    let null_pen = CreatePen(PS_NULL, 0, COLORREF(0));
+    let old_pen = SelectObject(hdc, null_pen);
+    let old_brush = SelectObject(hdc, panel_brush);
+    let radius = pixels(7) * 2;
+    let _ = RoundRect(
+        hdc,
+        bounds.left,
+        bounds.top,
+        bounds.right,
+        bounds.bottom,
+        radius,
+        radius,
+    );
+    let _ = SelectObject(hdc, old_brush);
+    let _ = SelectObject(hdc, old_pen);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(panel_brush);
+
+    let inset = pixels(8);
+    let bar_height = pixels(4).max(1);
+    let track = RECT {
+        left: bounds.left + inset,
+        top: bounds.bottom - inset - bar_height,
+        right: bounds.right - inset,
+        bottom: bounds.bottom - inset,
+    };
+    let track_brush = CreateSolidBrush(colorref(track_color));
+    let _ = FillRect(hdc, &track, track_brush);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(track_brush);
+
+    let remaining_fraction = (1.0 - progress).clamp(0.0, 1.0);
+    let fill = RECT {
+        right: track.left + ((track.right - track.left) as f32 * remaining_fraction).round() as i32,
+        ..track
+    };
+    if fill.right > fill.left {
+        let progress_brush = CreateSolidBrush(colorref(progress_color));
+        let _ = FillRect(hdc, &fill, progress_brush);
+        let _ = windows::Win32::Graphics::Gdi::DeleteObject(progress_brush);
+    }
+
+    let font = create_font(
+        pixels(16),
+        &FontSpec {
+            family: "Segoe UI".to_owned(),
+            scale_percent: 100,
+            weight: 700,
+        },
+    );
+    let old_font = SelectObject(hdc, font);
+    let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
+    let _ = SetTextColor(
+        hdc,
+        colorref(Color {
+            red: 255,
+            green: 255,
+            blue: 255,
+        }),
+    );
+    let text_bottom = track.top - pixels(2);
+    let mut label_bounds = RECT {
+        left: bounds.left + inset,
+        top: bounds.top,
+        right: bounds.right - pixels(62),
+        bottom: text_bottom,
+    };
+    let mut remaining_bounds = RECT {
+        left: label_bounds.right,
+        top: bounds.top,
+        right: bounds.right - inset,
+        bottom: text_bottom,
+    };
+    let mut label: Vec<u16> = label.encode_utf16().collect();
+    let mut remaining: Vec<u16> = remaining_text.encode_utf16().collect();
+    let _ = DrawTextW(
+        hdc,
+        &mut label,
+        &mut label_bounds,
+        DT_LEFT | DT_SINGLELINE | DT_VCENTER,
+    );
+    let _ = DrawTextW(
+        hdc,
+        &mut remaining,
+        &mut remaining_bounds,
+        DT_RIGHT | DT_SINGLELINE | DT_VCENTER,
+    );
+    let _ = SelectObject(hdc, old_font);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
 }
