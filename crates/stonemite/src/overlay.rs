@@ -2,8 +2,11 @@ use std::cell::{Cell, UnsafeCell};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+mod labels;
 mod notifications;
+mod render;
 
+use labels::{Color, LabelModel, LabelStyle};
 use notifications::{EnabledKinds, Notification};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -13,10 +16,10 @@ use windows::Win32::Graphics::Dwm::{
     DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, ClientToScreen, CreateFontW, CreatePen, CreateSolidBrush, DrawTextW, Ellipse,
-    EndPaint, FillRect, FrameRect, GetStockObject, GetTextExtentPoint32W, InvalidateRect,
-    RoundRect, SelectObject, SetBkMode, SetTextColor, BACKGROUND_MODE, BLACK_BRUSH, DT_CENTER,
-    DT_LEFT, DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_HEAVY, HBRUSH, PAINTSTRUCT, PS_NULL,
+    BeginPaint, ClientToScreen, CreateFontW, CreatePen, CreateSolidBrush, DrawTextW, EndPaint,
+    FillRect, FrameRect, GetStockObject, GetTextExtentPoint32W, InvalidateRect, RoundRect,
+    SelectObject, SetBkMode, SetTextColor, BACKGROUND_MODE, BLACK_BRUSH, DT_CENTER, DT_LEFT,
+    DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_HEAVY, HBRUSH, PAINTSTRUCT, PS_NULL,
 };
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
@@ -630,6 +633,21 @@ fn badge_color_for_number(number: usize) -> u32 {
         return BADGE_COLORS[0];
     }
     BADGE_COLORS[(number - 1) % BADGE_COLORS.len()]
+}
+
+fn label_model<'a>(
+    text: &'a str,
+    class: Option<&'a str>,
+    number: usize,
+    background: u32,
+) -> LabelModel<'a> {
+    LabelModel {
+        text,
+        class,
+        number,
+        background: Color::from_colorref(background),
+        badge_background: Color::from_colorref(badge_color_for_number(number)),
+    }
 }
 
 fn format_label(w: &EqWindow) -> String {
@@ -1865,42 +1883,18 @@ unsafe fn update_active_label(s: &mut OverlayState) {
 
     let d = s.dpi_scale;
     let lh = s.label_height;
-    let label_h = dpi(lh, d);
-
-    // Measure text width using the actual font.
-    let name_font = CreateFontW(
-        dpi(lh - 12, d),
-        0,
-        0,
-        0,
-        FW_BOLD.0 as i32,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        w!("Segoe UI"),
+    let style = LabelStyle::new(d, lh);
+    let label_h = style.height();
+    let model = label_model(
+        &s.active_label_text,
+        s.active_label_class.as_deref(),
+        s.active_label_number,
+        s.active_label_color,
     );
-    let hdc = windows::Win32::Graphics::Gdi::GetDC(s.active_label_hwnd);
-    let old_font = SelectObject(hdc, name_font);
-    let wide: Vec<u16> = s.active_label_text.encode_utf16().collect();
-    let mut text_size = windows::Win32::Foundation::SIZE::default();
-    let _ = GetTextExtentPoint32W(hdc, &wide, &mut text_size);
-    let _ = SelectObject(hdc, old_font);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(name_font);
-    let _ = windows::Win32::Graphics::Gdi::ReleaseDC(s.active_label_hwnd, hdc);
 
-    // Badge width + optional class icon + padding + measured text + right padding.
-    let badge_w = label_h;
-    let icon_w = if s.active_label_class.is_some() {
-        badge_w + dpi(6, d)
-    } else {
-        0
-    };
-    let text_width = badge_w + dpi(6, d) + icon_w + text_size.cx + dpi(10, d);
+    let hdc = windows::Win32::Graphics::Gdi::GetDC(s.active_label_hwnd);
+    let text_width = render::measure_label_width(hdc, &model, style, i32::MAX);
+    let _ = windows::Win32::Graphics::Gdi::ReleaseDC(s.active_label_hwnd, hdc);
 
     // When PiP edge is left, anchor the label at top-right so the strip doesn't cover it.
     let label_x = if matches!(s.pip_edge, config::PipEdge::Left) {
@@ -3084,212 +3078,25 @@ unsafe fn paint_label(hwnd: HWND, text: &str, class: Option<&str>, bg_color: u32
         .unwrap_or((1.0, 0, DEFAULT_LABEL_HEIGHT));
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
+    let mut bounds = RECT::default();
+    let _ = GetClientRect(hwnd, &mut bounds);
 
-    let mut rc = RECT::default();
-    let _ = GetClientRect(hwnd, &mut rc);
-    let label_h = rc.bottom - rc.top;
-
-    // Fill entire window with color key (becomes transparent via LWA_COLORKEY).
-    let key_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY));
-    let _ = FillRect(hdc, &rc, key_brush);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(key_brush);
-
-    // Rounded background.
-    let radius = dpi(8, d);
-    let bg_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(bg_color));
-    let null_pen = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
-    let old_pen = SelectObject(hdc, null_pen);
-    let old_brush = SelectObject(hdc, bg_brush);
-    let _ = RoundRect(
+    let model = label_model(text, class, number, bg_color);
+    render::draw_label(
         hdc,
-        rc.left,
-        rc.top,
-        rc.right,
-        rc.bottom,
-        radius * 2,
-        radius * 2,
+        bounds,
+        bounds,
+        &model,
+        LabelStyle::new(d, lh),
+        Color::from_colorref(LABEL_COLOR_KEY),
     );
-    let _ = SelectObject(hdc, old_brush);
-    let _ = SelectObject(hdc, old_pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(bg_brush);
 
-    let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
-
-    // Number badge circle.
-    let badge_diameter = label_h - dpi(6, d);
-    let badge_x = rc.left + dpi(4, d);
-    let badge_y = rc.top + (label_h - badge_diameter) / 2;
-    let badge_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(
-        badge_color_for_number(number),
-    ));
-    let null_pen2 = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
-    let op2 = SelectObject(hdc, null_pen2);
-    let ob2 = SelectObject(hdc, badge_brush);
-    let _ = Ellipse(
-        hdc,
-        badge_x,
-        badge_y,
-        badge_x + badge_diameter,
-        badge_y + badge_diameter,
-    );
-    let _ = SelectObject(hdc, ob2);
-    let _ = SelectObject(hdc, op2);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen2);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_brush);
-
-    // Number text in badge.
-    let badge_font = CreateFontW(
-        dpi(lh - 14, d),
-        0,
-        0,
-        0,
-        FW_HEAVY.0 as i32,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        w!("Segoe UI"),
-    );
-    let old_font = SelectObject(hdc, badge_font);
-    let mut badge_rect = RECT {
-        left: badge_x,
-        top: badge_y,
-        right: badge_x + badge_diameter,
-        bottom: badge_y + badge_diameter,
-    };
-    let num_str = format!("{number}");
-    let mut num_wide: Vec<u16> = num_str.encode_utf16().collect();
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
-    let _ = DrawTextW(
-        hdc,
-        &mut num_wide,
-        &mut badge_rect,
-        DT_CENTER | DT_SINGLELINE | DT_VCENTER,
-    );
-    let _ = SelectObject(hdc, old_font);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_font);
-
-    // Class icon badge (same size as number badge).
-    let mut after_badges = badge_x + badge_diameter + dpi(6, d);
-    if let Some(cls) = class {
-        let icon_x = after_badges;
-        let icon_y = badge_y;
-        let icon_size = badge_diameter;
-        crate::class_icons::draw_class_icon(hdc, cls, icon_x, icon_y, icon_size);
-        after_badges = icon_x + icon_size + dpi(6, d);
-    }
-
-    // Character name with shadow.
-    let name_font = CreateFontW(
-        dpi(lh - 12, d),
-        0,
-        0,
-        0,
-        FW_BOLD.0 as i32,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        w!("Segoe UI"),
-    );
-    let old_font2 = SelectObject(hdc, name_font);
-    let text_left = after_badges;
-    let mut wide: Vec<u16> = text.encode_utf16().collect();
-
-    if !wide.is_empty() {
-        // Shadow.
-        let mut shadow_rc = RECT {
-            left: text_left + dpi(1, d),
-            top: rc.top + dpi(1, d),
-            right: rc.right,
-            bottom: rc.bottom,
-        };
-        let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000000));
-        let _ = DrawTextW(
-            hdc,
-            &mut wide,
-            &mut shadow_rc,
-            DT_LEFT | DT_SINGLELINE | DT_VCENTER,
-        );
-
-        // Main text (white).
-        let mut text_rc = RECT {
-            left: text_left,
-            top: rc.top,
-            right: rc.right,
-            bottom: rc.bottom,
-        };
-        let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
-        let _ = DrawTextW(
-            hdc,
-            &mut wide,
-            &mut text_rc,
-            DT_LEFT | DT_SINGLELINE | DT_VCENTER,
-        );
-    }
-
-    let _ = SelectObject(hdc, old_font2);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(name_font);
     let _ = EndPaint(hwnd, &ps);
 }
 
 // ---------------------------------------------------------------------------
 // PiP label overlay helpers
 // ---------------------------------------------------------------------------
-
-/// Measure the width needed for a PiP label, capped at max_w.
-unsafe fn measure_pip_label_size(
-    hwnd: HWND,
-    s: &OverlayState,
-    text: &str,
-    class: Option<&str>,
-    max_w: i32,
-) -> (i32, i32) {
-    let d = s.dpi_scale;
-    let lh = s.label_height;
-    let label_h = dpi(lh, d);
-    let font = CreateFontW(
-        dpi(lh - 12, d),
-        0,
-        0,
-        0,
-        FW_BOLD.0 as i32,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        w!("Segoe UI"),
-    );
-    let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
-    let old = SelectObject(hdc, font);
-    let wide: Vec<u16> = text.encode_utf16().collect();
-    let mut sz = windows::Win32::Foundation::SIZE::default();
-    let _ = GetTextExtentPoint32W(hdc, &wide, &mut sz);
-    let _ = SelectObject(hdc, old);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
-    let _ = windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
-    let badge_w = label_h;
-    let icon_w = if class.is_some() {
-        badge_w + dpi(6, d)
-    } else {
-        0
-    };
-    let w = (badge_w + dpi(6, d) + icon_w + sz.cx + dpi(10, d)).min(max_w);
-    (w, label_h)
-}
 
 unsafe fn paint_pip_label(hwnd: HWND) {
     let raw_idx = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as usize;
@@ -3306,9 +3113,13 @@ unsafe fn paint_pip_label(hwnd: HWND) {
     };
 
     let d = s.dpi_scale;
-    let lh = s.label_height;
-    let number = pw.number;
-    let text = &pw.label;
+    let style = LabelStyle::new(d, s.label_height);
+    let model = label_model(
+        &pw.label,
+        pw.class.as_deref(),
+        pw.number,
+        color_for_number(pw.number),
+    );
     let notification = s.notifications.get(&pw.pid);
     let now_ms = windows::Win32::System::SystemInformation::GetTickCount64();
 
@@ -3317,9 +3128,9 @@ unsafe fn paint_pip_label(hwnd: HWND) {
 
     let mut rc = RECT::default();
     let _ = GetClientRect(hwnd, &mut rc);
-    let label_h = dpi(lh, d).min(rc.bottom - rc.top).max(1);
+    let label_h = style.height().min(rc.bottom - rc.top).max(1);
     let max_label_w = (rc.right - rc.left).max(1);
-    let (label_w, _) = measure_pip_label_size(hwnd, s, text, pw.class.as_deref(), max_label_w);
+    let label_w = render::measure_label_width(hdc, &model, style, max_label_w);
     let label_rc = RECT {
         left: rc.left,
         top: rc.top,
@@ -3327,144 +3138,14 @@ unsafe fn paint_pip_label(hwnd: HWND) {
         bottom: rc.top + label_h,
     };
 
-    // The unused portion of this full-width overlay is color-key transparent.
-    let key_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(LABEL_COLOR_KEY));
-    let _ = FillRect(hdc, &rc, key_brush);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(key_brush);
-
-    let radius = dpi(8, d);
-    let bg_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(color_for_number(
-        number,
-    )));
-    let null_pen = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
-    let old_pen = SelectObject(hdc, null_pen);
-    let old_brush = SelectObject(hdc, bg_brush);
-    let _ = RoundRect(
+    render::draw_label(
         hdc,
-        label_rc.left,
-        label_rc.top,
-        label_rc.right,
-        label_rc.bottom,
-        radius * 2,
-        radius * 2,
+        rc,
+        label_rc,
+        &model,
+        style,
+        Color::from_colorref(LABEL_COLOR_KEY),
     );
-    let _ = SelectObject(hdc, old_brush);
-    let _ = SelectObject(hdc, old_pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(bg_brush);
-    let _ = SetBkMode(hdc, BACKGROUND_MODE(1));
-
-    let badge_diameter = label_h - dpi(6, d);
-    let badge_x = label_rc.left + dpi(4, d);
-    let badge_y = label_rc.top + (label_h - badge_diameter) / 2;
-    let badge_brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(
-        badge_color_for_number(number),
-    ));
-    let null_pen2 = CreatePen(PS_NULL, 0, windows::Win32::Foundation::COLORREF(0));
-    let old_pen2 = SelectObject(hdc, null_pen2);
-    let old_brush2 = SelectObject(hdc, badge_brush);
-    let _ = Ellipse(
-        hdc,
-        badge_x,
-        badge_y,
-        badge_x + badge_diameter,
-        badge_y + badge_diameter,
-    );
-    let _ = SelectObject(hdc, old_brush2);
-    let _ = SelectObject(hdc, old_pen2);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(null_pen2);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_brush);
-
-    let badge_font = CreateFontW(
-        dpi(lh - 14, d),
-        0,
-        0,
-        0,
-        FW_HEAVY.0 as i32,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        w!("Segoe UI"),
-    );
-    let old_font = SelectObject(hdc, badge_font);
-    let mut badge_rect = RECT {
-        left: badge_x,
-        top: badge_y,
-        right: badge_x + badge_diameter,
-        bottom: badge_y + badge_diameter,
-    };
-    let mut num_wide: Vec<u16> = number.to_string().encode_utf16().collect();
-    let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
-    let _ = DrawTextW(
-        hdc,
-        &mut num_wide,
-        &mut badge_rect,
-        DT_CENTER | DT_SINGLELINE | DT_VCENTER,
-    );
-    let _ = SelectObject(hdc, old_font);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge_font);
-
-    let mut after_badges = badge_x + badge_diameter + dpi(6, d);
-    if let Some(cls) = &pw.class {
-        let icon_x = after_badges;
-        let icon_y = badge_y;
-        crate::class_icons::draw_class_icon(hdc, cls, icon_x, icon_y, badge_diameter);
-        after_badges = icon_x + badge_diameter + dpi(6, d);
-    }
-
-    let name_font = CreateFontW(
-        dpi(lh - 12, d),
-        0,
-        0,
-        0,
-        FW_BOLD.0 as i32,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        w!("Segoe UI"),
-    );
-    let old_font2 = SelectObject(hdc, name_font);
-    let mut wide: Vec<u16> = text.encode_utf16().collect();
-    if !wide.is_empty() {
-        let mut shadow_rc = RECT {
-            left: after_badges + dpi(1, d),
-            top: label_rc.top + dpi(1, d),
-            right: label_rc.right,
-            bottom: label_rc.bottom,
-        };
-        let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00000000));
-        let _ = DrawTextW(
-            hdc,
-            &mut wide,
-            &mut shadow_rc,
-            DT_LEFT | DT_SINGLELINE | DT_VCENTER,
-        );
-        let mut text_rc = RECT {
-            left: after_badges,
-            top: label_rc.top,
-            right: label_rc.right,
-            bottom: label_rc.bottom,
-        };
-        let _ = SetTextColor(hdc, windows::Win32::Foundation::COLORREF(0x00FFFFFF));
-        let _ = DrawTextW(
-            hdc,
-            &mut wide,
-            &mut text_rc,
-            DT_LEFT | DT_SINGLELINE | DT_VCENTER,
-        );
-    }
-    let _ = SelectObject(hdc, old_font2);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(name_font);
 
     if let Some(notification) = notification {
         let unread_bottom =
