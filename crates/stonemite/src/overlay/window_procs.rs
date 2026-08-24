@@ -7,7 +7,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TR
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::hosts::update_active_label;
-use super::menu::{handle_menu_command, show_char_menu};
+use super::menu::queue_char_menu;
 use super::notifications;
 use super::pip_transition::{tick as tick_pip_transition, TIMER_ID as TIMER_PIP_TRANSITION};
 use super::runtime::{self, is_busy, try_with_state, try_with_state_mut};
@@ -244,14 +244,9 @@ pub(super) unsafe extern "system" fn label_wnd_proc(
                         y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
                     };
                     let _ = ClientToScreen(hwnd, &mut point);
-                    show_char_menu(state, active_pid, point, hwnd);
+                    queue_char_menu(state, active_pid, point, hwnd);
                 }
             });
-            LRESULT(0)
-        }
-        WM_COMMAND => {
-            let cmd_id = (wparam.0 & 0xFFFF) as u32;
-            handle_menu_command(cmd_id);
             LRESULT(0)
         }
         message if forwards_active_label_mouse_message(message) => {

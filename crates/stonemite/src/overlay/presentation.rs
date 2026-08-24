@@ -87,6 +87,8 @@ pub(super) struct PresentationState {
     pub(super) pip_windows: Vec<PipWindowEntry>,
     pub(super) pip_transition: Option<PipTransition>,
     pub(super) pending_composition_destroys: Vec<HWND>,
+    /// Stable activatable owner for modal context menus.
+    pub(super) menu_owner_hwnd: HWND,
     pub(super) active_label_hwnd: HWND,
     pub(super) active_label_text: String,
     pub(super) active_label_class: Option<String>,

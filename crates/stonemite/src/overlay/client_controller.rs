@@ -14,6 +14,7 @@ use super::state::OverlayState;
 use super::surfaces::update_visibility;
 use super::toast_controller::show_toast_inner;
 use crate::config;
+use crate::diagnostics::debug_log;
 
 type CommandResult = Result<trushar::control::CommandOutcome, trushar::control::ControlError>;
 
@@ -69,20 +70,46 @@ unsafe fn handle_foreground_change(s: &mut OverlayState) {
 // Swap
 // ---------------------------------------------------------------------------
 
+/// Return foreground ownership to the active EQ client after an overlay
+/// interaction. Never steal focus if the user moved elsewhere first.
+pub(super) unsafe fn restore_active_eq_if_owned(s: &mut OverlayState, owner_hwnd: HWND) {
+    if GetForegroundWindow() != owner_hwnd {
+        return;
+    }
+    let Some(active_pid) = s.clients.active_pid() else {
+        return;
+    };
+    if let Err(error) = activate_pid_inner(s, active_pid) {
+        debug_log(&format!(
+            "overlay interaction could not restore active EQ: {} ({})",
+            error.message,
+            error.code.as_str()
+        ));
+    }
+}
+
 /// Swap to the window with the given stable number (1-based).
 /// Called from hotkey handlers.
 pub(super) unsafe fn swap_to_number(number: usize) {
-    let _ = try_with_state_mut(|state| unsafe {
+    match try_with_state_mut(|state| unsafe {
         let target_pid = state
             .clients
             .windows
             .iter()
             .find(|window| window.number == number)
             .map(|window| window.pid);
-        if let Some(target_pid) = target_pid {
-            let _ = activate_pid_inner(state, target_pid);
-        }
-    });
+        target_pid.and_then(|target_pid| activate_pid_inner(state, target_pid).err())
+    }) {
+        Ok(Some(error)) => debug_log(&format!(
+            "window {number} hotkey activation failed: {} ({})",
+            error.message,
+            error.code.as_str()
+        )),
+        Err(error) => debug_log(&format!(
+            "window {number} hotkey could not access overlay state: {error:?}"
+        )),
+        Ok(None) => {}
+    }
 }
 
 /// Swap the selected client's stable window number with the active client's number.

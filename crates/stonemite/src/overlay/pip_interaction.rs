@@ -11,7 +11,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::appearance::BORDER_WIDTH;
-use super::client_controller::activate_pid_inner;
+use super::client_controller::{activate_pid_inner, restore_active_eq_if_owned};
 use super::control_bridge::publish;
 use super::geometry::scale;
 use super::hosts::{
@@ -25,7 +25,7 @@ use super::layout::{
     strip_resize_hit_test, MoveSnapInput, ResizeEdge, MAX_STRIP_WIDTH_FRACTION,
     MIN_STRIP_WIDTH_FRACTION,
 };
-use super::menu::{apply_menu_command, show_char_menu};
+use super::menu::queue_char_menu;
 use super::notifications;
 use super::runtime::{is_busy, try_with_state_mut};
 use super::state::OverlayState;
@@ -35,6 +35,7 @@ use super::surfaces::{
 };
 use super::toast::CLEAR_INVITE_CAPTURE_MESSAGE as WM_CLEAR_INVITE_CAPTURE;
 use crate::config;
+use crate::diagnostics::debug_log;
 
 const RESIZE_HANDLE_WIDTH: i32 = 12;
 const THUMB_OPACITY_HOVER: u8 = 255;
@@ -105,6 +106,7 @@ unsafe fn unavailable_message_result(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_MOUSEACTIVATE => LRESULT(MA_ACTIVATE as isize),
         WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
             validate_composition_paint(hwnd);
@@ -123,15 +125,10 @@ unsafe fn pip_wnd_proc_inner(
     pip_idx: usize,
 ) -> LRESULT {
     match msg {
-        WM_MOUSEACTIVATE => {
-            let mut point = POINT::default();
-            let _ = GetCursorPos(&mut point);
-            let _ = ScreenToClient(hwnd, &mut point);
-            if notifications::has_invite_preview_at(s, pip_idx, point) {
-                return LRESULT(MA_NOACTIVATE as isize);
-            }
-            DefWindowProcW(hwnd, msg, wparam, lparam)
-        }
+        // Foreground the interaction host before delivering the initiating
+        // button message. Otherwise the still-foreground EQ client consumes
+        // the same physical click through DirectInput.
+        WM_MOUSEACTIVATE => LRESULT(MA_ACTIVATE as isize),
 
         WM_SETCURSOR => {
             if (lparam.0 & 0xFFFF) as u32 == 1
@@ -474,7 +471,10 @@ unsafe fn pip_wnd_proc_inner(
                 }
             }
 
-            // A potential click that never became a drag is no longer active.
+            // A potential click that never became a captured drag is no
+            // longer active. Right/middle/X-button presses also have no
+            // gesture state, so restore EQ whenever no captured interaction
+            // still owns the pointer.
             if s.interaction
                 .reorder_drag
                 .as_ref()
@@ -482,25 +482,30 @@ unsafe fn pip_wnd_proc_inner(
             {
                 cancel_reorder_drag(s);
             }
+            let captured_interaction = notifications::invite_action_pressed(s, pip_idx)
+                || s.interaction.move_drag.is_some()
+                || s.interaction.pip_resize_drag.is_some()
+                || s.interaction.strip_resize_drag.is_some()
+                || s.interaction
+                    .reorder_drag
+                    .as_ref()
+                    .is_some_and(|drag| drag.dragging);
+            if !captured_interaction {
+                restore_active_eq_if_owned(s, hwnd);
+            }
 
             LRESULT(0)
         }
 
         WM_CANCELMODE => {
-            let had_invite_press = notifications::invite_action_pressed(s, pip_idx);
-            let had_reorder = s.interaction.reorder_drag.is_some();
-            if had_invite_press {
-                notifications::clear_invite_interaction(s, pip_idx);
-            }
-            if had_reorder {
-                cancel_reorder_drag(s);
-            }
-            if had_invite_press || had_reorder {
-                let _ = ReleaseCapture();
-                LRESULT(0)
-            } else {
-                DefWindowProcW(hwnd, msg, wparam, lparam)
-            }
+            notifications::clear_invite_interaction(s, pip_idx);
+            s.interaction.move_drag = None;
+            s.interaction.pip_resize_drag = None;
+            s.interaction.strip_resize_drag = None;
+            cancel_reorder_drag(s);
+            let _ = ReleaseCapture();
+            restore_active_eq_if_owned(s, hwnd);
+            LRESULT(0)
         }
 
         WM_CAPTURECHANGED => {
@@ -513,7 +518,11 @@ unsafe fn pip_wnd_proc_inner(
 
         WM_CLEAR_INVITE_CAPTURE => {
             notifications::clear_invite_interaction(s, pip_idx);
+            s.interaction.move_drag = None;
+            s.interaction.pip_resize_drag = None;
+            s.interaction.strip_resize_drag = None;
             cancel_reorder_drag(s);
+            restore_active_eq_if_owned(s, hwnd);
             LRESULT(0)
         }
 
@@ -614,6 +623,7 @@ unsafe fn pip_wnd_proc_inner(
                     if let Some((pid, action)) = invite_action {
                         notifications::execute_invite_action(s, pid, action);
                     }
+                    restore_active_eq_if_owned(s, hwnd);
                     return LRESULT(0);
                 }
             }
@@ -621,9 +631,11 @@ unsafe fn pip_wnd_proc_inner(
 
             // --- Edit mode: finalize move/resize ---
             if s.interaction.move_drag.take().is_some() {
+                restore_active_eq_if_owned(s, hwnd);
                 return LRESULT(0);
             }
             if s.interaction.pip_resize_drag.take().is_some() {
+                restore_active_eq_if_owned(s, hwnd);
                 return LRESULT(0);
             }
 
@@ -632,6 +644,7 @@ unsafe fn pip_wnd_proc_inner(
                 let mut cfg = config::Config::load();
                 cfg.pip_strip_width = s.layout.custom_strip_width.map(|v| v as u32);
                 let _ = cfg.save();
+                restore_active_eq_if_owned(s, hwnd);
                 return LRESULT(0);
             }
 
@@ -710,17 +723,31 @@ unsafe fn pip_wnd_proc_inner(
                     }
                 } else {
                     // Simple click → activate the presented identity.
-                    if let Some(pid) = s
+                    if let Some((pid, target_hwnd)) = s
                         .presentation
                         .pip_windows
                         .get(drag.from_index)
-                        .map(|pip| pip.pid)
+                        .map(|pip| (pip.pid, pip.source_hwnd))
                     {
-                        let _ = activate_pid_inner(s, pid);
+                        if let Err(error) = activate_pid_inner(s, pid) {
+                            debug_log(&format!(
+                                "PiP click activation failed: {} ({})",
+                                error.message,
+                                error.code.as_str()
+                            ));
+                            let foreground = GetForegroundWindow();
+                            if foreground == hwnd || foreground == target_hwnd {
+                                restore_active_eq_if_owned(s, foreground);
+                            }
+                        }
+                    } else {
+                        restore_active_eq_if_owned(s, hwnd);
                     }
+                    return LRESULT(0);
                 }
             }
 
+            restore_active_eq_if_owned(s, hwnd);
             LRESULT(0)
         }
 
@@ -743,7 +770,20 @@ unsafe fn pip_wnd_proc_inner(
                     update_visibility(s);
                 }
             }
+            restore_active_eq_if_owned(s, hwnd);
             LRESULT(0)
+        }
+
+        WM_MBUTTONDOWN | WM_XBUTTONDOWN => LRESULT(0),
+
+        WM_MBUTTONUP => {
+            restore_active_eq_if_owned(s, hwnd);
+            LRESULT(0)
+        }
+
+        WM_XBUTTONUP => {
+            restore_active_eq_if_owned(s, hwnd);
+            LRESULT(1)
         }
 
         WM_RBUTTONUP => {
@@ -756,14 +796,8 @@ unsafe fn pip_wnd_proc_inner(
                 let pid = pw.pid;
                 let mut screen_pt = pt;
                 let _ = ClientToScreen(hwnd, &mut screen_pt);
-                show_char_menu(s, pid, screen_pt, hwnd);
+                queue_char_menu(s, pid, screen_pt, hwnd);
             }
-            LRESULT(0)
-        }
-
-        WM_COMMAND => {
-            let cmd_id = (wparam.0 & 0xFFFF) as u32;
-            apply_menu_command(s, cmd_id);
             LRESULT(0)
         }
 

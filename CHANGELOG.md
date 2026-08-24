@@ -13,6 +13,10 @@
 - Kept PiP hosts persistent across client swaps, with a sliding thumbnail handoff and animated reordering instead of rebuilding all five windows through a blank frame
 - Pushed Mouse Clutch phase and readiness changes through Trushar so every deck tile reflects physical-key, duplicate-tile, focus-cancellation, and release-drain transitions
 
+### Fixed
+
+- Prevented PiP mouse input from reaching the foreground EQ client and kept window swapping responsive while PiP context menus are open
+
 ## v2026.08.22
 
 ### Added

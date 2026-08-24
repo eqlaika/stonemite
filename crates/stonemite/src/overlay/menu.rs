@@ -1,17 +1,20 @@
 use std::time::Duration;
 
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+use super::client_controller::restore_active_eq_if_owned;
 use super::clients::apply_preferred_box_order;
 use super::control_bridge::publish;
 use super::edit_mode::toggle_inner as toggle_edit_mode_inner;
 use super::event_loop::publish_log_sources_inner;
 use super::hosts::{rebuild_thumbnails, update_active_label};
+use super::interaction::ContextMenuRequest;
 use super::runtime::try_with_state_mut;
 use super::state::OverlayState;
 use super::surfaces::update_visibility;
+use crate::diagnostics::debug_log;
 use crate::{config, eq_characters};
 
 const IDM_CHAR_BASE: u32 = 5000;
@@ -22,22 +25,135 @@ const IDM_EDIT_MODE: u32 = 7200;
 const IDM_RESET_LAYOUT: u32 = 7300;
 const IDM_BROADCAST_TOGGLE: u32 = 7400;
 const IDM_SETTINGS: u32 = 7500;
+const SHOW_CHAR_MENU_MESSAGE: u32 = WM_USER + 46;
 
 // ---------------------------------------------------------------------------
 // Context menu
 // ---------------------------------------------------------------------------
 
-pub(super) unsafe fn show_char_menu(
+struct PreparedCharMenu {
+    hmenu: HMENU,
+    screen_point: POINT,
+    source_hwnd: HWND,
+}
+
+/// Queue popup creation so the originating window procedure can release the
+/// overlay runtime transaction before TrackPopupMenu starts its nested loop.
+pub(super) unsafe fn queue_char_menu(
     s: &mut OverlayState,
     target_pid: u32,
-    screen_pt: POINT,
-    owner_hwnd: HWND,
+    screen_point: POINT,
+    source_hwnd: HWND,
 ) {
+    if s.interaction.context_menu_open || s.interaction.pending_context_menu.is_some() {
+        restore_active_eq_if_owned(s, source_hwnd);
+        return;
+    }
+    s.interaction.pending_context_menu = Some(ContextMenuRequest {
+        target_pid,
+        screen_point,
+        source_hwnd,
+    });
+    if PostMessageW(
+        s.presentation.menu_owner_hwnd,
+        SHOW_CHAR_MENU_MESSAGE,
+        WPARAM(0),
+        LPARAM(0),
+    )
+    .is_err()
+    {
+        s.interaction.pending_context_menu = None;
+        debug_log("could not queue PiP context menu");
+        restore_active_eq_if_owned(s, source_hwnd);
+    }
+}
+
+pub(super) unsafe extern "system" fn menu_owner_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if msg == SHOW_CHAR_MENU_MESSAGE {
+        show_pending_char_menu(hwnd);
+        LRESULT(0)
+    } else {
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+}
+
+unsafe fn show_pending_char_menu(owner_hwnd: HWND) {
+    let prepared = match try_with_state_mut(|s| unsafe { prepare_char_menu(s) }) {
+        Ok(Some(prepared)) => prepared,
+        Ok(None) => return,
+        Err(error) => {
+            debug_log(&format!("could not prepare PiP context menu: {error:?}"));
+            return;
+        }
+    };
+
+    let foreground_ready =
+        SetForegroundWindow(owner_hwnd).as_bool() || GetForegroundWindow() == owner_hwnd;
+    let selected = if foreground_ready {
+        TrackPopupMenu(
+            prepared.hmenu,
+            TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
+            prepared.screen_point.x,
+            prepared.screen_point.y,
+            0,
+            owner_hwnd,
+            None,
+        )
+        .0 as u32
+    } else {
+        debug_log("Windows denied foreground ownership for the PiP context menu");
+        0
+    };
+
+    let _ = DestroyMenu(prepared.hmenu);
+    let _ = PostMessageW(owner_hwnd, WM_NULL, WPARAM(0), LPARAM(0));
+
+    let restore_owner = if foreground_ready {
+        owner_hwnd
+    } else {
+        prepared.source_hwnd
+    };
+    if let Err(error) = try_with_state_mut(|s| unsafe {
+        if selected != 0 {
+            apply_menu_command(s, selected);
+        }
+        s.interaction.context_menu_open = false;
+        s.interaction.context_menu_target_pid = None;
+        s.interaction.context_menu_candidates.clear();
+        update_visibility(s);
+        // If Settings already owns foreground this is a no-op; if spawning it
+        // failed, do not strand focus on the hidden menu owner.
+        restore_active_eq_if_owned(s, restore_owner);
+    }) {
+        debug_log(&format!("could not finalize PiP context menu: {error:?}"));
+    }
+}
+
+unsafe fn prepare_char_menu(s: &mut OverlayState) -> Option<PreparedCharMenu> {
+    let request = s.interaction.pending_context_menu.take()?;
+    if !s
+        .clients
+        .windows
+        .iter()
+        .any(|window| window.pid == request.target_pid)
+    {
+        restore_active_eq_if_owned(s, request.source_hwnd);
+        return None;
+    }
+    let target_pid = request.target_pid;
     let cfg = config::Config::load();
     let eq_dir = cfg.eq_directory();
     let candidates = eq_characters::find_active_characters(&eq_dir, Duration::from_secs(86400));
 
-    let Ok(hmenu) = CreatePopupMenu() else { return };
+    let Ok(hmenu) = CreatePopupMenu() else {
+        restore_active_eq_if_owned(s, request.source_hwnd);
+        return None;
+    };
 
     // Character assignment submenu, grouped by server.
     if let Ok(char_menu) = CreatePopupMenu() {
@@ -123,7 +239,8 @@ pub(super) unsafe fn show_char_menu(
     // PiP Edge submenu.
     let Ok(edge_menu) = CreatePopupMenu() else {
         let _ = DestroyMenu(hmenu);
-        return;
+        restore_active_eq_if_owned(s, request.source_hwnd);
+        return None;
     };
     let edge_options = [
         (config::PipEdge::Right, "Right"),
@@ -221,34 +338,12 @@ pub(super) unsafe fn show_char_menu(
     s.interaction.context_menu_target_pid = Some(target_pid);
     s.interaction.context_menu_candidates = candidates;
     s.interaction.context_menu_open = true;
-
-    // TrackPopupMenu runs a nested message loop. The runtime transaction stays
-    // busy while the selected command is returned instead of dispatching a
-    // re-entrant WM_COMMAND against this state borrow.
-    let _ = SetForegroundWindow(owner_hwnd);
     update_visibility(s);
-    let selected = TrackPopupMenu(
+    Some(PreparedCharMenu {
         hmenu,
-        TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
-        screen_pt.x,
-        screen_pt.y,
-        0,
-        owner_hwnd,
-        None,
-    )
-    .0 as u32;
-
-    if selected != 0 {
-        apply_menu_command(s, selected);
-    }
-    s.interaction.context_menu_open = false;
-    update_visibility(s);
-    let _ = DestroyMenu(hmenu);
-    let _ = PostMessageW(owner_hwnd, WM_NULL, WPARAM(0), LPARAM(0));
-}
-
-pub(super) unsafe fn handle_menu_command(cmd_id: u32) {
-    let _ = try_with_state_mut(|state| unsafe { apply_menu_command(state, cmd_id) });
+        screen_point: request.screen_point,
+        source_hwnd: request.source_hwnd,
+    })
 }
 
 pub(super) unsafe fn apply_menu_command(s: &mut OverlayState, cmd_id: u32) {
@@ -288,6 +383,9 @@ unsafe fn handle_char_assign(s: &mut OverlayState, cmd_id: u32) {
         return;
     };
     let candidates = std::mem::take(&mut s.interaction.context_menu_candidates);
+    if !s.clients.windows.iter().any(|w| w.pid == target_pid) {
+        return;
+    }
 
     let Some(candidate) = candidates.get(char_idx) else {
         return;
@@ -322,6 +420,9 @@ unsafe fn handle_number_assign(s: &mut OverlayState, new_number: usize) {
         return;
     };
     let _ = std::mem::take(&mut s.interaction.context_menu_candidates);
+    if !s.clients.windows.iter().any(|w| w.pid == target_pid) {
+        return;
+    }
 
     let old_number = s
         .clients

@@ -14,6 +14,7 @@ use super::geometry::{client_animations_enabled, dpi_scale};
 use super::hosts::rebuild_thumbnails;
 use super::interaction::InteractionState;
 use super::layout::LayoutState;
+use super::menu::menu_owner_wnd_proc;
 use super::notifications::{self, NotificationCenter};
 use super::pip_interaction::pip_wnd_proc;
 use super::pip_transition::force_finish as finish_pip_transition;
@@ -62,6 +63,31 @@ unsafe fn initialize_state() -> (OverlayState, HWND) {
         ..Default::default()
     };
     RegisterClassW(&pip_label_wc);
+
+    // Register a stable, activatable owner for context menus. Popup tracking
+    // must not borrow a transient PiP HWND that can be rebuilt while open.
+    let menu_owner_class = w!("StonemiteMenuOwnerClass");
+    let menu_owner_wc = WNDCLASSW {
+        lpfnWndProc: Some(menu_owner_wnd_proc),
+        lpszClassName: menu_owner_class,
+        ..Default::default()
+    };
+    RegisterClassW(&menu_owner_wc);
+    let menu_owner_hwnd = CreateWindowExW(
+        WS_EX_TOOLWINDOW,
+        menu_owner_class,
+        w!("StonemiteMenuOwner"),
+        Default::default(),
+        0,
+        0,
+        0,
+        0,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("Failed to create context-menu owner window");
 
     // Register label window class.
     let label_class = w!("StonemiteLabelClass");
@@ -194,6 +220,7 @@ unsafe fn initialize_state() -> (OverlayState, HWND) {
             pip_windows: Vec::new(),
             pip_transition: None,
             pending_composition_destroys: Vec::new(),
+            menu_owner_hwnd,
             active_label_hwnd: label_hwnd,
             active_label_text: String::new(),
             active_label_class: None,
@@ -346,6 +373,7 @@ pub(super) fn cleanup() {
         }
         let _ = KillTimer(s.presentation.active_label_hwnd, notifications::TIMER_ID);
         let _ = KillTimer(s.presentation.active_label_hwnd, TIMER_OVERLAY_TICK);
+        let _ = DestroyWindow(s.presentation.menu_owner_hwnd);
         let _ = DestroyWindow(s.presentation.active_label_hwnd);
         let _ = DestroyWindow(s.presentation.broadcast_label_hwnd);
         let _ = KillTimer(s.presentation.toast.hwnd, TIMER_TOAST_FADE);

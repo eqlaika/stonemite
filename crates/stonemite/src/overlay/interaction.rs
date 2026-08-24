@@ -27,6 +27,13 @@ pub(super) struct ReorderDragState {
     pub(super) dragging: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct ContextMenuRequest {
+    pub(super) target_pid: u32,
+    pub(super) screen_point: POINT,
+    pub(super) source_hwnd: windows::Win32::Foundation::HWND,
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(super) struct ReorderCancellation {
     pub(super) dimmed_source: Option<usize>,
@@ -50,6 +57,7 @@ pub(super) fn take_reorder_cancellation(
 /// Transient user interaction state. Keeping it together prevents rendering,
 /// client identity, and menu code from each growing independent gesture flags.
 pub(super) struct InteractionState {
+    pub(super) pending_context_menu: Option<ContextMenuRequest>,
     pub(super) context_menu_target_pid: Option<u32>,
     pub(super) context_menu_candidates: Vec<eq_characters::CharCandidate>,
     pub(super) context_menu_open: bool,
@@ -64,6 +72,7 @@ pub(super) struct InteractionState {
 impl InteractionState {
     pub(super) fn new() -> Self {
         Self {
+            pending_context_menu: None,
             context_menu_target_pid: None,
             context_menu_candidates: Vec::new(),
             context_menu_open: false,

@@ -60,7 +60,8 @@ pub(super) fn publish(state: &OverlayState) {
 }
 
 fn is_overlay_window(hwnd: HWND, state: &OverlayState) -> bool {
-    if hwnd == state.presentation.active_label_hwnd
+    if hwnd == state.presentation.menu_owner_hwnd
+        || hwnd == state.presentation.active_label_hwnd
         || hwnd == state.presentation.broadcast_label_hwnd
         || hwnd == state.presentation.toast.hwnd
     {

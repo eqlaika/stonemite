@@ -216,7 +216,10 @@ unsafe fn create_pip_window(
 ) -> Option<PipWindowEntry> {
     let (width, height) = rect_size(desired.rect);
     let hwnd = match CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        // The interactive host must take foreground before EQ polls its
+        // foreground-only DirectInput mouse. The transparent composition
+        // sibling remains non-activating and routes hit tests here.
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
         w!("StonemitePipClass"),
         w!("StonemitePip"),
         WS_POPUP,

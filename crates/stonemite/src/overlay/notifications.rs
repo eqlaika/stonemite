@@ -817,14 +817,6 @@ unsafe fn invite_interaction_at_point(
         .map(|action| (pip.pid, action))
 }
 
-pub(super) unsafe fn has_invite_preview_at(
-    state: &OverlayState,
-    pip_index: usize,
-    point: POINT,
-) -> bool {
-    invite_interaction_at_point(state, pip_index, point).is_some()
-}
-
 pub(super) unsafe fn has_invite_action_at(
     state: &OverlayState,
     pip_index: usize,
