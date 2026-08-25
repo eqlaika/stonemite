@@ -58,6 +58,17 @@ const mockPayload: SettingsPayload = {
         "Ctrl+F5",
         "Ctrl+F6",
       ],
+      boxCycles: [
+        {
+          name: "Melee",
+          nextHotkey: "F14",
+          previousHotkey: "F15",
+          members: [
+            { server: "xegony", character: "Laika" },
+            { server: "xegony", character: "Bilka" },
+          ],
+        },
+      ],
     },
     broadcasting: {
       toggleHotkey: "Pause",

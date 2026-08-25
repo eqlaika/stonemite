@@ -67,6 +67,18 @@ pub(crate) fn swap_to_number(number: usize) {
     }
 }
 
+pub(crate) fn cycle_box_next(cycle_index: usize) {
+    unsafe {
+        client_controller::cycle_box(cycle_index, clients::CycleDirection::Next);
+    }
+}
+
+pub(crate) fn cycle_box_previous(cycle_index: usize) {
+    unsafe {
+        client_controller::cycle_box(cycle_index, clients::CycleDirection::Previous);
+    }
+}
+
 pub(crate) fn swap_active_window_numbers(
     target_pid: u32,
 ) -> Result<trushar::control::CommandOutcome, trushar::control::ControlError> {

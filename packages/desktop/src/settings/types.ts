@@ -74,8 +74,16 @@ export interface NotificationSettings {
   deaths: boolean;
 }
 
+export interface BoxCycle {
+  name: string;
+  nextHotkey: string;
+  previousHotkey: string;
+  members: BoxIdentity[];
+}
+
 export interface HotkeySettings {
   swapHotkeys: string[];
+  boxCycles: BoxCycle[];
 }
 
 export interface BroadcastingSettings {

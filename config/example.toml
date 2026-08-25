@@ -43,6 +43,18 @@ pip_edge = "right"
 #   { server = "bristlebane", character = "Foo" },
 # ]
 
+# Named box cycles activate one available member per physical key press. Members
+# follow box_order, unavailable characters are skipped, and each direction wraps.
+# Keyboard-emulating foot pedals and F13-F24 are supported.
+# [[box_cycles]]
+# name = "Melee"
+# next_hotkey = "F14"
+# previous_hotkey = "F15"
+# members = [
+#   { server = "xegony", character = "Laika" },
+#   { server = "xegony", character = "Bilka" },
+# ]
+
 # Hide background EQ windows from Alt-Tab (active window stays visible)
 # hide_from_alt_tab = true
 

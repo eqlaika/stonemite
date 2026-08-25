@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
-    Account, BoxIdentity, Config, LabelFontWeight, PipEdge, TrusharConfig,
-    MAX_PIP_LABEL_FONT_FAMILY_LEN, MAX_PIP_LABEL_FONT_SCALE, MAX_PIP_OPACITY,
+    Account, BoxCycle, BoxIdentity, Config, LabelFontWeight, PipEdge, TrusharConfig,
+    MAX_BOX_CYCLES, MAX_PIP_LABEL_FONT_FAMILY_LEN, MAX_PIP_LABEL_FONT_SCALE, MAX_PIP_OPACITY,
     MIN_PIP_LABEL_FONT_SCALE, MIN_PIP_OPACITY,
 };
 use crate::crypt;
@@ -169,6 +169,16 @@ pub struct NotificationSettings {
 #[serde(rename_all = "camelCase")]
 pub struct HotkeySettings {
     pub swap_hotkeys: Vec<String>,
+    pub box_cycles: Vec<BoxCycleSettings>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BoxCycleSettings {
+    pub name: String,
+    pub next_hotkey: String,
+    pub previous_hotkey: String,
+    pub members: Vec<BoxIdentity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -198,6 +208,12 @@ impl SettingsPayload {
         let config = Config::load();
         let draft = SettingsDraft::from_config(&config)?;
         let mut known_characters = config.box_order.clone();
+        known_characters.extend(
+            config
+                .box_cycles
+                .iter()
+                .flat_map(|cycle| cycle.members.iter().cloned()),
+        );
         known_characters.extend(
             crate::character_cache::CharacterCache::load()
                 .identities()
@@ -355,6 +371,16 @@ impl SettingsDraft {
             },
             hotkeys: HotkeySettings {
                 swap_hotkeys: normalized_swap_hotkeys(&config.swap_hotkeys),
+                box_cycles: config
+                    .box_cycles
+                    .iter()
+                    .map(|cycle| BoxCycleSettings {
+                        name: cycle.name.clone(),
+                        next_hotkey: cycle.next_hotkey.clone(),
+                        previous_hotkey: cycle.previous_hotkey.clone(),
+                        members: cycle.members.clone(),
+                    })
+                    .collect(),
             },
             broadcasting: BroadcastingSettings {
                 toggle_hotkey: config.broadcast_hotkey.clone(),
@@ -411,6 +437,25 @@ impl SettingsDraft {
             })
             .collect();
 
+        let box_cycles = self
+            .hotkeys
+            .box_cycles
+            .into_iter()
+            .map(|cycle| BoxCycle {
+                name: cycle.name.trim().to_owned(),
+                next_hotkey: cycle.next_hotkey.trim().to_owned(),
+                previous_hotkey: cycle.previous_hotkey.trim().to_owned(),
+                members: cycle
+                    .members
+                    .into_iter()
+                    .map(|identity| BoxIdentity {
+                        server: identity.server.trim().to_owned(),
+                        character: identity.character.trim().to_owned(),
+                    })
+                    .collect(),
+            })
+            .collect();
+
         let accounts = self
             .accounts
             .accounts
@@ -438,6 +483,7 @@ impl SettingsDraft {
             snap_grid: existing.snap_grid,
             trusik: existing.trusik,
             swap_hotkeys: self.hotkeys.swap_hotkeys,
+            box_cycles,
             settings_position: existing.settings_position,
             tell_visual_enabled: self.notifications.visual_enabled,
             tell_sound_enabled: self.notifications.sound_enabled,
@@ -516,28 +562,73 @@ impl SettingsDraft {
         if self.hotkeys.swap_hotkeys.len() != 6 {
             return Err("Exactly six window hotkeys are required".to_owned());
         }
+        if self.hotkeys.box_cycles.len() > MAX_BOX_CYCLES {
+            return Err(format!("At most {MAX_BOX_CYCLES} box cycles are supported"));
+        }
+        let mut cycle_names = HashSet::with_capacity(self.hotkeys.box_cycles.len());
+        let mut config_cycles = Vec::with_capacity(self.hotkeys.box_cycles.len());
+        for (cycle_index, cycle) in self.hotkeys.box_cycles.iter().enumerate() {
+            let name = cycle.name.trim();
+            if name.is_empty() {
+                return Err(format!("Box cycle {} requires a name", cycle_index + 1));
+            }
+            if name.len() > 64 || name.chars().any(char::is_control) {
+                return Err(format!(
+                    "Box cycle '{}' name must be at most 64 bytes without control characters",
+                    name
+                ));
+            }
+            if !cycle_names.insert(name.to_ascii_lowercase()) {
+                return Err(format!("Box cycle name '{name}' is used more than once"));
+            }
+            if cycle.next_hotkey.trim().is_empty() && cycle.previous_hotkey.trim().is_empty() {
+                return Err(format!(
+                    "Box cycle '{name}' needs a Next or Previous hotkey"
+                ));
+            }
+            if cycle.members.len() < 2 {
+                return Err(format!("Box cycle '{name}' needs at least two characters"));
+            }
+            let mut members = HashSet::with_capacity(cycle.members.len());
+            for (member_index, identity) in cycle.members.iter().enumerate() {
+                let server = identity.server.trim();
+                let character = identity.character.trim();
+                validate_identity(
+                    server,
+                    character,
+                    &format!("Box cycle '{name}' member {}", member_index + 1),
+                )?;
+                if !members.insert((server.to_ascii_lowercase(), character.to_ascii_lowercase())) {
+                    return Err(format!(
+                        "{character} on {server} appears more than once in box cycle '{name}'"
+                    ));
+                }
+            }
+            config_cycles.push(BoxCycle {
+                name: name.to_owned(),
+                next_hotkey: cycle.next_hotkey.trim().to_owned(),
+                previous_hotkey: cycle.previous_hotkey.trim().to_owned(),
+                members: cycle.members.clone(),
+            });
+        }
+        crate::config::validate_global_hotkey_bindings(
+            &self.pip.hide_hotkey,
+            &self.broadcasting.toggle_hotkey,
+            &self.hotkeys.swap_hotkeys,
+            &config_cycles,
+        )?;
         crate::config::validate_mouse_clutch_binding(
             &self.broadcasting.mouse_clutch_key,
             &self.pip.hide_hotkey,
             &self.broadcasting.toggle_hotkey,
             &self.hotkeys.swap_hotkeys,
+            &config_cycles,
         )?;
         let mut identities = HashSet::with_capacity(self.box_order.len());
         for (index, identity) in self.box_order.iter().enumerate() {
             let server = identity.server.trim();
             let character = identity.character.trim();
-            if server.is_empty() || character.is_empty() {
-                return Err(format!(
-                    "Box order entry {} requires both a character and server",
-                    index + 1
-                ));
-            }
-            if server.len() > 128 || character.len() > 128 {
-                return Err(format!(
-                    "Box order entry {} character and server must be at most 128 bytes",
-                    index + 1
-                ));
-            }
+            validate_identity(server, character, &format!("Box order entry {}", index + 1))?;
             let key = (server.to_ascii_lowercase(), character.to_ascii_lowercase());
             if !identities.insert(key) {
                 return Err(format!(
@@ -548,6 +639,18 @@ impl SettingsDraft {
         }
         Ok(())
     }
+}
+
+fn validate_identity(server: &str, character: &str, label: &str) -> Result<(), String> {
+    if server.is_empty() || character.is_empty() {
+        return Err(format!("{label} requires both a character and server"));
+    }
+    if server.len() > 128 || character.len() > 128 {
+        return Err(format!(
+            "{label} character and server must be at most 128 bytes"
+        ));
+    }
+    Ok(())
 }
 
 fn normalize_known_characters(characters: &mut Vec<BoxIdentity>) {
@@ -650,6 +753,7 @@ mod tests {
     fn draft_uses_stable_defaults_and_six_hotkeys() {
         let draft = SettingsDraft::from_config(&Config::default()).unwrap();
         assert_eq!(draft.hotkeys.swap_hotkeys.len(), 6);
+        assert!(draft.hotkeys.box_cycles.is_empty());
         assert!(draft.box_order.is_empty());
         assert_eq!(draft.pip.edge, PipEdge::Right);
         assert_eq!(
@@ -785,6 +889,61 @@ mod tests {
             duplicate.validate(),
             Err("laika on XEGONY appears more than once in box order".into())
         );
+    }
+
+    #[test]
+    fn box_cycles_are_validated_trimmed_and_persisted() {
+        let mut draft = SettingsDraft::from_config(&Config::default()).unwrap();
+        draft.hotkeys.box_cycles = vec![BoxCycleSettings {
+            name: "  Melee  ".into(),
+            next_hotkey: " F14 ".into(),
+            previous_hotkey: " F15 ".into(),
+            members: vec![
+                BoxIdentity {
+                    server: " Xegony ".into(),
+                    character: " Tank ".into(),
+                },
+                BoxIdentity {
+                    server: " Xegony ".into(),
+                    character: " Rogue ".into(),
+                },
+            ],
+        }];
+
+        let (config, _) = draft.into_config(Config::default()).unwrap();
+        assert_eq!(config.box_cycles[0].name, "Melee");
+        assert_eq!(config.box_cycles[0].next_hotkey, "F14");
+        assert_eq!(config.box_cycles[0].members[1].character, "Rogue");
+
+        let restored = SettingsDraft::from_config(&config).unwrap();
+        assert_eq!(restored.hotkeys.box_cycles[0].previous_hotkey, "F15");
+    }
+
+    #[test]
+    fn box_cycles_reject_incomplete_rings_and_binding_collisions() {
+        let mut draft = SettingsDraft::from_config(&Config::default()).unwrap();
+        draft.hotkeys.box_cycles = vec![BoxCycleSettings {
+            name: "Melee".into(),
+            next_hotkey: "F14".into(),
+            previous_hotkey: String::new(),
+            members: vec![BoxIdentity {
+                server: "Xegony".into(),
+                character: "Tank".into(),
+            }],
+        }];
+        assert_eq!(
+            draft.validate(),
+            Err("Box cycle 'Melee' needs at least two characters".into())
+        );
+
+        draft.hotkeys.box_cycles[0].members.push(BoxIdentity {
+            server: "Xegony".into(),
+            character: "Rogue".into(),
+        });
+        draft.hotkeys.box_cycles[0].previous_hotkey = "F14".into();
+        assert!(draft
+            .validate()
+            .is_err_and(|error| error.contains("conflicts")));
     }
 
     #[test]

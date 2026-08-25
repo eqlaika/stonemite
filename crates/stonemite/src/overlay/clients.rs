@@ -6,11 +6,18 @@ use crate::{config, eq_windows::EqWindow};
 
 pub(super) const MAX_PIPS: usize = 5;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CycleDirection {
+    Next,
+    Previous,
+}
+
 /// Authoritative client identity and active/PiP partition.
 pub(super) struct ClientRegistry {
     pub(super) windows: Vec<EqWindow>,
     pip_order: Vec<u32>,
     pub(super) preferred_order: Vec<config::BoxIdentity>,
+    pub(super) box_cycles: Vec<config::BoxCycle>,
     active_pid: Option<u32>,
     pub(super) observed_identities: HashMap<u32, (String, String)>,
 }
@@ -21,11 +28,15 @@ pub(super) struct ClientPartition {
 }
 
 impl ClientRegistry {
-    pub(super) fn new(preferred_order: Vec<config::BoxIdentity>) -> Self {
+    pub(super) fn new(
+        preferred_order: Vec<config::BoxIdentity>,
+        box_cycles: Vec<config::BoxCycle>,
+    ) -> Self {
         Self {
             windows: Vec::new(),
             pip_order: Vec::new(),
             preferred_order,
+            box_cycles,
             active_pid: None,
             observed_identities: HashMap::new(),
         }
@@ -41,6 +52,21 @@ impl ClientRegistry {
 
     pub(super) fn pip_at(&self, index: usize) -> Option<u32> {
         self.pip_order.get(index).copied()
+    }
+
+    pub(super) fn cycle_target(
+        &self,
+        cycle_index: usize,
+        direction: CycleDirection,
+    ) -> Option<u32> {
+        cycle_target_pid(
+            &self.windows,
+            self.active_pid,
+            &self.pip_order,
+            &self.preferred_order,
+            self.box_cycles.get(cycle_index)?,
+            direction,
+        )
     }
 
     pub(super) fn snapshot_partition(&self) -> ClientPartition {
@@ -200,6 +226,64 @@ pub(super) fn apply_preferred_box_order(
     changed
 }
 
+/// Resolve the next activatable loaded member from current foreground state.
+fn cycle_target_pid(
+    windows: &[EqWindow],
+    active_pid: Option<u32>,
+    activatable_pips: &[u32],
+    preferred_order: &[config::BoxIdentity],
+    cycle: &config::BoxCycle,
+    direction: CycleDirection,
+) -> Option<u32> {
+    let mut ordered_members: Vec<_> = cycle.members.iter().enumerate().collect();
+    ordered_members.sort_by_key(|(cycle_index, member)| {
+        (
+            preferred_order
+                .iter()
+                .position(|identity| identity.matches(&member.server, &member.character))
+                .unwrap_or(usize::MAX),
+            *cycle_index,
+        )
+    });
+
+    let mut member_pids = Vec::with_capacity(ordered_members.len());
+    for (_, member) in ordered_members {
+        let Some(pid) = windows.iter().find_map(|window| {
+            if active_pid != Some(window.pid) && !activatable_pips.contains(&window.pid) {
+                return None;
+            }
+            let (Some(server), Some(character)) =
+                (window.server.as_deref(), window.character.as_deref())
+            else {
+                return None;
+            };
+            member.matches(server, character).then_some(window.pid)
+        }) else {
+            continue;
+        };
+        if !member_pids.contains(&pid) {
+            member_pids.push(pid);
+        }
+    }
+
+    if member_pids.is_empty() {
+        return None;
+    }
+    let Some(position) =
+        active_pid.and_then(|pid| member_pids.iter().position(|item| *item == pid))
+    else {
+        return match direction {
+            CycleDirection::Next => member_pids.first().copied(),
+            CycleDirection::Previous => member_pids.last().copied(),
+        };
+    };
+    let target_index = match direction {
+        CycleDirection::Next => (position + 1) % member_pids.len(),
+        CycleDirection::Previous => (position + member_pids.len() - 1) % member_pids.len(),
+    };
+    member_pids.get(target_index).copied()
+}
+
 /// Exchange the stable window numbers of two loaded clients.
 pub(super) fn exchange_window_numbers(
     eq_windows: &mut [EqWindow],
@@ -305,7 +389,7 @@ mod tests {
 
     #[test]
     fn promoting_a_known_client_outside_the_pips_preserves_a_bounded_partition() {
-        let mut clients = ClientRegistry::new(Vec::new());
+        let mut clients = ClientRegistry::new(Vec::new(), Vec::new());
         clients.windows = (1..=7).map(window).collect();
         clients.active_pid = Some(1);
         clients.pip_order = vec![2, 3, 4, 5, 6];
@@ -399,6 +483,172 @@ mod tests {
         );
         assert_eq!(exchange_window_numbers(&mut windows, 20, 20), Some((2, 2)));
         assert!(exchange_window_numbers(&mut windows, 10, 99).is_none());
+    }
+
+    #[test]
+    fn cycles_follow_preferred_order_skip_missing_members_and_wrap_both_ways() {
+        let windows = vec![
+            identified_window(10, 1, "Xegony", "Tank"),
+            identified_window(20, 2, "Xegony", "Rogue"),
+            identified_window(30, 3, "Xegony", "Healer"),
+        ];
+        let preferred = vec![
+            config::BoxIdentity {
+                server: "xegony".into(),
+                character: "Tank".into(),
+            },
+            config::BoxIdentity {
+                server: "xegony".into(),
+                character: "Rogue".into(),
+            },
+            config::BoxIdentity {
+                server: "xegony".into(),
+                character: "Monk".into(),
+            },
+        ];
+        let cycle = config::BoxCycle {
+            name: "Melee".into(),
+            next_hotkey: "F14".into(),
+            previous_hotkey: "F15".into(),
+            members: vec![
+                config::BoxIdentity {
+                    server: "Xegony".into(),
+                    character: "Rogue".into(),
+                },
+                config::BoxIdentity {
+                    server: "Xegony".into(),
+                    character: "Monk".into(),
+                },
+                config::BoxIdentity {
+                    server: "Xegony".into(),
+                    character: "Tank".into(),
+                },
+            ],
+        };
+
+        assert_eq!(
+            cycle_target_pid(
+                &windows,
+                Some(10),
+                &[20, 30],
+                &preferred,
+                &cycle,
+                CycleDirection::Next,
+            ),
+            Some(20)
+        );
+        assert_eq!(
+            cycle_target_pid(
+                &windows,
+                Some(20),
+                &[10, 30],
+                &preferred,
+                &cycle,
+                CycleDirection::Next,
+            ),
+            Some(10)
+        );
+        assert_eq!(
+            cycle_target_pid(
+                &windows,
+                Some(10),
+                &[20, 30],
+                &preferred,
+                &cycle,
+                CycleDirection::Previous,
+            ),
+            Some(20)
+        );
+        assert_eq!(
+            cycle_target_pid(
+                &windows,
+                Some(30),
+                &[10, 20],
+                &preferred,
+                &cycle,
+                CycleDirection::Next,
+            ),
+            Some(10)
+        );
+        assert_eq!(
+            cycle_target_pid(
+                &windows,
+                Some(30),
+                &[10, 20],
+                &preferred,
+                &cycle,
+                CycleDirection::Previous,
+            ),
+            Some(20)
+        );
+    }
+
+    #[test]
+    fn cycles_skip_loaded_clients_outside_the_activatable_partition() {
+        let windows = vec![
+            identified_window(1, 1, "Xegony", "Tank"),
+            identified_window(2, 2, "Xegony", "Rogue"),
+            identified_window(3, 3, "Xegony", "Three"),
+            identified_window(4, 4, "Xegony", "Four"),
+            identified_window(5, 5, "Xegony", "Five"),
+            identified_window(6, 6, "Xegony", "Six"),
+            identified_window(7, 7, "Xegony", "Outside"),
+        ];
+        let cycle = config::BoxCycle {
+            name: "Melee".into(),
+            next_hotkey: "F14".into(),
+            previous_hotkey: "F15".into(),
+            members: vec![
+                config::BoxIdentity {
+                    server: "Xegony".into(),
+                    character: "Tank".into(),
+                },
+                config::BoxIdentity {
+                    server: "Xegony".into(),
+                    character: "Outside".into(),
+                },
+                config::BoxIdentity {
+                    server: "Xegony".into(),
+                    character: "Rogue".into(),
+                },
+            ],
+        };
+
+        assert_eq!(
+            cycle_target_pid(
+                &windows,
+                Some(1),
+                &[2, 3, 4, 5, 6],
+                &[],
+                &cycle,
+                CycleDirection::Next,
+            ),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn cycle_with_no_loaded_identified_members_is_unavailable() {
+        let cycle = config::BoxCycle {
+            name: "Melee".into(),
+            next_hotkey: "F14".into(),
+            previous_hotkey: String::new(),
+            members: vec![config::BoxIdentity {
+                server: "Xegony".into(),
+                character: "Missing".into(),
+            }],
+        };
+        assert_eq!(
+            cycle_target_pid(
+                &[window(10)],
+                Some(10),
+                &[],
+                &[],
+                &cycle,
+                CycleDirection::Next,
+            ),
+            None
+        );
     }
 
     #[test]

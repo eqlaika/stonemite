@@ -6,7 +6,7 @@
 
 EverQuest multiboxing tool for Windows. Requires Windows 10 or later.
 
-Stonemite makes multiboxing EQ easy: PiP overlays with click-to-swap, swap hotkeys, keyboard key broadcasting, hold-to-broadcast Mouse Clutch, character login, automatic character window labels, optional Stream Deck controls, drag-and-drop layout editor, and more. Stonemite is hi-DPI aware, works out of the box with no dependencies or configuration wizards, and is free and open source.
+Stonemite makes multiboxing EQ easy: PiP overlays with click-to-swap, exact-window hotkeys, named next/previous box cycles for keyboard pedals, keyboard key broadcasting, hold-to-broadcast Mouse Clutch, character login, automatic character window labels, optional Stream Deck controls, drag-and-drop layout editor, and more. Stonemite is hi-DPI aware, works out of the box with no dependencies or configuration wizards, and is free and open source.
 
 <p align="center">
   <img src="docs/images/pip-overlays.jpg" width="760" alt="EverQuest running with five labeled Stonemite PiP overlays">

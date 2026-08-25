@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_EQ_DIR: &str = r"C:\Users\Public\Daybreak Game Company\Installed Games\EverQuest";
@@ -10,6 +11,7 @@ pub const DEFAULT_PIP_LABEL_FONT_SCALE: u32 = 100;
 pub const MIN_PIP_LABEL_FONT_SCALE: u32 = 60;
 pub const MAX_PIP_LABEL_FONT_SCALE: u32 = 120;
 pub const MAX_PIP_LABEL_FONT_FAMILY_LEN: usize = 31;
+pub const MAX_BOX_CYCLES: usize = 16;
 
 /// Screen edge where the PiP strip is anchored.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -168,7 +170,7 @@ fn default_trushar_bind() -> String {
     trushar::server::DEFAULT_BIND.to_owned()
 }
 
-/// A durable EverQuest character identity used for preferred box ordering.
+/// A durable EverQuest character identity used for ordering and box cycles.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BoxIdentity {
     pub server: String,
@@ -178,6 +180,28 @@ pub struct BoxIdentity {
 impl BoxIdentity {
     pub fn matches(&self, server: &str, character: &str) -> bool {
         self.server.eq_ignore_ascii_case(server) && self.character.eq_ignore_ascii_case(character)
+    }
+}
+
+/// A named ring of characters activated one physical hotkey press at a time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BoxCycle {
+    pub name: String,
+    #[serde(default)]
+    pub next_hotkey: String,
+    #[serde(default)]
+    pub previous_hotkey: String,
+    #[serde(default)]
+    pub members: Vec<BoxIdentity>,
+}
+
+impl BoxCycle {
+    pub fn next_hotkey_vk(&self) -> Option<(u32, u32)> {
+        parse_hotkey_combo(&self.next_hotkey)
+    }
+
+    pub fn previous_hotkey_vk(&self) -> Option<(u32, u32)> {
+        parse_hotkey_combo(&self.previous_hotkey)
     }
 }
 
@@ -247,6 +271,9 @@ pub struct Config {
     /// Hotkeys for swapping to specific window slots (1–6). Default: Ctrl+F1..Ctrl+F6.
     #[serde(default = "default_swap_hotkeys")]
     pub swap_hotkeys: Vec<String>,
+    /// Named character rings with independent next and previous hotkeys.
+    #[serde(default)]
+    pub box_cycles: Vec<BoxCycle>,
     /// Remembered settings window position [x, y].
     #[serde(default)]
     pub settings_position: Option<[f32; 2]>,
@@ -386,6 +413,7 @@ impl Default for Config {
             hide_from_alt_tab: default_hide_from_alt_tab(),
             trusik: false,
             swap_hotkeys: default_swap_hotkeys(),
+            box_cycles: Vec::new(),
             settings_position: None,
             tell_visual_enabled: default_tell_visual_enabled(),
             tell_sound_enabled: default_tell_sound_enabled(),
@@ -508,6 +536,7 @@ impl Config {
             &self.hide_hotkey,
             &self.broadcast_hotkey,
             &self.swap_hotkeys,
+            &self.box_cycles,
         )
     }
 
@@ -640,14 +669,68 @@ pub fn parse_vk_name(name: &str) -> Option<u32> {
     }
 }
 
+fn configured_global_hotkeys<'a>(
+    hide_hotkey: &'a str,
+    broadcast_hotkey: &'a str,
+    swap_hotkeys: &'a [String],
+    box_cycles: &'a [BoxCycle],
+) -> Vec<(String, &'a str)> {
+    let mut bindings = Vec::with_capacity(2 + swap_hotkeys.len() + box_cycles.len() * 2);
+    bindings.push(("Hide overlay".to_owned(), hide_hotkey));
+    bindings.push(("Broadcast toggle".to_owned(), broadcast_hotkey));
+    bindings.extend(
+        swap_hotkeys
+            .iter()
+            .enumerate()
+            .map(|(index, hotkey)| (format!("Window {}", index + 1), hotkey.as_str())),
+    );
+    for cycle in box_cycles {
+        bindings.push((format!("{} next", cycle.name), cycle.next_hotkey.as_str()));
+        bindings.push((
+            format!("{} previous", cycle.name),
+            cycle.previous_hotkey.as_str(),
+        ));
+    }
+    bindings
+}
+
+/// Validate every RegisterHotKey binding and reject exact chord collisions.
+pub fn validate_global_hotkey_bindings(
+    hide_hotkey: &str,
+    broadcast_hotkey: &str,
+    swap_hotkeys: &[String],
+    box_cycles: &[BoxCycle],
+) -> Result<(), String> {
+    let mut seen: HashMap<(u32, u32), (String, String)> = HashMap::new();
+    for (label, binding) in
+        configured_global_hotkeys(hide_hotkey, broadcast_hotkey, swap_hotkeys, box_cycles)
+    {
+        let binding = binding.trim();
+        if binding.is_empty() {
+            continue;
+        }
+        let Some(chord) = parse_hotkey_combo(binding) else {
+            return Err(format!("{label} hotkey '{binding}' is not supported"));
+        };
+        if let Some((existing_label, existing_binding)) = seen.get(&chord) {
+            return Err(format!(
+                "{label} hotkey ({binding}) conflicts with {existing_label} ({existing_binding})"
+            ));
+        }
+        seen.insert(chord, (label, binding.to_owned()));
+    }
+    Ok(())
+}
+
 /// Validate Mouse Clutch's single-key syntax and reject collisions with every
-/// existing Stonemite hotkey. Modifier differences still collide because the
+/// global Stonemite hotkey. Modifier differences still collide because the
 /// low-level clutch hook sees and swallows the underlying key.
 pub fn validate_mouse_clutch_binding(
     binding: &str,
     hide_hotkey: &str,
     broadcast_hotkey: &str,
     swap_hotkeys: &[String],
+    box_cycles: &[BoxCycle],
 ) -> Result<Option<u32>, String> {
     let binding = binding.trim();
     if binding.is_empty() {
@@ -660,18 +743,9 @@ pub fn validate_mouse_clutch_binding(
         return Err(format!("Mouse Clutch key '{binding}' is not supported"));
     };
 
-    let mut existing = Vec::with_capacity(2 + swap_hotkeys.len());
-    existing.push(("Hide overlay", hide_hotkey));
-    existing.push(("Broadcast toggle", broadcast_hotkey));
-    for (index, hotkey) in swap_hotkeys.iter().enumerate() {
-        if parse_hotkey_combo(hotkey).is_some_and(|(_, existing_vk)| existing_vk == vk) {
-            return Err(format!(
-                "Mouse Clutch conflicts with the Window {} hotkey ({hotkey})",
-                index + 1
-            ));
-        }
-    }
-    for (label, hotkey) in existing {
+    for (label, hotkey) in
+        configured_global_hotkeys(hide_hotkey, broadcast_hotkey, swap_hotkeys, box_cycles)
+    {
         if parse_hotkey_combo(hotkey).is_some_and(|(_, existing_vk)| existing_vk == vk) {
             return Err(format!("Mouse Clutch conflicts with {label} ({hotkey})"));
         }
@@ -788,6 +862,7 @@ mod tests {
         assert!(config.notify_resurrections);
         assert!(config.notify_deaths);
         assert!(config.box_order.is_empty());
+        assert!(config.box_cycles.is_empty());
         assert!(config.trushar.enabled);
         assert_eq!(config.trushar.bind, "127.0.0.1:19720");
         assert_eq!(config.trushar.auth_token, None);
@@ -823,6 +898,32 @@ box_order = [
         let serialized = toml::to_string_pretty(&config).unwrap();
         let reparsed: Config = toml::from_str(&serialized).unwrap();
         assert_eq!(reparsed.box_order, config.box_order);
+    }
+
+    #[test]
+    fn box_cycles_round_trip_named_directional_rings() {
+        let config: Config = toml::from_str(
+            r#"
+box_cycles = [
+    { name = "Melee", next_hotkey = "F14", previous_hotkey = "F15", members = [
+        { server = "xegony", character = "Tank" },
+        { server = "xegony", character = "Rogue" },
+    ] },
+]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.box_cycles.len(), 1);
+        let cycle = &config.box_cycles[0];
+        assert_eq!(cycle.name, "Melee");
+        assert_eq!(cycle.next_hotkey_vk(), Some((0, 0x7d)));
+        assert_eq!(cycle.previous_hotkey_vk(), Some((0, 0x7e)));
+        assert_eq!(cycle.members[1].character, "Rogue");
+
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let reparsed: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.box_cycles, config.box_cycles);
     }
 
     #[test]
@@ -916,14 +1017,38 @@ box_order = [
     #[test]
     fn mouse_clutch_rejects_modifiers_invalid_keys_and_hotkey_collisions() {
         let swaps = default_swap_hotkeys();
-        assert!(validate_mouse_clutch_binding("Ctrl+F13", "F9", "Pause", &swaps).is_err());
-        assert!(validate_mouse_clutch_binding("NoSuchKey", "F9", "Pause", &swaps).is_err());
-        assert!(validate_mouse_clutch_binding("F9", "F9", "Pause", &swaps).is_err());
-        assert!(validate_mouse_clutch_binding("Pause", "F9", "Pause", &swaps).is_err());
-        assert!(validate_mouse_clutch_binding("F1", "F9", "Pause", &swaps).is_err());
+        assert!(validate_mouse_clutch_binding("Ctrl+F13", "F9", "Pause", &swaps, &[]).is_err());
+        assert!(validate_mouse_clutch_binding("NoSuchKey", "F9", "Pause", &swaps, &[]).is_err());
+        assert!(validate_mouse_clutch_binding("F9", "F9", "Pause", &swaps, &[]).is_err());
+        assert!(validate_mouse_clutch_binding("Pause", "F9", "Pause", &swaps, &[]).is_err());
+        assert!(validate_mouse_clutch_binding("F1", "F9", "Pause", &swaps, &[]).is_err());
         assert_eq!(
-            validate_mouse_clutch_binding("F13", "F9", "Pause", &swaps),
+            validate_mouse_clutch_binding("F13", "F9", "Pause", &swaps, &[]),
             Ok(Some(0x7c))
         );
+    }
+
+    #[test]
+    fn cycle_hotkeys_reject_exact_chord_and_mouse_clutch_collisions() {
+        let swaps = default_swap_hotkeys();
+        let cycle = BoxCycle {
+            name: "Melee".into(),
+            next_hotkey: "F14".into(),
+            previous_hotkey: "Shift+F14".into(),
+            members: Vec::new(),
+        };
+        assert_eq!(
+            validate_global_hotkey_bindings("F9", "Pause", &swaps, &[cycle.clone()]),
+            Ok(())
+        );
+        assert!(
+            validate_mouse_clutch_binding("F14", "F9", "Pause", &swaps, &[cycle.clone()]).is_err()
+        );
+
+        let duplicate = BoxCycle {
+            previous_hotkey: "F14".into(),
+            ..cycle
+        };
+        assert!(validate_global_hotkey_bindings("F9", "Pause", &swaps, &[duplicate]).is_err());
     }
 }

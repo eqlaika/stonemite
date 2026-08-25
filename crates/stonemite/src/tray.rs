@@ -5,7 +5,7 @@ use windows::core::w;
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS,
+    RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_NOREPEAT,
 };
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
@@ -122,6 +122,9 @@ const HOTKEY_BROADCAST_TOGGLE: i32 = 2;
 /// Hotkey IDs for swap-to-window (slots 1–6). IDs 10–15.
 const HOTKEY_SWAP_BASE: i32 = 10;
 const MAX_SWAP_HOTKEYS: usize = 6;
+/// Two hotkey IDs per named box cycle: next, then previous.
+const HOTKEY_CYCLE_BASE: i32 = 100;
+const HOTKEYS_PER_CYCLE: usize = 2;
 
 /// Timer ID for polling EQ windows.
 const TIMER_POLL_EQ: usize = 1;
@@ -326,6 +329,16 @@ unsafe extern "system" fn wnd_proc(
             } else if id >= HOTKEY_SWAP_BASE && id < HOTKEY_SWAP_BASE + MAX_SWAP_HOTKEYS as i32 {
                 let slot = (id - HOTKEY_SWAP_BASE) as usize + 1; // 1-based window number
                 overlay::swap_to_number(slot);
+            } else if id >= HOTKEY_CYCLE_BASE
+                && id < HOTKEY_CYCLE_BASE + (config::MAX_BOX_CYCLES * HOTKEYS_PER_CYCLE) as i32
+            {
+                let offset = (id - HOTKEY_CYCLE_BASE) as usize;
+                let cycle_index = offset / HOTKEYS_PER_CYCLE;
+                if offset % HOTKEYS_PER_CYCLE == 0 {
+                    overlay::cycle_box_next(cycle_index);
+                } else {
+                    overlay::cycle_box_previous(cycle_index);
+                }
             }
             LRESULT(0)
         }
@@ -727,6 +740,33 @@ unsafe fn register_hotkeys(hwnd: HWND, cfg: &config::Config) {
             }
         }
     }
+    for (cycle_index, cycle) in cfg
+        .box_cycles
+        .iter()
+        .take(config::MAX_BOX_CYCLES)
+        .enumerate()
+    {
+        let directions = [
+            ("next", cycle.next_hotkey.as_str(), cycle.next_hotkey_vk()),
+            (
+                "previous",
+                cycle.previous_hotkey.as_str(),
+                cycle.previous_hotkey_vk(),
+            ),
+        ];
+        for (direction_index, (direction, binding, parsed)) in directions.into_iter().enumerate() {
+            let Some((mods, vk)) = parsed else {
+                continue;
+            };
+            let id = HOTKEY_CYCLE_BASE + (cycle_index * HOTKEYS_PER_CYCLE + direction_index) as i32;
+            if RegisterHotKey(hwnd, id, HOT_KEY_MODIFIERS(mods | MOD_NOREPEAT.0), vk).is_err() {
+                eprintln!(
+                    "Failed to register {} {direction} cycle hotkey: {binding}",
+                    cycle.name
+                );
+            }
+        }
+    }
 }
 
 unsafe fn unregister_hotkeys(hwnd: HWND) {
@@ -734,6 +774,9 @@ unsafe fn unregister_hotkeys(hwnd: HWND) {
     let _ = UnregisterHotKey(hwnd, HOTKEY_BROADCAST_TOGGLE);
     for i in 0..MAX_SWAP_HOTKEYS {
         let _ = UnregisterHotKey(hwnd, HOTKEY_SWAP_BASE + i as i32);
+    }
+    for i in 0..config::MAX_BOX_CYCLES * HOTKEYS_PER_CYCLE {
+        let _ = UnregisterHotKey(hwnd, HOTKEY_CYCLE_BASE + i as i32);
     }
 }
 

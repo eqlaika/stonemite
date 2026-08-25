@@ -6,7 +6,7 @@ use super::activation::{
     reassert_eq_mouse_activation, request_error as foreground_request_error, request_foreground,
     target_has_keyboard_focus, ForegroundRequest,
 };
-use super::clients::{exchange_window_numbers, focused_foreground_pid, MAX_PIPS};
+use super::clients::{exchange_window_numbers, focused_foreground_pid, CycleDirection, MAX_PIPS};
 use super::control_bridge::{publish, sync_mouse_eligibility};
 use super::hosts::rebuild_thumbnails;
 use super::runtime::{try_with_state_mut, AccessError};
@@ -107,6 +107,24 @@ pub(super) unsafe fn swap_to_number(number: usize) {
         )),
         Err(error) => debug_log(&format!(
             "window {number} hotkey could not access overlay state: {error:?}"
+        )),
+        Ok(None) => {}
+    }
+}
+
+/// Activate one neighboring loaded member of a configured box cycle.
+pub(super) unsafe fn cycle_box(cycle_index: usize, direction: CycleDirection) {
+    match try_with_state_mut(|state| unsafe {
+        let target_pid = state.clients.cycle_target(cycle_index, direction);
+        target_pid.and_then(|target_pid| activate_pid_inner(state, target_pid).err())
+    }) {
+        Ok(Some(error)) => debug_log(&format!(
+            "box cycle {cycle_index} {direction:?} activation failed: {} ({})",
+            error.message,
+            error.code.as_str()
+        )),
+        Err(error) => debug_log(&format!(
+            "box cycle {cycle_index} {direction:?} could not access overlay state: {error:?}"
         )),
         Ok(None) => {}
     }

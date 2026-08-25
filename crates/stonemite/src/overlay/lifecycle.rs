@@ -252,7 +252,7 @@ unsafe fn initialize_state() -> (OverlayState, HWND) {
                 enabled: cfg.toast_enabled,
             },
         },
-        clients: ClientRegistry::new(cfg.box_order.clone()),
+        clients: ClientRegistry::new(cfg.box_order.clone(), cfg.box_cycles.clone()),
         event_hook: hook,
         layout,
         hidden_by_user: false,
@@ -272,6 +272,7 @@ pub(super) fn force_rebuild() {
         let cfg = config::Config::load();
         s.layout.pip_edge = cfg.pip_edge;
         s.clients.preferred_order = cfg.box_order.clone();
+        s.clients.box_cycles = cfg.box_cycles.clone();
         apply_preferred_box_order(&mut s.clients.windows, &s.clients.preferred_order);
         if cfg.auto_order {
             s.clients.apply_auto_order();

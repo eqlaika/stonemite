@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added named box cycles with configurable character rings, wrapping next and previous hotkeys, unavailable-client skipping, and no-repeat keyboard-pedal support
 - Added configurable trade-request notifications that clear when EverQuest logs a cancelled trade and remain non-actionable because EQ exposes no trade-accept key binding
 - Added configurable character/server box ordering that restores stable window numbers across random launch order, process restarts, and mixed-server rosters
 - Added a dedicated hold-to-broadcast Stream Deck Mouse Clutch action with authoritative ready, active, releasing, compatibility, and failure states
