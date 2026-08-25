@@ -119,6 +119,18 @@ pub fn is_active() -> bool {
     with_state(|state, now_ms| state.is_active(now_ms)).unwrap_or(false)
 }
 
+/// Snapshot every source used by the activation watcher with one timestamp.
+pub fn activation_state() -> (bool, Option<u32>, bool) {
+    with_state(|state, now_ms| {
+        (
+            state.is_active(now_ms),
+            state.active_auto_type_generation(now_ms),
+            state.mouse_is_active(now_ms),
+        )
+    })
+    .unwrap_or((false, None, false))
+}
+
 /// Returns true only for synthetic keyboard delivery.
 pub fn is_keyboard_active() -> bool {
     with_state(|state, now_ms| state.keyboard_is_active(now_ms)).unwrap_or(false)

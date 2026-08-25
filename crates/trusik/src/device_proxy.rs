@@ -18,10 +18,16 @@ pub fn eq_hwnd() -> isize {
 fn should_post_activation(
     active: bool,
     activation_asserted: bool,
+    auto_type_generation: Option<u32>,
+    previous_auto_type_generation: Option<u32>,
     mouse_active: bool,
     was_mouse_active: bool,
 ) -> bool {
-    active && (!activation_asserted || (mouse_active && !was_mouse_active))
+    active
+        && (!activation_asserted
+            || (auto_type_generation.is_some()
+                && auto_type_generation != previous_auto_type_generation)
+            || (mouse_active && !was_mouse_active))
 }
 
 /// Thread that watches shared-memory state and posts WM_ACTIVATEAPP(TRUE) to
@@ -40,28 +46,34 @@ fn wm_activate_thread() {
 
     const DEACTIVATE_STABLE_FRAMES: u8 = 3;
     let mut activation_asserted = false;
+    let mut previous_auto_type_generation = None;
     let mut was_mouse_active = false;
     let mut inactive_frames = 0u8;
 
     loop {
         std::thread::sleep(std::time::Duration::from_millis(16));
 
-        let active = crate::key_shm::is_active();
-        let mouse_active = crate::key_shm::is_mouse_active();
+        let (active, auto_type_generation, mouse_active) = crate::key_shm::activation_state();
         let hwnd = EQ_HWND.load(Ordering::Acquire);
 
-        if should_post_activation(active, activation_asserted, mouse_active, was_mouse_active)
-            && hwnd != 0
+        if should_post_activation(
+            active,
+            activation_asserted,
+            auto_type_generation,
+            previous_auto_type_generation,
+            mouse_active,
+            was_mouse_active,
+        ) && hwnd != 0
         {
-            // Reassert activation on an overall transition and independently on
-            // each Mouse Clutch rising edge. Keyboard Broadcast may already be
-            // holding the process active while the real mouse needs reacquire.
+            // Reassert activation on an overall transition, each auto-type
+            // generation, and each Mouse Clutch rising edge. Keyboard Broadcast
+            // may already be holding the process active when either one begins.
             unsafe {
                 PostMessageW(hwnd, WM_ACTIVATEAPP, 1, 0);
             }
             activation_asserted = true;
             crate::log::write(&format!(
-                "wm_activate: posted WM_ACTIVATEAPP(1) hwnd=0x{hwnd:X} mouse_active={mouse_active}"
+                "wm_activate: posted WM_ACTIVATEAPP(1) hwnd=0x{hwnd:X} auto_type_generation={auto_type_generation:?} mouse_active={mouse_active}"
             ));
         }
 
@@ -88,6 +100,7 @@ fn wm_activate_thread() {
                 inactive_frames = 0;
             }
         }
+        previous_auto_type_generation = auto_type_generation;
         was_mouse_active = mouse_active;
     }
 }
@@ -1098,11 +1111,51 @@ mod tests {
 
     #[test]
     fn mouse_rising_edge_reasserts_activation_during_keyboard_delivery() {
-        assert!(should_post_activation(true, false, false, false));
-        assert!(should_post_activation(true, true, true, false));
-        assert!(!should_post_activation(true, true, true, true));
-        assert!(!should_post_activation(true, true, false, true));
-        assert!(!should_post_activation(false, true, true, false));
+        assert!(should_post_activation(
+            true, false, None, None, false, false
+        ));
+        assert!(should_post_activation(true, true, None, None, true, false));
+        assert!(!should_post_activation(true, true, None, None, true, true));
+        assert!(!should_post_activation(true, true, None, None, false, true));
+        assert!(!should_post_activation(
+            false, true, None, None, true, false
+        ));
+    }
+
+    #[test]
+    fn auto_type_generation_reasserts_activation_during_keyboard_broadcast() {
+        assert!(should_post_activation(
+            true,
+            true,
+            Some(1),
+            None,
+            false,
+            false
+        ));
+        assert!(!should_post_activation(
+            true,
+            true,
+            Some(1),
+            Some(1),
+            false,
+            false
+        ));
+        assert!(should_post_activation(
+            true,
+            true,
+            Some(2),
+            Some(1),
+            false,
+            false
+        ));
+        assert!(!should_post_activation(
+            true,
+            true,
+            None,
+            Some(1),
+            false,
+            false
+        ));
     }
 
     #[test]

@@ -96,9 +96,15 @@ impl SharedKeyState {
         heartbeat_is_fresh(self.controller_heartbeat_ms.load(Ordering::Acquire), now_ms)
     }
 
-    pub fn auto_type_is_fresh(&self, now_ms: u32) -> bool {
+    pub fn active_auto_type_generation(&self, now_ms: u32) -> Option<u32> {
         let lease = self.auto_type_lease.load(Ordering::Acquire);
-        lease_generation(lease) != 0 && heartbeat_is_fresh(lease_heartbeat(lease), now_ms)
+        let generation = lease_generation(lease);
+        (generation != 0 && heartbeat_is_fresh(lease_heartbeat(lease), now_ms))
+            .then_some(generation)
+    }
+
+    pub fn auto_type_is_fresh(&self, now_ms: u32) -> bool {
+        self.active_auto_type_generation(now_ms).is_some()
     }
 
     pub fn controller_keyboard_is_active(&self, now_ms: u32) -> bool {
@@ -580,6 +586,21 @@ mod tests {
         state.retire_auto_type(auto_generation);
         assert!(!state.read_effective_keys(100, &mut keys));
         assert_eq!(keys[0x1e], 0);
+    }
+
+    #[test]
+    fn active_auto_type_generation_tracks_the_fresh_lease() {
+        let state = state();
+        let generation = state.begin_auto_type(100);
+
+        assert_eq!(state.active_auto_type_generation(100), Some(generation));
+        assert_eq!(state.active_auto_type_generation(601), None);
+
+        assert!(state.refresh_auto_type_lease(generation, 700));
+        assert_eq!(state.active_auto_type_generation(700), Some(generation));
+
+        state.retire_auto_type(generation);
+        assert_eq!(state.active_auto_type_generation(700), None);
     }
 
     #[test]
