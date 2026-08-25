@@ -12,13 +12,14 @@ use super::client_controller::foreground_event_proc;
 use super::clients::{apply_preferred_box_order, ClientRegistry};
 use super::geometry::{client_animations_enabled, dpi_scale};
 use super::hosts::rebuild_thumbnails;
+use super::in_game_button::{create_tooltip, wnd_proc as stonemite_button_wnd_proc};
 use super::interaction::InteractionState;
 use super::layout::LayoutState;
 use super::menu::menu_owner_wnd_proc;
 use super::notifications::{self, NotificationCenter};
 use super::pip_interaction::pip_wnd_proc;
 use super::pip_transition::force_finish as finish_pip_transition;
-use super::presentation::{ComApartment, PresentationState};
+use super::presentation::{ComApartment, PresentationState, StonemiteButtonState};
 use super::render::Compositor;
 use super::runtime::{self, try_with_state_mut};
 use super::state::OverlayState;
@@ -88,6 +89,34 @@ unsafe fn initialize_state() -> (OverlayState, HWND) {
         None,
     )
     .expect("Failed to create context-menu owner window");
+
+    // Register the activatable in-game button. Taking foreground before the
+    // button-up message prevents EQ's foreground-only DirectInput from seeing
+    // the same physical click.
+    let stonemite_button_class = w!("StonemiteInGameButtonClass");
+    let stonemite_button_wc = WNDCLASSW {
+        lpfnWndProc: Some(stonemite_button_wnd_proc),
+        lpszClassName: stonemite_button_class,
+        hCursor: cursor,
+        ..Default::default()
+    };
+    RegisterClassW(&stonemite_button_wc);
+    let stonemite_button_hwnd = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP,
+        stonemite_button_class,
+        w!("Stonemite"),
+        WS_POPUP,
+        0,
+        0,
+        0,
+        0,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("Failed to create in-game Stonemite button");
+    let stonemite_tooltip_hwnd = create_tooltip(stonemite_button_hwnd);
 
     // Register label window class.
     let label_class = w!("StonemiteLabelClass");
@@ -221,6 +250,17 @@ unsafe fn initialize_state() -> (OverlayState, HWND) {
             pip_transition: None,
             pending_composition_destroys: Vec::new(),
             menu_owner_hwnd,
+            stonemite_button: StonemiteButtonState {
+                hwnd: stonemite_button_hwnd,
+                tooltip_hwnd: stonemite_tooltip_hwnd,
+                enabled: cfg.show_stonemite_button,
+                position: cfg.stonemite_button_position,
+                drag: None,
+                hovered: false,
+                pressed: false,
+                releasing_capture: false,
+                menu_open: false,
+            },
             active_label_hwnd: label_hwnd,
             active_label_text: String::new(),
             active_label_class: None,
@@ -271,6 +311,8 @@ pub(super) fn force_rebuild() {
     let _ = try_with_state_mut(|s| unsafe {
         let cfg = config::Config::load();
         s.layout.pip_edge = cfg.pip_edge;
+        s.presentation.stonemite_button.enabled = cfg.show_stonemite_button;
+        s.presentation.stonemite_button.position = cfg.stonemite_button_position;
         s.clients.preferred_order = cfg.box_order.clone();
         s.clients.box_cycles = cfg.box_cycles.clone();
         apply_preferred_box_order(&mut s.clients.windows, &s.clients.preferred_order);
@@ -350,6 +392,7 @@ pub(super) fn cleanup() {
                 }
             }
             for hwnd in pending_composition_destroys.iter().copied().chain([
+                s.presentation.stonemite_button.hwnd,
                 s.presentation.active_label_hwnd,
                 s.presentation.broadcast_label_hwnd,
                 s.presentation.toast.hwnd,
@@ -375,6 +418,10 @@ pub(super) fn cleanup() {
         let _ = KillTimer(s.presentation.active_label_hwnd, notifications::TIMER_ID);
         let _ = KillTimer(s.presentation.active_label_hwnd, TIMER_OVERLAY_TICK);
         let _ = DestroyWindow(s.presentation.menu_owner_hwnd);
+        if !s.presentation.stonemite_button.tooltip_hwnd.is_invalid() {
+            let _ = DestroyWindow(s.presentation.stonemite_button.tooltip_hwnd);
+        }
+        let _ = DestroyWindow(s.presentation.stonemite_button.hwnd);
         let _ = DestroyWindow(s.presentation.active_label_hwnd);
         let _ = DestroyWindow(s.presentation.broadcast_label_hwnd);
         let _ = KillTimer(s.presentation.toast.hwnd, TIMER_TOAST_FADE);

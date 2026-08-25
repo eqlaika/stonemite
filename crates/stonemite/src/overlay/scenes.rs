@@ -258,6 +258,14 @@ pub(super) struct ToastScene<'a> {
     pub logical_height: i32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct StonemiteButtonScene {
+    pub bounds: Rect,
+    pub icon_bounds: Rect,
+    pub hovered: bool,
+    pub pressed: bool,
+}
+
 impl StatusBannerScene<'_> {
     pub(super) fn surface_opacity(&self) -> f32 {
         alpha_opacity(self.alpha)

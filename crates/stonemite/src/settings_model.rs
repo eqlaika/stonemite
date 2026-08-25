@@ -141,6 +141,7 @@ pub struct AccountDraft {
 #[serde(rename_all = "camelCase")]
 pub struct PipSettings {
     pub edge: PipEdge,
+    pub show_stonemite_button: bool,
     pub thumbnail_opacity: u32,
     pub label_height: u32,
     pub label_opacity: u32,
@@ -349,6 +350,7 @@ impl SettingsDraft {
             box_order: config.box_order.clone(),
             pip: PipSettings {
                 edge: config.pip_edge,
+                show_stonemite_button: config.show_stonemite_button,
                 thumbnail_opacity: config.effective_pip_opacity(),
                 label_height: config.pip_label_height.unwrap_or(48),
                 label_opacity: config.pip_label_opacity.unwrap_or(80),
@@ -399,11 +401,14 @@ impl SettingsDraft {
     }
 
     pub fn save(self) -> Result<SaveOutcome, String> {
+        let config_lock = Config::lock()
+            .map_err(|error| format!("Stonemite could not lock its settings: {error}"))?;
         let existing = Config::load();
         let (config, outcome) = self.into_config(existing)?;
         config
             .save()
             .map_err(|error| format!("Stonemite could not save its settings: {error}"))?;
+        drop(config_lock);
         config.write_server_to_ini();
         Ok(outcome)
     }
@@ -477,6 +482,8 @@ impl SettingsDraft {
             eq_dir: self.general.eq_directory,
             hide_hotkey: self.pip.hide_hotkey,
             pip_edge: self.pip.edge,
+            show_stonemite_button: self.pip.show_stonemite_button,
+            stonemite_button_position: existing.stonemite_button_position,
             pip_strip_width: existing.pip_strip_width,
             pip_opacity: Some(self.pip.thumbnail_opacity),
             pip_positions: existing.pip_positions,
@@ -756,6 +763,7 @@ mod tests {
         assert!(draft.hotkeys.box_cycles.is_empty());
         assert!(draft.box_order.is_empty());
         assert_eq!(draft.pip.edge, PipEdge::Right);
+        assert!(draft.pip.show_stonemite_button);
         assert_eq!(
             draft.pip.thumbnail_opacity,
             crate::config::DEFAULT_PIP_OPACITY
@@ -785,11 +793,18 @@ mod tests {
 
     #[test]
     fn pip_appearance_is_validated_and_persisted() {
-        let mut draft = SettingsDraft::from_config(&Config::default()).unwrap();
+        let existing = Config {
+            stonemite_button_position: Some([0.25, 0.75]),
+            ..Config::default()
+        };
+        let mut draft = SettingsDraft::from_config(&existing).unwrap();
+        draft.pip.show_stonemite_button = false;
         draft.pip.thumbnail_opacity = 65;
         draft.pip.label_height = 56;
         draft.pip.label_opacity = 72;
-        let (config, _) = draft.into_config(Config::default()).unwrap();
+        let (config, _) = draft.into_config(existing).unwrap();
+        assert!(!config.show_stonemite_button);
+        assert_eq!(config.stonemite_button_position, Some([0.25, 0.75]));
         assert_eq!(config.pip_opacity, Some(65));
         assert_eq!(config.pip_label_height, Some(56));
         assert_eq!(config.pip_label_opacity, Some(72));

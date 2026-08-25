@@ -24,7 +24,7 @@ Download the latest release from [GitHub Releases](https://github.com/eqlaika/st
 - **Installer** (`stonemite-YYYY.MM.DD[.N]-setup.exe`) — installs to Program Files, creates a Start Menu shortcut, with optional Windows startup
 - **Portable** (`stonemite-x86_64-pc-windows-msvc.zip`) — extract and run anywhere
 
-A system tray icon appears with access to all settings. Check for updates from the tray menu.
+A system tray icon appears with access to all settings. While EverQuest is active, the default-on transparent Stonemite logo keeps the same controls reachable over supported fullscreen modes: drag it anywhere within the active monitor to save its relative position, left-click it for Settings, or right-click for the tray menu. You can disable the logo from **PiP overlay → In-game access**.
 
 ## Stream Deck
 

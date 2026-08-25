@@ -7,6 +7,7 @@ mod edit_mode;
 mod event_loop;
 mod geometry;
 mod hosts;
+mod in_game_button;
 mod interaction;
 mod labels;
 mod layout;
@@ -119,6 +120,21 @@ pub(crate) fn toggle_hidden() {
         state.hidden_by_user = !state.hidden_by_user;
         surfaces::update_visibility(state);
     });
+}
+
+pub(crate) fn stonemite_menu_opened() {
+    in_game_button::menu_opened();
+}
+
+pub(crate) fn stonemite_tray_menu_closed() {
+    in_game_button::tray_menu_closed();
+}
+
+pub(crate) fn stonemite_button_menu_closed(
+    menu_owner_hwnd: windows::Win32::Foundation::HWND,
+    source_hwnd: windows::Win32::Foundation::HWND,
+) {
+    unsafe { in_game_button::button_menu_closed(menu_owner_hwnd, source_hwnd) };
 }
 
 /// Apply a broadcast-state change to all overlay and control projections.

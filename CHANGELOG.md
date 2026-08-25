@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a default-on in-game Stonemite button anchored beside the PiP strip, with left-click Settings access and the full tray menu on right-click
 - Added named box cycles with configurable character rings, wrapping next and previous hotkeys, unavailable-client skipping, and no-repeat keyboard-pedal support
 - Added configurable trade-request notifications that clear when EverQuest logs a cancelled trade and remain non-actionable because EQ exposes no trade-accept key binding
 - Added configurable character/server box ordering that restores stable window numbers across random launch order, process restarts, and mixed-server rosters
@@ -12,6 +13,7 @@
 
 ### Changed
 
+- Enlarged the in-game Stonemite control into a transparent draggable logo whose monitor-relative position persists across restarts, DPI changes, and display moves
 - Kept PiP hosts persistent across client swaps, with a sliding thumbnail handoff and animated reordering instead of rebuilding all five windows through a blank frame
 - Pushed Mouse Clutch phase and readiness changes through Trushar so every deck tile reflects physical-key, duplicate-tile, focus-cancellation, and release-drain transitions
 

@@ -317,6 +317,23 @@ pub(super) unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
     let normal_alpha = s.presentation.thumbnail_alpha;
     let previous = std::mem::take(&mut s.presentation.pip_windows);
 
+    let reference = s
+        .clients
+        .active_pid()
+        .and_then(|pid| s.clients.windows.iter().find(|window| window.pid == pid))
+        .or_else(|| s.clients.windows.first())
+        .map(|window| window.hwnd);
+    s.layout.monitor_rect = eq_windows::get_monitor_work_area(reference);
+    // Get DPI from the active EQ monitor, so placement follows foreground
+    // reconciliation across monitor and DPI changes.
+    let dpi_hwnd = reference.unwrap_or(s.presentation.active_label_hwnd);
+    s.layout.dpi_scale = dpi_scale(dpi_hwnd);
+
+    let (rects, strip_width, strip_height) = compute_positions(s);
+    s.layout.strip_width = strip_width;
+    s.layout.strip_height = strip_height;
+    super::in_game_button::update_layout(s);
+
     if s.clients.pips().is_empty() {
         for pip in previous {
             destroy_pip_window(s, pip);
@@ -325,16 +342,6 @@ pub(super) unsafe fn rebuild_thumbnails(s: &mut OverlayState) {
         return;
     }
 
-    let reference = s.clients.windows.first().map(|window| window.hwnd);
-    s.layout.monitor_rect = eq_windows::get_monitor_work_area(reference);
-    // Get DPI from the same monitor as the EQ windows, so it stays consistent
-    // with monitor_rect after display changes (unplug/replug, DPI change).
-    let dpi_hwnd = reference.unwrap_or(s.presentation.active_label_hwnd);
-    s.layout.dpi_scale = dpi_scale(dpi_hwnd);
-
-    let (rects, strip_width, strip_height) = compute_positions(s);
-    s.layout.strip_width = strip_width;
-    s.layout.strip_height = strip_height;
     let border = scale(BORDER_WIDTH, s.layout.dpi_scale);
 
     let desired = s

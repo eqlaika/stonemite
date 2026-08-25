@@ -29,6 +29,7 @@ const mockPayload: SettingsPayload = {
     ],
     pip: {
       edge: "right",
+      showStonemiteButton: true,
       thumbnailOpacity: 80,
       labelHeight: 48,
       labelOpacity: 80,

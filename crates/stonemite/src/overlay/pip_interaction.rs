@@ -336,6 +336,7 @@ unsafe fn pip_wnd_proc_inner(
                     let (rects, sw, sh) = compute_positions(s);
                     s.layout.strip_width = sw;
                     s.layout.strip_height = sh;
+                    super::in_game_button::update_layout(s);
                     let d = s.layout.dpi_scale;
                     let border = scale(BORDER_WIDTH, d);
                     for i in 0..s.presentation.pip_windows.len() {
@@ -641,9 +642,10 @@ unsafe fn pip_wnd_proc_inner(
 
             // --- Strip resize finalize ---
             if s.interaction.strip_resize_drag.take().is_some() {
-                let mut cfg = config::Config::load();
-                cfg.pip_strip_width = s.layout.custom_strip_width.map(|v| v as u32);
-                let _ = cfg.save();
+                let strip_width = s.layout.custom_strip_width.map(|v| v as u32);
+                let _ = config::Config::update(|config| {
+                    config.pip_strip_width = strip_width;
+                });
                 restore_active_eq_if_owned(s, hwnd);
                 return LRESULT(0);
             }
@@ -763,9 +765,9 @@ unsafe fn pip_wnd_proc_inner(
                 let handle_w = scale(RESIZE_HANDLE_WIDTH, s.layout.dpi_scale);
                 if strip_resize_hit_test(pt, cr.right, cr.bottom, s.layout.pip_edge, handle_w) {
                     s.layout.custom_strip_width = None;
-                    let mut cfg = config::Config::load();
-                    cfg.pip_strip_width = None;
-                    let _ = cfg.save();
+                    let _ = config::Config::update(|config| {
+                        config.pip_strip_width = None;
+                    });
                     rebuild_thumbnails(s);
                     update_visibility(s);
                 }

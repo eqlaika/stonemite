@@ -59,17 +59,20 @@ pub unsafe fn foreground_window_is_settings(hwnd: HWND) -> bool {
 
 /// Show the Tauri settings window in a same-executable subprocess. If it is
 /// already open, bring the existing window to the foreground.
-pub fn show() {
+pub fn show() -> bool {
     if SETTINGS_PROCESS_ID.load(Ordering::SeqCst) != 0 {
         unsafe {
             if let Ok(window) = FindWindowW(None, w!("Stonemite Settings")) {
                 let _ = SetForegroundWindow(window);
             }
         }
-        return;
+        return true;
     }
 
-    let executable = std::env::current_exe().expect("failed to locate Stonemite executable");
+    let Ok(executable) = std::env::current_exe() else {
+        eprintln!("Failed to locate the Stonemite executable");
+        return false;
+    };
     match std::process::Command::new(executable)
         .arg("--settings")
         .spawn()
@@ -86,8 +89,12 @@ pub fn show() {
                     Ordering::SeqCst,
                 );
             });
+            true
         }
-        Err(error) => eprintln!("Failed to open settings: {error}"),
+        Err(error) => {
+            eprintln!("Failed to open settings: {error}");
+            false
+        }
     }
 }
 
@@ -343,12 +350,13 @@ fn save_window_position(app_handle: &tauri::AppHandle) {
     let (Ok(position), Ok(scale_factor)) = (window.outer_position(), window.scale_factor()) else {
         return;
     };
-    let mut config = Config::load();
-    config.settings_position = Some([
+    let position = [
         position.x as f32 / scale_factor as f32,
         position.y as f32 / scale_factor as f32,
-    ]);
-    let _ = config.save();
+    ];
+    let _ = Config::update(|config| {
+        config.settings_position = Some(position);
+    });
 }
 
 fn generate_pairing_code() -> u32 {

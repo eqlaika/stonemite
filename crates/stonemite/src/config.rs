@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use windows::core::w;
+use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0};
+use windows::Win32::System::Threading::{
+    CreateMutexW, ReleaseMutex, WaitForSingleObject, INFINITE,
+};
 
 pub const DEFAULT_EQ_DIR: &str = r"C:\Users\Public\Daybreak Game Company\Installed Games\EverQuest";
 pub const DEFAULT_PIP_OPACITY: u32 = 80;
@@ -217,6 +222,12 @@ pub struct Config {
     /// Screen edge for the PiP strip: right, left, top, bottom.
     #[serde(default)]
     pub pip_edge: PipEdge,
+    /// Keep the in-game Stonemite button available over EverQuest.
+    #[serde(default = "default_show_stonemite_button")]
+    pub show_stonemite_button: bool,
+    /// Work-area-relative top-left position saved by dragging the in-game logo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stonemite_button_position: Option<[f32; 2]>,
     /// Custom PiP strip width in pixels. None = auto-size.
     #[serde(default)]
     pub pip_strip_width: Option<u32>,
@@ -341,6 +352,10 @@ fn default_snap_grid() -> u32 {
     16
 }
 
+fn default_show_stonemite_button() -> bool {
+    true
+}
+
 fn default_broadcast_hotkey() -> String {
     "Pause".to_string()
 }
@@ -399,6 +414,8 @@ impl Default for Config {
             eq_dir: DEFAULT_EQ_DIR.to_string(),
             hide_hotkey: default_hide_hotkey(),
             pip_edge: PipEdge::default(),
+            show_stonemite_button: default_show_stonemite_button(),
+            stonemite_button_position: None,
             pip_strip_width: None,
             pip_opacity: None,
             pip_positions: Vec::new(),
@@ -437,6 +454,34 @@ impl Default for Config {
             accounts: Vec::new(),
             server: String::new(),
             trushar: TrusharConfig::default(),
+        }
+    }
+}
+
+pub(crate) struct ConfigLock(HANDLE);
+
+impl ConfigLock {
+    fn acquire() -> std::io::Result<Self> {
+        let handle = unsafe { CreateMutexW(None, false, w!("Local\\Laikasoft.Stonemite.Config")) }
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let wait = unsafe { WaitForSingleObject(handle, INFINITE) };
+        if wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED {
+            Ok(Self(handle))
+        } else {
+            let error = std::io::Error::last_os_error();
+            unsafe {
+                let _ = CloseHandle(handle);
+            }
+            Err(error)
+        }
+    }
+}
+
+impl Drop for ConfigLock {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = ReleaseMutex(self.0);
+            let _ = CloseHandle(self.0);
         }
     }
 }
@@ -480,27 +525,25 @@ impl Config {
         Self::dir().map(|d| d.join("config.toml"))
     }
 
-    /// Load config from disk. Creates default config file if it doesn't exist.
-    pub fn load() -> Self {
+    pub(crate) fn lock() -> std::io::Result<ConfigLock> {
+        ConfigLock::acquire()
+    }
+
+    fn load_unlocked() -> Self {
         let Some(path) = Self::path() else {
             return Self::default();
         };
-        let config = if path.exists() {
+        if path.exists() {
             match std::fs::read_to_string(&path) {
                 Ok(contents) => toml::from_str(&contents).unwrap_or_default(),
                 Err(_) => Self::default(),
             }
         } else {
             Self::default()
-        };
-        if let Err(error) = config.save() {
-            eprintln!("Failed to save config: {error}");
         }
-        config
     }
 
-    /// Save config to disk, creating the directory if needed.
-    pub fn save(&self) -> std::io::Result<()> {
+    fn save_unlocked(&self) -> std::io::Result<()> {
         let Some(dir) = Self::dir() else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -508,9 +551,38 @@ impl Config {
             ));
         };
         std::fs::create_dir_all(&dir)?;
-        let contents = toml::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let contents = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(dir.join("config.toml"), contents)
+    }
+
+    /// Load config from disk. Creates default config file if it doesn't exist.
+    pub fn load() -> Self {
+        let _lock = match Self::lock() {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("Failed to lock config: {error}");
+                return Self::default();
+            }
+        };
+        let config = Self::load_unlocked();
+        if let Err(error) = config.save_unlocked() {
+            eprintln!("Failed to save config: {error}");
+        }
+        config
+    }
+
+    /// Save config to disk, creating the directory if needed.
+    pub fn save(&self) -> std::io::Result<()> {
+        let _lock = Self::lock()?;
+        self.save_unlocked()
+    }
+
+    /// Atomically serialize a read-modify-write sequence with other processes.
+    pub(crate) fn update(mutator: impl FnOnce(&mut Self)) -> std::io::Result<()> {
+        let _lock = Self::lock()?;
+        let mut config = Self::load_unlocked();
+        mutator(&mut config);
+        config.save_unlocked()
     }
 
     /// Resolve the EQ directory from config.
@@ -850,6 +922,7 @@ mod tests {
     fn legacy_config_enables_loopback_integrations_by_default() {
         let config: Config = toml::from_str("eq_dir = 'C:\\EverQuest'").unwrap();
 
+        assert!(config.show_stonemite_button);
         assert_eq!(config.mouse_clutch_key, "F13");
         assert_eq!(config.mouse_clutch_vk(), Ok(Some(0x7c)));
         assert!(config.tell_visual_enabled);
@@ -924,6 +997,27 @@ box_cycles = [
         let serialized = toml::to_string_pretty(&config).unwrap();
         let reparsed: Config = toml::from_str(&serialized).unwrap();
         assert_eq!(reparsed.box_cycles, config.box_cycles);
+    }
+
+    #[test]
+    fn in_game_button_defaults_on_for_new_and_existing_configs() {
+        assert!(Config::default().show_stonemite_button);
+        assert_eq!(Config::default().stonemite_button_position, None);
+        let upgraded: Config = toml::from_str("eq_dir = 'C:\\EverQuest'").unwrap();
+        assert!(upgraded.show_stonemite_button);
+        assert_eq!(upgraded.stonemite_button_position, None);
+        let disabled: Config = toml::from_str("show_stonemite_button = false").unwrap();
+        assert!(!disabled.show_stonemite_button);
+    }
+
+    #[test]
+    fn in_game_button_position_round_trips() {
+        let config: Config = toml::from_str("stonemite_button_position = [0.25, 0.75]").unwrap();
+        assert_eq!(config.stonemite_button_position, Some([0.25, 0.75]));
+
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let reparsed: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.stonemite_button_position, Some([0.25, 0.75]));
     }
 
     #[test]

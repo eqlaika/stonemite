@@ -12,12 +12,12 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconFromResourceEx, CreateMenu, CreatePopupMenu, CreateWindowExW,
-    DefWindowProcW, DestroyIcon, DestroyWindow, FindWindowW, GetCursorPos, GetMessageW,
-    GetWindowThreadProcessId, KillTimer, PostMessageW, PostQuitMessage, RegisterClassW,
-    SetForegroundWindow, SetTimer, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, LR_DEFAULTCOLOR,
-    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP,
-    WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSW, WS_EX_TOOLWINDOW,
+    DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, FindWindowW, GetCursorPos,
+    GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, IsWindow, KillTimer, PostMessageW,
+    PostQuitMessage, RegisterClassW, SetForegroundWindow, SetTimer, TrackPopupMenu, CS_HREDRAW,
+    CS_VREDRAW, LR_DEFAULTCOLOR, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
+    WM_HOTKEY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSW, WS_EX_TOOLWINDOW,
 };
 
 use crate::broadcast;
@@ -33,9 +33,10 @@ use crate::updater;
 const TRAY_ICON_ICO: &[u8] = include_bytes!("../assets/tray-dev.ico");
 #[cfg(not(stonemite_dev_build))]
 const TRAY_ICON_ICO: &[u8] = include_bytes!("../assets/tray.ico");
+const STONEMITE_LOGO_PNG: &[u8] = include_bytes!("../assets/app.png");
 
 /// Return the image resource for a requested square size from an ICO file.
-fn icon_resource(ico_data: &[u8], desired_size: u32) -> Option<&[u8]> {
+pub(crate) fn icon_resource(ico_data: &[u8], desired_size: u32) -> Option<&[u8]> {
     // ICO header: 2 reserved + 2 type + 2 count = 6 bytes.
     if ico_data.len() < 6 || ico_data[..4] != [0, 0, 1, 0] {
         return None;
@@ -74,6 +75,24 @@ fn icon_resource(ico_data: &[u8], desired_size: u32) -> Option<&[u8]> {
         }
     }
     None
+}
+
+/// Decode the transparent high-resolution logo to premultiplied BGRA for Direct2D.
+pub(crate) fn stonemite_icon_bgra() -> Option<(u32, u32, Vec<u8>)> {
+    let image = image::load_from_memory(STONEMITE_LOGO_PNG).ok()?.to_rgba8();
+    let (width, height) = image.dimensions();
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for pixel in image.pixels() {
+        let [red, green, blue, alpha] = pixel.0;
+        let premultiply = |channel: u8| ((u16::from(channel) * u16::from(alpha) + 127) / 255) as u8;
+        pixels.extend_from_slice(&[
+            premultiply(blue),
+            premultiply(green),
+            premultiply(red),
+            alpha,
+        ]);
+    }
+    Some((width, height, pixels))
 }
 
 /// Load an icon of the given size from an in-memory ICO file.
@@ -143,11 +162,27 @@ const MOUSE_CLUTCH_TICK_MS: u32 = 15;
 
 /// Custom message posted when a background update check finds a new version.
 const WM_UPDATE_AVAILABLE: u32 = WM_USER + 2;
+/// Queue the shared tray menu from the in-game Stonemite button.
+const WM_SHOW_STONEMITE_MENU: u32 = WM_USER + 4;
 /// Custom message posted when Login All finds every configured account open.
 const WM_LOGIN_ALL_ALREADY_OPEN: u32 = WM_USER + 3;
 
 static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
 static LOGIN_ALL_RUNNING: AtomicBool = AtomicBool::new(false);
+
+pub(crate) unsafe fn request_stonemite_menu(source_hwnd: HWND) -> bool {
+    let Ok(tray_hwnd) = FindWindowW(w!("StonemiteTrayClass"), w!("Stonemite")) else {
+        return false;
+    };
+    !tray_hwnd.is_invalid()
+        && PostMessageW(
+            tray_hwnd,
+            WM_SHOW_STONEMITE_MENU,
+            WPARAM(source_hwnd.0 as usize),
+            LPARAM(0),
+        )
+        .is_ok()
+}
 
 /// Ask an existing tray instance to exit through its normal message loop.
 /// This lets the trushar runtime close and join before the process disappears.
@@ -316,8 +351,16 @@ unsafe extern "system" fn wnd_proc(
             if event == WM_LBUTTONUP {
                 settings_dialog::show();
             } else if event == WM_RBUTTONUP {
-                show_context_menu(hwnd);
+                overlay::stonemite_menu_opened();
+                show_context_menu(hwnd, None);
+                overlay::stonemite_tray_menu_closed();
             }
+            LRESULT(0)
+        }
+        x if x == WM_SHOW_STONEMITE_MENU => {
+            let source_hwnd = HWND(wparam.0 as *mut _);
+            show_context_menu(hwnd, Some(source_hwnd));
+            overlay::stonemite_button_menu_closed(hwnd, source_hwnd);
             LRESULT(0)
         }
         WM_HOTKEY => {
@@ -394,7 +437,9 @@ unsafe extern "system" fn wnd_proc(
                 ID_CONFIGURE_ACCOUNTS => {
                     settings_dialog::show();
                 }
-                ID_SETTINGS => settings_dialog::show(),
+                ID_SETTINGS => {
+                    let _ = settings_dialog::show();
+                }
                 ID_CHECK_UPDATE => do_update_check(hwnd),
                 ID_EXIT => PostQuitMessage(0),
                 _ if id >= ID_LOGIN_ACCOUNT_BASE => {
@@ -461,7 +506,7 @@ unsafe extern "system" fn wnd_proc(
     }
 }
 
-unsafe fn show_context_menu(hwnd: HWND) {
+unsafe fn show_context_menu(hwnd: HWND, expected_source: Option<HWND>) {
     let cfg = config::Config::load();
     let menu = CreatePopupMenu().expect("Failed to create popup menu");
 
@@ -596,6 +641,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
     let _ = AppendMenuW(menu, MF_STRING, ID_EXIT as usize, w!("Exit"));
 
+    if expected_source.is_some_and(|source| {
+        source.is_invalid() || !IsWindow(source).as_bool() || GetForegroundWindow() != source
+    }) {
+        let _ = DestroyMenu(menu);
+        return;
+    }
+
     let mut pt = Default::default();
     let _ = GetCursorPos(&mut pt);
     let _ = SetForegroundWindow(hwnd);
@@ -608,6 +660,8 @@ unsafe fn show_context_menu(hwnd: HWND) {
         hwnd,
         None,
     );
+    let _ = DestroyMenu(menu);
+    let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
 }
 
 unsafe fn do_update_check(hwnd: HWND) {
@@ -660,6 +714,9 @@ unsafe fn do_update_check(hwnd: HWND) {
 
 /// Check if an automatic update check is due and spawn a background thread if so.
 fn maybe_auto_update_check(hwnd: HWND) {
+    let Ok(config_lock) = config::Config::lock() else {
+        return;
+    };
     let mut cfg = config::Config::load();
     if !cfg.auto_update_check {
         return;
@@ -678,6 +735,7 @@ fn maybe_auto_update_check(hwnd: HWND) {
     // Record that we're checking now.
     cfg.last_update_check = Some(chrono::Utc::now().to_rfc3339());
     let _ = cfg.save();
+    drop(config_lock);
 
     // Spawn background check.
     let hwnd_raw = hwnd.0 as usize;
@@ -872,6 +930,19 @@ mod tests {
             for size in [16, 32, 48, 256] {
                 assert!(icon_resource(icon, size).is_some(), "missing {size}px icon");
             }
+        }
+    }
+
+    #[test]
+    fn overlay_logo_uses_high_resolution_premultiplied_pixels() {
+        let (width, height, pixels) = stonemite_icon_bgra().expect("decode overlay logo");
+        assert_eq!((width, height), (256, 256));
+        assert_eq!(pixels.len(), 256 * 256 * 4);
+        assert_eq!(pixels[3], 0, "the logo background must be transparent");
+        assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] == 255));
+        for pixel in pixels.chunks_exact(4) {
+            let alpha = pixel[3];
+            assert!(pixel[0] <= alpha && pixel[1] <= alpha && pixel[2] <= alpha);
         }
     }
 

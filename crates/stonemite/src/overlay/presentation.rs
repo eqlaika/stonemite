@@ -1,4 +1,4 @@
-use windows::Win32::Foundation::{HWND, RPC_E_CHANGED_MODE};
+use windows::Win32::Foundation::{HWND, POINT, RECT, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
 use super::labels::{Color, LabelTheme};
@@ -28,6 +28,27 @@ pub(super) struct BannerSceneKey {
     pub(super) label_height: i32,
     pub(super) label_alpha: u8,
     pub(super) dpi_bits: u64,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct StonemiteButtonDrag {
+    pub(super) start_cursor: POINT,
+    pub(super) start_rect: RECT,
+    pub(super) monitor_rect: RECT,
+    pub(super) dpi_scale: f64,
+    pub(super) dragging: bool,
+}
+
+pub(super) struct StonemiteButtonState {
+    pub(super) hwnd: HWND,
+    pub(super) tooltip_hwnd: HWND,
+    pub(super) enabled: bool,
+    pub(super) position: Option<[f32; 2]>,
+    pub(super) drag: Option<StonemiteButtonDrag>,
+    pub(super) hovered: bool,
+    pub(super) pressed: bool,
+    pub(super) releasing_capture: bool,
+    pub(super) menu_open: bool,
 }
 
 pub(super) struct PipWindowEntry {
@@ -89,6 +110,7 @@ pub(super) struct PresentationState {
     pub(super) pending_composition_destroys: Vec<HWND>,
     /// Stable activatable owner for modal context menus.
     pub(super) menu_owner_hwnd: HWND,
+    pub(super) stonemite_button: StonemiteButtonState,
     pub(super) active_label_hwnd: HWND,
     pub(super) active_label_text: String,
     pub(super) active_label_class: Option<String>,

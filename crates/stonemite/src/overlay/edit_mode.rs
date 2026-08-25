@@ -28,9 +28,9 @@ pub(super) unsafe fn toggle_inner(state: &mut OverlayState) {
                 height: (rect.bottom - rect.top) as u32,
             });
         }
-        let mut config = config::Config::load();
-        config.pip_positions = positions;
-        let _ = config.save();
+        let _ = config::Config::update(move |config| {
+            config.pip_positions = positions;
+        });
         state.layout.has_custom_positions = true;
         state.interaction.edit_mode = false;
     } else {

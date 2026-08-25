@@ -24,8 +24,8 @@ use super::super::notifications::{
     NotificationPreviewLayout, NotificationVisualSnapshot,
 };
 use super::super::scenes::{
-    ActiveLabelScene, PipScene, PipSceneLayout, SceneColor, StatusBannerScene, TimerLayout,
-    TimerScene, ToastScene, UiTextRole,
+    ActiveLabelScene, PipScene, PipSceneLayout, SceneColor, StatusBannerScene,
+    StonemiteButtonScene, TimerLayout, TimerScene, ToastScene, UiTextRole,
 };
 use super::compositor::TextResources;
 
@@ -126,6 +126,34 @@ pub(super) unsafe fn draw_status_banner(
         DWRITE_TEXT_ALIGNMENT_LEADING,
         false,
     )
+}
+
+pub(super) unsafe fn draw_stonemite_button(
+    context: &ID2D1DeviceContext,
+    icon: &ID2D1Bitmap1,
+    scene: &StonemiteButtonScene,
+) -> WindowsResult<()> {
+    prepare_context(context);
+    let icon_bounds = if scene.pressed {
+        scene.icon_bounds.inset(1)
+    } else {
+        scene.icon_bounds
+    };
+    context.DrawBitmap(
+        icon,
+        Some(&d2d_rect(icon_bounds)),
+        if scene.pressed {
+            0.82
+        } else if scene.hovered {
+            1.0
+        } else {
+            0.94
+        },
+        D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+        None,
+        None,
+    );
+    Ok(())
 }
 
 pub(super) unsafe fn draw_toast(

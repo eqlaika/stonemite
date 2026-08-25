@@ -52,6 +52,7 @@ export interface AccountsSettings {
 
 export interface PipSettings {
   edge: PipEdge;
+  showStonemiteButton: boolean;
   thumbnailOpacity: number;
   labelHeight: number;
   labelOpacity: number;

@@ -12,8 +12,8 @@ use super::presentation::{ComApartment, PipWindowEntry};
 use super::render::Compositor;
 use super::runtime;
 use super::scenes::{
-    ActiveLabelScene, LabelScene, PipInteractionScene, PipScene, StatusBannerScene, TimerScene,
-    ToastScene,
+    ActiveLabelScene, LabelScene, PipInteractionScene, PipScene, StatusBannerScene,
+    StonemiteButtonScene, TimerScene, ToastScene,
 };
 use super::state::OverlayState;
 use super::timer_controller::{active_timer, format_remaining};
@@ -120,6 +120,9 @@ pub(super) fn client_scene_rect(hwnd: HWND) -> Option<Rect> {
 }
 
 pub(super) unsafe fn hide_unready_pip_pairs(s: &OverlayState) {
+    if !surface_is_ready(s, s.presentation.stonemite_button.hwnd) {
+        let _ = ShowWindow(s.presentation.stonemite_button.hwnd, SW_HIDE);
+    }
     for pip in &s.presentation.pip_windows {
         if !surface_is_ready(s, pip.label_hwnd) {
             let _ = ShowWindow(pip.hwnd, SW_HIDE);
@@ -129,6 +132,7 @@ pub(super) unsafe fn hide_unready_pip_pairs(s: &OverlayState) {
 }
 
 pub(super) unsafe fn hide_all_pip_pairs(s: &OverlayState) {
+    let _ = ShowWindow(s.presentation.stonemite_button.hwnd, SW_HIDE);
     for pip in &s.presentation.pip_windows {
         let _ = ShowWindow(pip.hwnd, SW_HIDE);
         let _ = ShowWindow(pip.label_hwnd, SW_HIDE);
@@ -388,6 +392,9 @@ pub(super) unsafe fn service_compositor_recovery_guarded(s: &mut OverlayState) {
     if has_redraw_request(s.presentation.active_label_hwnd) {
         render_active_label_surface(s);
     }
+    if has_redraw_request(s.presentation.stonemite_button.hwnd) {
+        render_stonemite_button_surface(s);
+    }
     if has_redraw_request(s.presentation.broadcast_label_hwnd) {
         render_banner_surface(s);
     }
@@ -401,6 +408,7 @@ pub(super) unsafe fn service_compositor_recovery_guarded(s: &mut OverlayState) {
     }
 
     apply_pip_pair_visibility(s, overlay_visibility_allowed(s));
+    apply_stonemite_button_visibility(s);
     if toast_publication_allowed(
         s.presentation.toast.phase,
         s.presentation.toast.scene_ready,
@@ -702,6 +710,67 @@ pub(super) unsafe fn render_banner_surface_for_size(
     }
 }
 
+pub(super) unsafe fn render_stonemite_button_surface(s: &mut OverlayState) {
+    let Some(bounds) = client_scene_rect(s.presentation.stonemite_button.hwnd) else {
+        return;
+    };
+    let _ = render_stonemite_button_surface_for_size(s, bounds.width(), bounds.height());
+}
+
+pub(super) unsafe fn render_stonemite_button_surface_for_size(
+    s: &mut OverlayState,
+    width: i32,
+    height: i32,
+) -> bool {
+    let bounds = Rect::new(0, 0, width.max(1), height.max(1));
+    if !ensure_surface(
+        s,
+        s.presentation.stonemite_button.hwnd,
+        bounds.width(),
+        bounds.height(),
+        1.0,
+    ) {
+        return false;
+    }
+    let icon_size = scale(52, s.layout.dpi_scale)
+        .min(bounds.width())
+        .min(bounds.height())
+        .max(1);
+    let icon_left = (bounds.width() - icon_size) / 2;
+    let icon_top = (bounds.height() - icon_size) / 2;
+    let scene = StonemiteButtonScene {
+        bounds,
+        icon_bounds: Rect::new(
+            icon_left,
+            icon_top,
+            icon_left + icon_size,
+            icon_top + icon_size,
+        ),
+        hovered: s.presentation.stonemite_button.hovered,
+        pressed: s.presentation.stonemite_button.pressed,
+    };
+    match s
+        .presentation
+        .compositor
+        .as_mut()
+        .expect("compositor ensured")
+        .render_stonemite_button(s.presentation.stonemite_button.hwnd, &scene)
+    {
+        Ok(()) => {
+            clear_redraw_request(s.presentation.stonemite_button.hwnd);
+            true
+        }
+        Err(error) => {
+            debug_log(&format!(
+                "DirectComposition Stonemite-button render failed: {error}"
+            ));
+            retain_redraw_request(s.presentation.stonemite_button.hwnd);
+            service_compositor_recovery(s);
+            false
+        }
+    }
+}
+
 pub(super) unsafe fn render_toast_surface(s: &mut OverlayState) {
     s.presentation.toast.scene_ready = false;
     let Some(bounds) = client_scene_rect(s.presentation.toast.hwnd) else {
@@ -819,6 +888,34 @@ pub(super) unsafe fn apply_pip_pair_visibility(s: &OverlayState, visible: bool) 
     }
 }
 
+unsafe fn apply_stonemite_button_visibility(s: &OverlayState) {
+    let button = &s.presentation.stonemite_button;
+    let allowed = super::in_game_button::visibility_policy(
+        button.enabled,
+        !s.clients.windows.is_empty(),
+        s.hidden_by_user,
+        button.menu_open,
+        owns_foreground(GetForegroundWindow(), s),
+    );
+    if allowed && surface_is_ready(s, button.hwnd) {
+        let _ = ShowWindow(button.hwnd, SW_SHOWNOACTIVATE);
+        let _ = SetWindowPos(
+            button.hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    } else {
+        let _ = ShowWindow(button.hwnd, SW_HIDE);
+        if allowed {
+            request_redraw(button.hwnd);
+        }
+    }
+}
+
 pub(super) unsafe fn update_visibility(s: &mut OverlayState) {
     if overlay_visibility_allowed(s) {
         // Publish any state accumulated while hidden before exposing a visual.
@@ -869,6 +966,7 @@ pub(super) unsafe fn update_visibility(s: &mut OverlayState) {
         s.presentation.toast.phase = ToastPhase::Hidden;
         s.presentation.toast.scene_ready = false;
     }
+    apply_stonemite_button_visibility(s);
 }
 
 #[cfg(test)]

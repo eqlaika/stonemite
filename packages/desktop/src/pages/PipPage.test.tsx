@@ -8,6 +8,7 @@ import type {
   PipSettings,
 } from "../settings/types";
 import {
+  InGameAccessControl,
   LabelTypographyControls,
   ThumbnailOpacityControl,
 } from "./PipPage";
@@ -30,6 +31,7 @@ const fontFamilies = [
 
 const initial: PipSettings = {
   edge: "right",
+  showStonemiteButton: true,
   thumbnailOpacity: 80,
   labelHeight: 48,
   labelOpacity: 80,
@@ -56,6 +58,30 @@ function ThumbnailOpacityHarness() {
   const [value, setValue] = useState(initial.thumbnailOpacity);
   return <ThumbnailOpacityControl value={value} onChange={setValue} />;
 }
+
+function InGameAccessHarness() {
+  const [value, setValue] = useState(initial.showStonemiteButton);
+  return <InGameAccessControl value={value} onChange={setValue} />;
+}
+
+describe("InGameAccessControl", () => {
+  it("updates the draft value with accessible product copy", () => {
+    render(<InGameAccessHarness />);
+
+    const toggle = screen.getByRole("switch", {
+      name: "Show Stonemite button",
+    });
+    expect(toggle).toBeChecked();
+    expect(
+      screen.getByText(
+        "Keep Stonemite controls available over EverQuest. Drag the logo to move it; left-click opens Settings; right-click opens the tray menu.",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).not.toBeChecked();
+  });
+});
 
 describe("ThumbnailOpacityControl", () => {
   it("updates the independent live-thumbnail opacity accessibly", () => {

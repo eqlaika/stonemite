@@ -360,9 +360,9 @@ pub(super) unsafe fn apply_menu_command(s: &mut OverlayState, cmd_id: u32) {
     } else if cmd_id == IDM_EDIT_MODE {
         toggle_edit_mode_inner(s);
     } else if cmd_id == IDM_RESET_LAYOUT {
-        let mut cfg = config::Config::load();
-        cfg.pip_positions.clear();
-        let _ = cfg.save();
+        let _ = config::Config::update(|config| {
+            config.pip_positions.clear();
+        });
         s.layout.has_custom_positions = false;
         s.interaction.edit_mode = false;
         rebuild_thumbnails(s);
@@ -473,11 +473,11 @@ unsafe fn handle_edge_assign(s: &mut OverlayState, cmd_id: u32) {
     s.layout.custom_strip_width = None;
     s.layout.has_custom_positions = false;
     s.interaction.edit_mode = false;
-    let mut cfg = config::Config::load();
-    cfg.pip_edge = edge;
-    cfg.pip_strip_width = None;
-    cfg.pip_positions.clear();
-    let _ = cfg.save();
+    let _ = config::Config::update(|config| {
+        config.pip_edge = edge;
+        config.pip_strip_width = None;
+        config.pip_positions.clear();
+    });
     rebuild_thumbnails(s);
     update_visibility(s);
 }

@@ -45,7 +45,9 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
 use super::super::labels::{required_width, FontSpec, LabelModel, LabelStyle, LabelTheme};
-use super::super::scenes::{ActiveLabelScene, PipScene, StatusBannerScene, ToastScene, UiTextRole};
+use super::super::scenes::{
+    ActiveLabelScene, PipScene, StatusBannerScene, StonemiteButtonScene, ToastScene, UiTextRole,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FailureClass {
@@ -207,6 +209,7 @@ struct GraphicsResources {
     _d2d_device: ID2D1Device,
     d2d_context: ID2D1DeviceContext,
     class_icon_bitmaps: HashMap<&'static str, ID2D1Bitmap1>,
+    stonemite_icon_bitmap: Option<ID2D1Bitmap1>,
 }
 
 impl GraphicsResources {
@@ -249,7 +252,34 @@ impl GraphicsResources {
             _d2d_device: d2d_device,
             d2d_context,
             class_icon_bitmaps: HashMap::new(),
+            stonemite_icon_bitmap: None,
         })
+    }
+
+    unsafe fn stonemite_icon_bitmap(&mut self) -> WindowsResult<ID2D1Bitmap1> {
+        if let Some(bitmap) = self.stonemite_icon_bitmap.as_ref() {
+            return Ok(bitmap.clone());
+        }
+        let (width, height, pixels) = crate::tray::stonemite_icon_bgra()
+            .ok_or_else(|| invalid_operation("the embedded Stonemite logo could not be decoded"))?;
+        let properties = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+            ..Default::default()
+        };
+        let bitmap = self.d2d_context.CreateBitmap(
+            D2D_SIZE_U { width, height },
+            Some(pixels.as_ptr().cast()),
+            width * 4,
+            &properties,
+        )?;
+        self.stonemite_icon_bitmap = Some(bitmap.clone());
+        Ok(bitmap)
     }
 
     unsafe fn class_icon_bitmap(
@@ -716,6 +746,29 @@ impl Compositor {
         ))
     }
 
+    pub(super) unsafe fn stonemite_icon_bitmap(&mut self) -> WindowsResult<ID2D1Bitmap1> {
+        self.ensure_owner_thread()?;
+        if self.device.is_none() {
+            self.recover_device()?;
+        }
+        let result = self
+            .device
+            .as_mut()
+            .ok_or_else(|| missing_resource("DirectComposition device"))?
+            .graphics
+            .stonemite_icon_bitmap();
+        match result {
+            Ok(bitmap) => Ok(bitmap),
+            Err(error) => {
+                self.log_failure("Stonemite icon upload failed", &error);
+                if failure_action(&error) == FailureAction::RecoverDevice {
+                    self.recover_device()?;
+                }
+                Err(error)
+            }
+        }
+    }
+
     /// Return a device-generation-owned class icon bitmap to concrete scene renderers.
     pub(super) unsafe fn class_icon_bitmap(
         &mut self,
@@ -799,6 +852,22 @@ impl Compositor {
             |context| {
                 super::scene_d2d::draw_pip_scene(context, &text, icon.as_ref(), scene, &layout)
             },
+        )?;
+        self.flush()
+    }
+
+    pub(in crate::overlay) unsafe fn render_stonemite_button(
+        &mut self,
+        hwnd: HWND,
+        scene: &StonemiteButtonScene,
+    ) -> WindowsResult<()> {
+        let icon = self.stonemite_icon_bitmap()?;
+        self.set_surface_opacity(hwnd, 1.0)?;
+        self.replace_surface_frame(
+            hwnd,
+            scene.bounds.width().max(1) as u32,
+            scene.bounds.height().max(1) as u32,
+            |context| super::scene_d2d::draw_stonemite_button(context, &icon, scene),
         )?;
         self.flush()
     }

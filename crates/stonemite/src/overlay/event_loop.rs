@@ -78,13 +78,19 @@ unsafe fn poll_inner(s: &mut OverlayState) {
         // reconnect moved EQ to a different-DPI display), rebuild everything.
         // Also rebuild if any HWND changed (e.g. EQ recreated its window
         // during login), since DWM thumbnails are bound to specific HWNDs.
-        let dpi_hwnd = s
+        let reference = s
             .clients
-            .windows
-            .first()
-            .map(|w| w.hwnd)
-            .unwrap_or(s.presentation.active_label_hwnd);
+            .active_pid()
+            .and_then(|pid| s.clients.windows.iter().find(|window| window.pid == pid))
+            .or_else(|| s.clients.windows.first())
+            .map(|window| window.hwnd);
+        let dpi_hwnd = reference.unwrap_or(s.presentation.active_label_hwnd);
         let new_dpi = dpi_scale(dpi_hwnd);
+        let new_monitor_rect = eq_windows::get_monitor_work_area(reference);
+        let monitor_changed = new_monitor_rect.left != s.layout.monitor_rect.left
+            || new_monitor_rect.top != s.layout.monitor_rect.top
+            || new_monitor_rect.right != s.layout.monitor_rect.right
+            || new_monitor_rect.bottom != s.layout.monitor_rect.bottom;
         let presentation_incomplete = s.presentation.pip_transition.is_some()
             || s.presentation.pip_windows.iter().map(|pip| pip.pid).ne(s
                 .clients
@@ -95,12 +101,14 @@ unsafe fn poll_inner(s: &mut OverlayState) {
         if foreground_changed
             || hwnd_changed
             || presentation_incomplete
+            || monitor_changed
             || (new_dpi - s.layout.dpi_scale).abs() > 0.001
         {
             s.layout.dpi_scale = new_dpi;
             rebuild_thumbnails(s);
         } else {
             update_active_label(s);
+            super::in_game_button::update_layout(s);
         }
         s.window_styles.apply(&s.clients);
         service_compositor_recovery(s);

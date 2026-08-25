@@ -87,6 +87,23 @@ export function LabelTypographyControls({
   );
 }
 
+export function InGameAccessControl({
+  value,
+  onChange,
+}: {
+  value: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <Toggle
+      label="Show Stonemite button"
+      description="Keep Stonemite controls available over EverQuest. Drag the logo to move it; left-click opens Settings; right-click opens the tray menu."
+      checked={value}
+      onChange={onChange}
+    />
+  );
+}
+
 export function ThumbnailOpacityControl({
   value,
   onChange,
@@ -160,6 +177,18 @@ export function PipPage() {
       </FormSection>
 
       <FormSection
+        title="In-game access"
+        description="Choose whether Stonemite controls remain available over EverQuest."
+      >
+        <InGameAccessControl
+          value={draft.pip.showStonemiteButton}
+          onChange={(showStonemiteButton) =>
+            updatePip((pip) => ({ ...pip, showStonemiteButton }))
+          }
+        />
+      </FormSection>
+
+      <FormSection
         title="Thumbnails"
         description="Adjust live EQ previews independently from labels and notifications."
       >
@@ -209,9 +238,7 @@ export function PipPage() {
           value={draft.pip}
           fontFamilies={options.labelFontFamilies}
           weightOptions={options.labelFontWeights}
-          onChange={(update) =>
-            updatePip((pip) => ({ ...pip, ...update }))
-          }
+          onChange={(update) => updatePip((pip) => ({ ...pip, ...update }))}
         />
       </FormSection>
 
