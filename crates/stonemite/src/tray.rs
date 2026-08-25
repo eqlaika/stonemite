@@ -773,13 +773,21 @@ fn launch_eq(username: Option<&str>, password: Option<&str>) {
     ));
     if cfg.trusik {
         if let Err(error) = crate::trusik_deploy::deploy(&eq_dir) {
-            crate::diagnostics::debug_log(&format!(
-                "launch_eq: input proxy update failed before spawn: {error}"
-            ));
-            overlay::show_toast(
-                "Input proxy update failed. Close all EverQuest clients and try again.",
-            );
-            return;
+            if crate::trusik_deploy::is_in_use_error(&error) {
+                // A running EQ client has the installed proxy mapped. New clients
+                // can keep using it; protocol handshakes fail safely if it is too old.
+                crate::diagnostics::debug_log(&format!(
+                    "launch_eq: input proxy is in use; launching with installed copy: {error}"
+                ));
+            } else {
+                crate::diagnostics::debug_log(&format!(
+                    "launch_eq: input proxy update failed before spawn: {error}"
+                ));
+                overlay::show_toast(
+                    "Input proxy update failed. Close all EverQuest clients and try again.",
+                );
+                return;
+            }
         }
     }
     let mut cmd = std::process::Command::new(&exe);

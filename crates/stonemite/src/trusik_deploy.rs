@@ -1,5 +1,6 @@
 use std::io::{Error, ErrorKind};
 use std::path::Path;
+use windows::Win32::Foundation::{ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION};
 
 /// The trusik input-proxy DLL, embedded at build time from the `trusik` crate's
 /// output (see build.rs). Embedding — rather than shipping a loose dinput8.dll
@@ -19,6 +20,16 @@ pub fn deploy(eq_dir: &Path) -> std::io::Result<()> {
 
     let dst = eq_dir.join("dinput8.dll");
     deploy_bytes(&dst, TRUSIK_DLL)
+}
+
+/// Return whether Windows refused replacement because a running client has the proxy mapped.
+pub(crate) fn is_in_use_error(error: &Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(code)
+            if code == ERROR_SHARING_VIOLATION.0 as i32
+                || code == ERROR_LOCK_VIOLATION.0 as i32
+    )
 }
 
 fn deploy_bytes(dst: &Path, dll: &[u8]) -> std::io::Result<()> {
@@ -76,5 +87,16 @@ mod tests {
         permissions.set_readonly(false);
         std::fs::set_permissions(&path, permissions).unwrap();
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn distinguishes_in_use_proxy_errors_from_access_denied() {
+        assert!(is_in_use_error(&Error::from_raw_os_error(
+            ERROR_SHARING_VIOLATION.0 as i32
+        )));
+        assert!(is_in_use_error(&Error::from_raw_os_error(
+            ERROR_LOCK_VIOLATION.0 as i32
+        )));
+        assert!(!is_in_use_error(&Error::from_raw_os_error(5)));
     }
 }
