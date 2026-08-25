@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::w;
@@ -139,8 +140,11 @@ const MOUSE_CLUTCH_TICK_MS: u32 = 15;
 
 /// Custom message posted when a background update check finds a new version.
 const WM_UPDATE_AVAILABLE: u32 = WM_USER + 2;
+/// Custom message posted when Login All finds every configured account open.
+const WM_LOGIN_ALL_ALREADY_OPEN: u32 = WM_USER + 3;
 
 static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
+static LOGIN_ALL_RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// Ask an existing tray instance to exit through its normal message loop.
 /// This lets the trushar runtime close and join before the process disappears.
@@ -335,6 +339,9 @@ unsafe extern "system" fn wnd_proc(
                 }
                 ID_LAUNCH_EQ => launch_eq(None, None),
                 ID_LOGIN_ALL => {
+                    if LOGIN_ALL_RUNNING.swap(true, Ordering::SeqCst) {
+                        return LRESULT(0);
+                    }
                     let cfg = config::Config::load();
                     let accounts: Vec<(String, Option<String>)> = cfg
                         .accounts
@@ -344,7 +351,28 @@ unsafe extern "system" fn wnd_proc(
                             (a.username.clone(), pw)
                         })
                         .collect();
+                    let hwnd_raw = hwnd.0 as usize;
                     std::thread::spawn(move || {
+                        let _guard = LoginAllGuard;
+                        let configured = accounts.len();
+                        let open_usernames = crate::eq_windows::find_eq_login_usernames();
+                        let (accounts, skipped) = filter_open_accounts(accounts, &open_usernames);
+                        crate::diagnostics::debug_log(&format!(
+                            "login_all: configured={configured} open={} skipped={skipped} launching={}",
+                            open_usernames.len(),
+                            accounts.len()
+                        ));
+                        if configured > 0 && accounts.is_empty() {
+                            let hwnd = HWND(hwnd_raw as *mut _);
+                            unsafe {
+                                let _ = PostMessageW(
+                                    hwnd,
+                                    WM_LOGIN_ALL_ALREADY_OPEN,
+                                    WPARAM(0),
+                                    LPARAM(0),
+                                );
+                            }
+                        }
                         for (username, password) in &accounts {
                             launch_eq(Some(username), password.as_deref());
                         }
@@ -373,6 +401,10 @@ unsafe extern "system" fn wnd_proc(
                 "Stonemite v{} available — check for updates to install",
                 update_version_from_wparam(wparam)
             ));
+            LRESULT(0)
+        }
+        x if x == WM_LOGIN_ALL_ALREADY_OPEN => {
+            overlay::show_toast("All configured accounts are already open");
             LRESULT(0)
         }
         x if x == settings_dialog::WM_SETTINGS_CHANGED => {
@@ -705,6 +737,27 @@ unsafe fn unregister_hotkeys(hwnd: HWND) {
     }
 }
 
+struct LoginAllGuard;
+
+impl Drop for LoginAllGuard {
+    fn drop(&mut self) {
+        LOGIN_ALL_RUNNING.store(false, Ordering::SeqCst);
+    }
+}
+
+fn filter_open_accounts(
+    accounts: Vec<(String, Option<String>)>,
+    open_usernames: &HashSet<String>,
+) -> (Vec<(String, Option<String>)>, usize) {
+    let configured = accounts.len();
+    let accounts: Vec<_> = accounts
+        .into_iter()
+        .filter(|(username, _)| !open_usernames.contains(&username.trim().to_ascii_lowercase()))
+        .collect();
+    let skipped = configured - accounts.len();
+    (accounts, skipped)
+}
+
 fn launch_eq(username: Option<&str>, password: Option<&str>) {
     let cfg = config::Config::load();
     let eq_dir = cfg.eq_directory();
@@ -786,5 +839,26 @@ mod tests {
         } else {
             assert_eq!(tooltip, "Stonemite");
         }
+    }
+
+    #[test]
+    fn login_all_skips_open_accounts_case_insensitively_and_preserves_order() {
+        let accounts = vec![
+            ("First".to_owned(), Some("one".to_owned())),
+            ("SECOND".to_owned(), Some("two".to_owned())),
+            ("Third".to_owned(), Some("three".to_owned())),
+        ];
+        let open_usernames = HashSet::from(["second".to_owned()]);
+
+        let (accounts, skipped) = filter_open_accounts(accounts, &open_usernames);
+
+        assert_eq!(skipped, 1);
+        assert_eq!(
+            accounts
+                .into_iter()
+                .map(|(username, _)| username)
+                .collect::<Vec<_>>(),
+            vec!["First", "Third"]
+        );
     }
 }
