@@ -22,6 +22,7 @@ use crate::diagnostics::debug_log;
 pub(super) const TIMER_ID: usize = 43;
 pub(super) const ANIMATION_STEP_MS: u32 = 16;
 pub(super) const LABEL_MIN_ALPHA: u8 = 245;
+pub(super) const TRADE_COLOR: u32 = 0x0040B0EC;
 pub(super) const RESURRECTION_COLOR: u32 = 0x0089DF80;
 pub(super) const DEATH_COLOR: u32 = 0x006F82FF;
 
@@ -56,6 +57,7 @@ pub(super) enum Kind {
     Tell,
     GroupInvite,
     RaidInvite,
+    Trade,
     Resurrection,
     Death,
 }
@@ -65,6 +67,7 @@ pub(super) struct EnabledKinds {
     pub tells: bool,
     pub group_invites: bool,
     pub raid_invites: bool,
+    pub trade_proposals: bool,
     pub resurrections: bool,
     pub deaths: bool,
 }
@@ -75,6 +78,7 @@ impl EnabledKinds {
             Kind::Tell => self.tells,
             Kind::GroupInvite => self.group_invites,
             Kind::RaidInvite => self.raid_invites,
+            Kind::Trade => self.trade_proposals,
             Kind::Resurrection => self.resurrections,
             Kind::Death => self.deaths,
         }
@@ -102,6 +106,7 @@ impl NotificationCenter {
                 tells: cfg.notify_tells,
                 group_invites: cfg.notify_group_invites,
                 raid_invites: cfg.notify_raid_invites,
+                trade_proposals: cfg.notify_trade_proposals,
                 resurrections: cfg.notify_resurrections,
                 deaths: cfg.notify_deaths,
             },
@@ -124,6 +129,7 @@ impl NotificationCenter {
             tells: cfg.notify_tells,
             group_invites: cfg.notify_group_invites,
             raid_invites: cfg.notify_raid_invites,
+            trade_proposals: cfg.notify_trade_proposals,
             resurrections: cfg.notify_resurrections,
             deaths: cfg.notify_deaths,
         };
@@ -244,23 +250,32 @@ impl Notification {
             return false;
         }
         self.unread.pop();
-        self.finish_invite_preview()
+        self.finish_current_preview()
     }
 
     /// Clear every unread group invitation after EQ confirms that its pending
     /// invitation was accepted or declined. Unrelated unread events remain.
     fn resolve_group_invites(&mut self) -> bool {
-        let current_was_invite = self.kind == Kind::GroupInvite;
-        self.unread
-            .retain(|unread| unread.kind != Kind::GroupInvite);
-        if current_was_invite {
-            self.finish_invite_preview()
+        self.resolve_kind(Kind::GroupInvite)
+    }
+
+    /// Clear every unread trade proposal when EQ reports that the trade was
+    /// cancelled. Unrelated unread events remain.
+    fn resolve_trade_proposals(&mut self) -> bool {
+        self.resolve_kind(Kind::Trade)
+    }
+
+    fn resolve_kind(&mut self, kind: Kind) -> bool {
+        let current_was_kind = self.kind == kind;
+        self.unread.retain(|unread| unread.kind != kind);
+        if current_was_kind {
+            self.finish_current_preview()
         } else {
             self.unread.is_empty()
         }
     }
 
-    fn finish_invite_preview(&mut self) -> bool {
+    fn finish_current_preview(&mut self) -> bool {
         self.invite_actions = false;
         self.hovered_action = None;
         self.pressed_action = None;
@@ -917,7 +932,7 @@ pub(super) unsafe fn release_invite_action(
         .map(|action| (pid, action))
 }
 
-unsafe fn remove_group_invites(
+unsafe fn remove_matching_notifications(
     state: &mut OverlayState,
     pid: u32,
     remove_from: fn(&mut Notification) -> bool,
@@ -941,15 +956,27 @@ unsafe fn remove_group_invites(
 }
 
 unsafe fn dismiss_invite(state: &mut OverlayState, pid: u32) {
-    remove_group_invites(state, pid, Notification::dismiss_invite);
+    remove_matching_notifications(state, pid, Notification::dismiss_invite);
 }
 
 fn resolve_group_invites(state: &mut OverlayState, source: &crate::log_watcher::LogSource) {
+    resolve_for_source(state, source, Notification::resolve_group_invites);
+}
+
+fn resolve_trade_proposals(state: &mut OverlayState, source: &crate::log_watcher::LogSource) {
+    resolve_for_source(state, source, Notification::resolve_trade_proposals);
+}
+
+fn resolve_for_source(
+    state: &mut OverlayState,
+    source: &crate::log_watcher::LogSource,
+    remove_from: fn(&mut Notification) -> bool,
+) {
     let Some(pid) = pid_for_log_source(&state.clients.windows, source) else {
         return;
     };
     unsafe {
-        remove_group_invites(state, pid, Notification::resolve_group_invites);
+        remove_matching_notifications(state, pid, remove_from);
     }
 }
 
@@ -1035,15 +1062,21 @@ pub(super) fn apply_log_event(
     state: &mut OverlayState,
     event: &crate::log_watcher::ParsedLogEvent,
 ) {
-    if matches!(
-        &event.event,
+    match &event.event {
         crate::log_watcher::LogEvent::Notification(
             crate::log_watcher::NotificationEvent::GroupInviteAccepted
-                | crate::log_watcher::NotificationEvent::GroupInviteDeclined { .. }
-        )
-    ) {
-        resolve_group_invites(state, &event.source);
-        return;
+            | crate::log_watcher::NotificationEvent::GroupInviteDeclined { .. },
+        ) => {
+            resolve_group_invites(state, &event.source);
+            return;
+        }
+        crate::log_watcher::LogEvent::Notification(
+            crate::log_watcher::NotificationEvent::TradeCancelled,
+        ) => {
+            resolve_trade_proposals(state, &event.source);
+            return;
+        }
+        _ => {}
     }
 
     let (kind, text, color) = match &event.event {
@@ -1081,6 +1114,9 @@ pub(super) fn apply_log_event(
                 crate::eq_chat_colors::DEFAULT_RAID_COLOR,
             ),
         ),
+        crate::log_watcher::LogEvent::Notification(
+            crate::log_watcher::NotificationEvent::TradeProposed { trader },
+        ) => (Kind::Trade, format!("{trader} wants to trade"), TRADE_COLOR),
         crate::log_watcher::LogEvent::Notification(
             crate::log_watcher::NotificationEvent::ResurrectionOffered,
         ) => (
@@ -1159,6 +1195,8 @@ fn apply(
         VisualDelivery::Show => {}
     }
 
+    // EQ exposes Invite/Follow through its keymap, but not the trade window's
+    // accept button, so trade proposals intentionally remain non-actionable.
     let invite_actions = kind == Kind::GroupInvite && crate::control::invite_follow_available(pid);
     let now_ms = unsafe { windows::Win32::System::SystemInformation::GetTickCount64() };
     let previous = state.notification_center.entries.remove(&pid);
@@ -1339,6 +1377,48 @@ mod tests {
             true,
         );
         assert!(lone_invite.resolve_group_invites());
+    }
+
+    #[test]
+    fn trade_resolution_preserves_unrelated_unread_events() {
+        let tell_before = tell(1_000);
+        let trade = Notification::push(
+            Some(tell_before),
+            Kind::Trade,
+            "Honka wants to trade".to_owned(),
+            TRADE_COLOR,
+            2_000,
+            false,
+        );
+        let mut tell_after = Notification::push(
+            Some(trade),
+            Kind::Tell,
+            "Laika: still here".to_owned(),
+            0x00BE28BE,
+            3_000,
+            false,
+        );
+
+        assert!(!tell_after.resolve_trade_proposals());
+        assert_eq!(
+            tell_after
+                .unread
+                .iter()
+                .map(|unread| unread.kind)
+                .collect::<Vec<_>>(),
+            vec![Kind::Tell, Kind::Tell]
+        );
+        assert_eq!(tell_after.kind, Kind::Tell);
+
+        let mut lone_trade = Notification::push(
+            None,
+            Kind::Trade,
+            "Honka wants to trade".to_owned(),
+            TRADE_COLOR,
+            2_000,
+            false,
+        );
+        assert!(lone_trade.resolve_trade_proposals());
     }
 
     #[test]

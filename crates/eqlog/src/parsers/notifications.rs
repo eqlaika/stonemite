@@ -9,6 +9,10 @@ const GROUP_JOINED: &str = "You have joined the group.";
 const GROUP_DECLINE_PREFIX: &str = "You cancel the invitation to join ";
 const GROUP_DECLINE_SUFFIX: &str = "'s group.";
 const RAID_INVITE_MARKER: &str = " invites you to join a raid.";
+const TRADE_PROPOSAL_SUFFIX: &str = " is interested in making a trade.";
+const TRADE_CANCELLED_SUFFIX: &str = " has cancelled the trade.";
+const TRADE_CANCELLED: &str = "The trade has been cancelled.";
+const TRADE_CANCELLED_BY_YOU: &str = "You have cancelled the trade.";
 const RESURRECTION_OFFER: &str = "You have been offered a resurrection.";
 const RESURRECTION_STARTED: &str = "You are being resurrected...";
 const SLAIN_PREFIX: &str = "You have been slain by ";
@@ -59,6 +63,23 @@ impl DomainParser for NotificationParser {
                     inviter: Arc::from(inviter),
                 }));
             }
+            return Ok(());
+        }
+
+        if let Some(trader) = body.strip_suffix(TRADE_PROPOSAL_SUFFIX) {
+            if valid_player_name(trader) {
+                events.push(LogEvent::Notification(NotificationEvent::TradeProposed {
+                    trader: Arc::from(trader),
+                }));
+            }
+            return Ok(());
+        }
+
+        let named_trade_cancelled = body
+            .strip_suffix(TRADE_CANCELLED_SUFFIX)
+            .is_some_and(valid_player_name);
+        if named_trade_cancelled || matches!(body, TRADE_CANCELLED | TRADE_CANCELLED_BY_YOU) {
+            events.push(LogEvent::Notification(NotificationEvent::TradeCancelled));
             return Ok(());
         }
 
@@ -141,6 +162,27 @@ mod tests {
     }
 
     #[test]
+    fn parses_trade_proposals_and_cancellations() {
+        assert_eq!(
+            parse("Laika is interested in making a trade."),
+            vec![LogEvent::Notification(NotificationEvent::TradeProposed {
+                trader: Arc::from("Laika"),
+            })]
+        );
+        for body in [
+            "Laika has cancelled the trade.",
+            TRADE_CANCELLED,
+            TRADE_CANCELLED_BY_YOU,
+        ] {
+            assert_eq!(
+                parse(body),
+                vec![LogEvent::Notification(NotificationEvent::TradeCancelled)],
+                "failed to parse {body:?}"
+            );
+        }
+    }
+
+    #[test]
     fn parses_resurrection_offer_and_completion() {
         assert_eq!(
             parse(RESURRECTION_OFFER),
@@ -173,6 +215,9 @@ mod tests {
             "You invite Laika to join your group.",
             "Bob says, 'Laika invites you to join a group.'",
             " invites you to join a group.",
+            " is interested in making a trade.",
+            "Bob says, 'Laika is interested in making a trade.'",
+            "quoted text has cancelled the trade.",
             "You have been slain by !",
         ] {
             assert!(parse(body).is_empty(), "unexpected event for {body:?}");

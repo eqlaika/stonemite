@@ -45,6 +45,7 @@ const mockPayload: SettingsPayload = {
       tells: true,
       groupInvites: true,
       raidInvites: true,
+      tradeProposals: true,
       resurrections: true,
       deaths: true,
     },

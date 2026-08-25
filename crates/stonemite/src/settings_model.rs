@@ -160,6 +160,7 @@ pub struct NotificationSettings {
     pub tells: bool,
     pub group_invites: bool,
     pub raid_invites: bool,
+    pub trade_proposals: bool,
     pub resurrections: bool,
     pub deaths: bool,
 }
@@ -348,6 +349,7 @@ impl SettingsDraft {
                 tells: config.notify_tells,
                 group_invites: config.notify_group_invites,
                 raid_invites: config.notify_raid_invites,
+                trade_proposals: config.notify_trade_proposals,
                 resurrections: config.notify_resurrections,
                 deaths: config.notify_deaths,
             },
@@ -443,6 +445,7 @@ impl SettingsDraft {
             notify_tells: self.notifications.tells,
             notify_group_invites: self.notifications.group_invites,
             notify_raid_invites: self.notifications.raid_invites,
+            notify_trade_proposals: self.notifications.trade_proposals,
             notify_resurrections: self.notifications.resurrections,
             notify_deaths: self.notifications.deaths,
             broadcast_hotkey: self.broadcasting.toggle_hotkey,
@@ -663,6 +666,7 @@ mod tests {
         );
         assert_eq!(draft.pip.font_weight, LabelFontWeight::Bold);
         assert_eq!(draft.general.toast.duration_seconds, 2.0);
+        assert!(draft.notifications.trade_proposals);
     }
 
     #[test]

@@ -15,7 +15,12 @@ import type { NotificationSettings, SettingsDraft } from "../settings/types";
 import "./NotificationsPage.css";
 
 type EventSetting =
-  "tells" | "groupInvites" | "raidInvites" | "resurrections" | "deaths";
+  | "tells"
+  | "groupInvites"
+  | "raidInvites"
+  | "tradeProposals"
+  | "resurrections"
+  | "deaths";
 
 type PreviewStatus =
   | { state: "idle" }
@@ -30,6 +35,7 @@ const NOTIFICATION_EVENTS: ReadonlyArray<{
   { setting: "tells", label: "Tells" },
   { setting: "groupInvites", label: "Group invites" },
   { setting: "raidInvites", label: "Raid invites" },
+  { setting: "tradeProposals", label: "Trade requests" },
   { setting: "resurrections", label: "Resurrection offers" },
   { setting: "deaths", label: "Character deaths" },
 ];
@@ -144,7 +150,7 @@ export function NotificationsPage() {
         </fieldset>
         <p className="help-text">
           Chat events use the character&apos;s configured EverQuest color.
-          Resurrection and death use Stonemite status colors.
+          Trade, resurrection, and death use Stonemite status colors.
         </p>
       </FormSection>
 

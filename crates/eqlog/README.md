@@ -9,9 +9,11 @@ It provides:
 - canonical `RawLogLine` records with application-defined source attribution;
 - EQ timestamp/body decoding;
 - an extensible parser registry;
-- typed `/who` identity, pet ownership, incoming-Tell chat, invitation lifecycle, resurrection, and death events;
+- typed `/who` identity, pet ownership, incoming-Tell chat, invitation and trade lifecycles, resurrection, and death events;
 - persistent, case-insensitive per-character telemetry reduction;
 - explicit reset behavior for truncated, recreated, or removed sources.
+
+Trade lifecycle coverage recognizes EQ's incoming `is interested in making a trade` line and its named, system, and self-cancellation lines.
 
 It deliberately does **not** provide filesystem watching, file offsets, async runtimes, presentation, networking, or gameplay input. The host application owns those policies and supplies complete newline-terminated records in source order.
 

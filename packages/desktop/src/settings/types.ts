@@ -69,6 +69,7 @@ export interface NotificationSettings {
   tells: boolean;
   groupInvites: boolean;
   raidInvites: boolean;
+  tradeProposals: boolean;
   resurrections: boolean;
   deaths: boolean;
 }

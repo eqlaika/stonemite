@@ -83,6 +83,8 @@ pub enum NotificationEvent {
     GroupInviteAccepted,
     GroupInviteDeclined { inviter: Arc<str> },
     RaidInvite { inviter: Arc<str> },
+    TradeProposed { trader: Arc<str> },
+    TradeCancelled,
     ResurrectionOffered,
     CharacterSlain { killer: Arc<str> },
 }

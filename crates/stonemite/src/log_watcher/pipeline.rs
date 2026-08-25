@@ -197,6 +197,23 @@ mod tests {
             ) if inviter.as_ref() == "Laika"
         ));
 
+        let trade = pipeline
+            .process(raw("Kafka is interested in making a trade."))
+            .envelope;
+        assert!(matches!(
+            &trade.events[0].event,
+            eqlog::LogEvent::Notification(eqlog::NotificationEvent::TradeProposed { trader })
+                if trader.as_ref() == "Kafka"
+        ));
+
+        let trade_cancelled = pipeline
+            .process(raw("Kafka has cancelled the trade."))
+            .envelope;
+        assert!(matches!(
+            &trade_cancelled.events[0].event,
+            eqlog::LogEvent::Notification(eqlog::NotificationEvent::TradeCancelled)
+        ));
+
         let resurrection = pipeline
             .process(raw("You have been offered a resurrection."))
             .envelope;

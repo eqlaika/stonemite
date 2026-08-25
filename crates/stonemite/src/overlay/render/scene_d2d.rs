@@ -554,6 +554,34 @@ unsafe fn draw_notification_icon(
                 );
             }
         }
+        Kind::Trade => {
+            context.DrawLine(
+                icon_point(bounds, 3.0, 7.0),
+                icon_point(bounds, 21.0, 7.0),
+                &brush,
+                width,
+                None,
+            );
+            draw_path(context, &brush, width, |sink| {
+                begin(sink, bounds, 17.0, 3.0);
+                sink.AddLine(icon_point(bounds, 21.0, 7.0));
+                sink.AddLine(icon_point(bounds, 17.0, 11.0));
+                end(sink);
+            })?;
+            context.DrawLine(
+                icon_point(bounds, 21.0, 17.0),
+                icon_point(bounds, 3.0, 17.0),
+                &brush,
+                width,
+                None,
+            );
+            draw_path(context, &brush, width, |sink| {
+                begin(sink, bounds, 7.0, 13.0);
+                sink.AddLine(icon_point(bounds, 3.0, 17.0));
+                sink.AddLine(icon_point(bounds, 7.0, 21.0));
+                end(sink);
+            })?;
+        }
         Kind::Resurrection => {
             draw_path(context, &brush, width, |sink| {
                 begin(sink, bounds, 12.0, 21.0);

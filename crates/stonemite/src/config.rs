@@ -268,6 +268,9 @@ pub struct Config {
     /// Notify for incoming raid invitations.
     #[serde(default = "default_notification_event_enabled")]
     pub notify_raid_invites: bool,
+    /// Notify when another player proposes a trade.
+    #[serde(default = "default_notification_event_enabled")]
+    pub notify_trade_proposals: bool,
     /// Notify when a resurrection is offered.
     #[serde(default = "default_notification_event_enabled")]
     pub notify_resurrections: bool,
@@ -390,6 +393,7 @@ impl Default for Config {
             notify_tells: default_notification_event_enabled(),
             notify_group_invites: default_notification_event_enabled(),
             notify_raid_invites: default_notification_event_enabled(),
+            notify_trade_proposals: default_notification_event_enabled(),
             notify_resurrections: default_notification_event_enabled(),
             notify_deaths: default_notification_event_enabled(),
             broadcast_hotkey: default_broadcast_hotkey(),
@@ -780,6 +784,7 @@ mod tests {
         assert!(config.notify_tells);
         assert!(config.notify_group_invites);
         assert!(config.notify_raid_invites);
+        assert!(config.notify_trade_proposals);
         assert!(config.notify_resurrections);
         assert!(config.notify_deaths);
         assert!(config.box_order.is_empty());

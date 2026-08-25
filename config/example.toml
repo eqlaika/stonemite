@@ -48,13 +48,14 @@ pip_edge = "right"
 
 # Box notifications: highlight the receiving background PiP and play one of
 # the bundled EQ default audio-trigger sounds. Chat events use each character's
-# configured EQ channel color; system events use Stonemite status colors.
+# configured EQ channel color; trade and other system events use Stonemite status colors.
 # tell_visual_enabled = true
 # tell_sound_enabled = true
 # tell_sound = "tell.wav"
 # notify_tells = true
 # notify_group_invites = true
 # notify_raid_invites = true
+# notify_trade_proposals = true
 # notify_resurrections = true
 # notify_deaths = true
 
