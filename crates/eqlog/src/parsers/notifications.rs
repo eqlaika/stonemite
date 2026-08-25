@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{CharacterEvent, DomainParser, LogEvent, NotificationEvent, ParserError, RawLogLine};
+use crate::{DomainParser, LogEvent, NotificationEvent, ParserError, RawLogLine};
 
 use super::valid_player_name;
 
@@ -14,7 +14,6 @@ const TRADE_CANCELLED_SUFFIX: &str = " has cancelled the trade.";
 const TRADE_CANCELLED: &str = "The trade has been cancelled.";
 const TRADE_CANCELLED_BY_YOU: &str = "You have cancelled the trade.";
 const RESURRECTION_OFFER: &str = "You have been offered a resurrection.";
-const RESURRECTION_STARTED: &str = "You are being resurrected...";
 const SLAIN_PREFIX: &str = "You have been slain by ";
 
 pub(super) struct NotificationParser;
@@ -90,17 +89,11 @@ impl DomainParser for NotificationParser {
             return Ok(());
         }
 
-        if body == RESURRECTION_STARTED {
-            events.push(LogEvent::Character(CharacterEvent::Revived));
-            return Ok(());
-        }
-
         if let Some(killer) = body
             .strip_prefix(SLAIN_PREFIX)
             .and_then(|remainder| remainder.strip_suffix('!'))
             .filter(|killer| !killer.trim().is_empty())
         {
-            events.push(LogEvent::Character(CharacterEvent::Died));
             events.push(LogEvent::Notification(NotificationEvent::CharacterSlain {
                 killer: Arc::from(killer),
             }));
@@ -183,16 +176,12 @@ mod tests {
     }
 
     #[test]
-    fn parses_resurrection_offer_and_completion() {
+    fn parses_resurrection_offer() {
         assert_eq!(
             parse(RESURRECTION_OFFER),
             vec![LogEvent::Notification(
                 NotificationEvent::ResurrectionOffered
             )]
-        );
-        assert_eq!(
-            parse(RESURRECTION_STARTED),
-            vec![LogEvent::Character(CharacterEvent::Revived)]
         );
     }
 
@@ -201,7 +190,7 @@ mod tests {
         assert_eq!(
             parse("You have been slain by a War Swarm invader!"),
             vec![
-                LogEvent::Character(CharacterEvent::Died),
+                LogEvent::Character(crate::CharacterEvent::Died),
                 LogEvent::Notification(NotificationEvent::CharacterSlain {
                     killer: Arc::from("a War Swarm invader"),
                 }),

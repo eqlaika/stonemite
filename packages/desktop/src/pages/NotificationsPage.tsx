@@ -5,6 +5,7 @@ import {
   CheckboxOption,
   Field,
   FormSection,
+  RangeInput,
   SelectInput,
   Toggle,
 } from "../components/Controls";
@@ -42,6 +43,56 @@ const NOTIFICATION_EVENTS: ReadonlyArray<{
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function CombatAwarenessControls({
+  value,
+  onChange,
+}: {
+  value: NotificationSettings;
+  onChange: (update: Partial<NotificationSettings>) => void;
+}) {
+  return (
+    <>
+      <Toggle
+        label="Show combat awareness"
+        description="Use red and white hit frames, blood-red damage feedback, and persistent problem states on background PiPs."
+        checked={value.combatAwarenessEnabled}
+        onChange={(combatAwarenessEnabled) =>
+          onChange({ combatAwarenessEnabled })
+        }
+      />
+      <fieldset
+        className="combat-awareness-controls"
+        disabled={!value.combatAwarenessEnabled}
+        aria-label="Combat awareness timing"
+      >
+        <Field
+          label="Attack highlight duration"
+          description="How long a successful melee or archery hit keeps the red combat frame visible."
+          descriptionId="combat-hit-duration-help"
+        >
+          <RangeInput
+            value={value.combatHitDurationSeconds}
+            min={0.5}
+            max={10}
+            step={0.5}
+            suffix=" s"
+            ariaLabel="Attack highlight duration"
+            ariaDescribedBy="combat-hit-duration-help"
+            onChange={(combatHitDurationSeconds) =>
+              onChange({ combatHitDurationSeconds })
+            }
+          />
+        </Field>
+      </fieldset>
+      <p className="help-text">
+        Range and line-of-sight warnings clear after a successful hit or a short
+        quiet period. Melody and death clear when EverQuest logs recovery.
+        Combat awareness never plays notification sounds.
+      </p>
+    </>
+  );
 }
 
 export function NotificationsPage() {
@@ -107,7 +158,7 @@ export function NotificationsPage() {
   return (
     <SettingsPage
       title="Notifications"
-      description="Choose which box events are visible and audible."
+      description="Choose how background boxes show combat and notable events."
     >
       <FormSection
         title="Visual highlight"
@@ -121,6 +172,21 @@ export function NotificationsPage() {
             updateNotifications((notifications) => ({
               ...notifications,
               visualEnabled,
+            }))
+          }
+        />
+      </FormSection>
+
+      <FormSection
+        title="Combat awareness"
+        description="Show immediate combat activity and problems without creating unread notifications."
+      >
+        <CombatAwarenessControls
+          value={draft.notifications}
+          onChange={(update) =>
+            updateNotifications((notifications) => ({
+              ...notifications,
+              ...update,
             }))
           }
         />

@@ -238,6 +238,38 @@ mod tests {
         )));
         assert_eq!(envelope.telemetry_changes.len(), 1);
         assert!(envelope.telemetry_changes[0].telemetry.dead);
+
+        let returned = pipeline
+            .process(raw("You have entered The Nexus."))
+            .envelope;
+        assert_eq!(returned.telemetry_changes.len(), 1);
+        assert!(!returned.telemetry_changes[0].telemetry.dead);
+    }
+
+    #[test]
+    fn combat_activity_and_positioning_keep_source_attribution() {
+        let (sender, _) = broadcast::channel(8);
+        let mut pipeline = LogPipeline::new(sender);
+
+        let hit = pipeline
+            .process(raw("You slash a wan ghoul knight for 28 points of damage."))
+            .envelope;
+        assert_eq!(hit.raw.source.id.as_str(), "client-1");
+        assert!(matches!(
+            hit.events[0].event,
+            eqlog::LogEvent::Combat(eqlog::CombatEvent::WeaponDamageDealt)
+        ));
+
+        let blocked = pipeline
+            .process(raw("You cannot see your target."))
+            .envelope;
+        assert!(matches!(
+            blocked.events[0].event,
+            eqlog::LogEvent::Combat(eqlog::CombatEvent::AttackBlocked(
+                eqlog::AttackProblem::LineOfSight
+            ))
+        ));
+        assert!(blocked.telemetry_changes.is_empty());
     }
 
     #[test]

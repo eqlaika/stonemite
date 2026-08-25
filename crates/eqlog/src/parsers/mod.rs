@@ -1,4 +1,6 @@
+mod character;
 mod chat;
+mod combat;
 mod identity;
 mod notifications;
 mod pets;
@@ -30,7 +32,9 @@ pub struct ParserRegistry {
 impl Default for ParserRegistry {
     fn default() -> Self {
         let mut registry = Self::empty();
+        registry.register(character::CharacterParser);
         registry.register(chat::ChatParser);
+        registry.register(combat::CombatParser);
         registry.register(identity::IdentityParser::default());
         registry.register(notifications::NotificationParser);
         registry.register(pets::PetParser);

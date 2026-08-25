@@ -18,6 +18,9 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_TRIMMING_GRANULARITY_CHARACTER,
 };
 
+use super::super::combat_awareness::{
+    CombatBorderLayout, CombatStatus, CombatStatusLayout, CombatVisualLayout,
+};
 use super::super::labels::{Color, LabelLayout, Rect};
 use super::super::notifications::{
     InviteAction, Kind, NotificationBorderLayout, NotificationContentLayout,
@@ -62,8 +65,16 @@ pub(super) unsafe fn draw_pip_scene(
         let brush = solid_brush(context, dim)?;
         context.FillRectangle(&d2d_rect(layout.content), &brush);
     }
+    if let Some(combat) = &layout.combat {
+        draw_combat_effects(context, combat)?;
+    }
     for frame in &layout.indicator_frames {
         fill_inward_frame(context, frame.bounds, SceneColor::opaque(frame.color))?;
+    }
+    if let Some(combat) = &layout.combat {
+        if let Some(border) = &combat.border {
+            draw_combat_border(context, border)?;
+        }
     }
     if let Some(border) = &layout.notification_border {
         draw_notification_border(context, border)?;
@@ -78,7 +89,15 @@ pub(super) unsafe fn draw_pip_scene(
             draw_notification_content(context, text, snapshot, content, scene.scale)?;
         }
         Ok(())
-    })
+    })?;
+    if let Some(status) = layout
+        .combat
+        .as_ref()
+        .and_then(|combat| combat.status.as_ref())
+    {
+        draw_combat_status(context, text, status, scene.scale)?;
+    }
+    Ok(())
 }
 
 pub(super) unsafe fn draw_status_banner(
@@ -368,6 +387,74 @@ unsafe fn draw_timer(
         foreground,
         DWRITE_TEXT_ALIGNMENT_TRAILING,
         false,
+    )
+}
+
+unsafe fn draw_combat_effects(
+    context: &ID2D1DeviceContext,
+    layout: &CombatVisualLayout,
+) -> WindowsResult<()> {
+    if let Some(fill) = layout.dead_tint {
+        fill_rect(
+            context,
+            fill.bounds,
+            SceneColor::with_alpha(fill.color, fill.alpha),
+        )?;
+    }
+    if let Some(fill) = layout.blood_tint {
+        fill_rect(
+            context,
+            fill.bounds,
+            SceneColor::with_alpha(fill.color, fill.alpha),
+        )?;
+    }
+    for frame in &layout.blood_frames {
+        fill_inward_frame(
+            context,
+            frame.bounds,
+            SceneColor::with_alpha(frame.color, frame.alpha),
+        )?;
+    }
+    Ok(())
+}
+
+unsafe fn draw_combat_border(
+    context: &ID2D1DeviceContext,
+    layout: &CombatBorderLayout,
+) -> WindowsResult<()> {
+    for frame in &layout.frames {
+        fill_inward_frame(context, *frame, SceneColor::opaque(layout.color))?;
+    }
+    Ok(())
+}
+
+unsafe fn draw_combat_status(
+    context: &ID2D1DeviceContext,
+    text: &TextResources,
+    layout: &CombatStatusLayout,
+    scale: f64,
+) -> WindowsResult<()> {
+    fill_rounded(
+        context,
+        layout.surface,
+        layout.radius,
+        SceneColor::with_alpha(layout.surface_color, layout.alpha),
+    )?;
+    let role = if layout.status == CombatStatus::Dead {
+        UiTextRole::CombatDead
+    } else {
+        UiTextRole::CombatStatus
+    };
+    draw_text(
+        context,
+        text,
+        layout.status.label(),
+        &role.font(),
+        role.height(scale, 0),
+        layout.text,
+        SceneColor::opaque(layout.text_color),
+        DWRITE_TEXT_ALIGNMENT_CENTER,
+        true,
     )
 }
 

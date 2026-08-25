@@ -10,6 +10,7 @@ use super::appearance::{
 };
 use super::client_controller::foreground_event_proc;
 use super::clients::{apply_preferred_box_order, ClientRegistry};
+use super::combat_awareness::{self, CombatAwarenessCenter};
 use super::geometry::{client_animations_enabled, dpi_scale};
 use super::hosts::rebuild_thumbnails;
 use super::in_game_button::{create_tooltip, wnd_proc as stonemite_button_wnd_proc};
@@ -299,6 +300,7 @@ unsafe fn initialize_state() -> (OverlayState, HWND) {
         interaction: InteractionState::new(),
         window_styles: WindowStyleState::new(cfg.hide_from_alt_tab),
         telemetry: TelemetryState::new(&cfg),
+        combat_awareness: CombatAwarenessCenter::new(&cfg, client_animations_enabled()),
         notification_center: NotificationCenter::new(&cfg, client_animations_enabled()),
         timers: TimerOverlayState::default(),
     };
@@ -341,10 +343,16 @@ pub(super) fn force_rebuild() {
         } else if s.window_styles.hide_background() {
             s.window_styles.apply(&s.clients);
         }
-        // Reload notification config and the EQ profile resolver.
+        // Reload notification and combat-awareness config plus the EQ profile resolver.
         let notification_selection_changed = s
             .notification_center
             .apply_config(&cfg, client_animations_enabled());
+        let combat_appearance_changed = s
+            .combat_awareness
+            .apply_config(&cfg, client_animations_enabled());
+        if combat_appearance_changed && !cfg.combat_awareness_enabled {
+            let _ = KillTimer(s.presentation.active_label_hwnd, combat_awareness::TIMER_ID);
+        }
         s.telemetry.set_eq_dir(&cfg);
         if !s.notification_center.visual_enabled || notification_selection_changed {
             s.notification_center.entries.clear();
@@ -416,6 +424,7 @@ pub(super) fn cleanup() {
             let _ = DestroyWindow(hwnd);
         }
         let _ = KillTimer(s.presentation.active_label_hwnd, notifications::TIMER_ID);
+        let _ = KillTimer(s.presentation.active_label_hwnd, combat_awareness::TIMER_ID);
         let _ = KillTimer(s.presentation.active_label_hwnd, TIMER_OVERLAY_TICK);
         let _ = DestroyWindow(s.presentation.menu_owner_hwnd);
         if !s.presentation.stonemite_button.tooltip_hwnd.is_invalid() {

@@ -49,6 +49,8 @@ const mockPayload: SettingsPayload = {
       tradeProposals: true,
       resurrections: true,
       deaths: true,
+      combatAwarenessEnabled: true,
+      combatHitDurationSeconds: 3,
     },
     hotkeys: {
       swapHotkeys: [

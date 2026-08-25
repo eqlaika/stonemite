@@ -44,6 +44,7 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
+use super::super::combat_awareness::CombatStatus;
 use super::super::labels::{required_width, FontSpec, LabelModel, LabelStyle, LabelTheme};
 use super::super::scenes::{
     ActiveLabelScene, PipScene, StatusBannerScene, StonemiteButtonScene, ToastScene, UiTextRole,
@@ -836,7 +837,18 @@ impl Compositor {
         } else {
             0
         };
-        let layout = scene.layout(label_width, preview_width);
+        let combat_status_width =
+            if let Some(status) = scene.combat.and_then(|combat| combat.status()) {
+                let role = if status == CombatStatus::Dead {
+                    UiTextRole::CombatDead
+                } else {
+                    UiTextRole::CombatStatus
+                };
+                self.measure_text(status.label(), &role.font(), role.height(scene.scale, 0))?
+            } else {
+                0
+            };
+        let layout = scene.layout(label_width, preview_width, combat_status_width);
         let icon = match scene.label.model.class {
             Some(class) => self.class_icon_bitmap(class)?,
             None => None,
@@ -1548,6 +1560,7 @@ mod tests {
                 scale: 1.0,
                 label,
                 timer: Some(timer),
+                combat: None,
                 notification: Some(notification.clone()),
                 interaction: PipInteractionScene {
                     hovered: true,
@@ -1561,7 +1574,7 @@ mod tests {
                     UiTextRole::NotificationPreview.height(1.0, 0),
                 )
                 .expect("measure notification text");
-            let pip_layout = pip.layout(240, preview_width);
+            let pip_layout = pip.layout(240, preview_width, 0);
             super::super::scene_d2d::draw_pip_scene(
                 &graphics.d2d_context,
                 &text,

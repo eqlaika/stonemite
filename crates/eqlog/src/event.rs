@@ -7,6 +7,7 @@ pub enum LogEventDomain {
     Identity,
     Pets,
     Character,
+    Combat,
     Chat,
     Notification,
 }
@@ -24,6 +25,7 @@ pub enum LogEvent {
     Identity(IdentityEvent),
     Pet(PetEvent),
     Character(CharacterEvent),
+    Combat(CombatEvent),
     Chat(ChatEvent),
     Notification(NotificationEvent),
 }
@@ -34,6 +36,7 @@ impl LogEvent {
             Self::Identity(_) => LogEventDomain::Identity,
             Self::Pet(_) => LogEventDomain::Pets,
             Self::Character(_) => LogEventDomain::Character,
+            Self::Combat(_) => LogEventDomain::Combat,
             Self::Chat(_) => LogEventDomain::Chat,
             Self::Notification(_) => LogEventDomain::Notification,
         }
@@ -64,6 +67,22 @@ pub struct WhoResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PetEvent {
     OwnershipClaimed { pet: Arc<str>, owner: Arc<str> },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttackProblem {
+    OutOfRange,
+    TooClose,
+    LineOfSight,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CombatEvent {
+    WeaponDamageDealt,
+    DamageTaken,
+    AttackBlocked(AttackProblem),
+    SongStarted,
+    SongInterrupted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

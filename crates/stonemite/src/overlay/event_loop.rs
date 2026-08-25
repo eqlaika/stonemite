@@ -7,6 +7,7 @@ use super::activation::target_has_keyboard_focus;
 use super::clients::{
     apply_preferred_box_order, focused_foreground_pid, next_available_number, MAX_PIPS,
 };
+use super::combat_awareness;
 use super::control_bridge::{publish, sync_mouse_eligibility};
 use super::geometry::dpi_scale;
 use super::hosts::{rebuild_thumbnails, update_active_label};
@@ -127,6 +128,7 @@ unsafe fn poll_inner(s: &mut OverlayState) {
             last_closed_label = Some(format!("Window #{} closed", w.number));
         }
         s.clients.remove(*pid);
+        s.combat_awareness.remove(*pid);
         s.notification_center.entries.remove(pid);
     }
     if let Some(label) = last_closed_label {
@@ -254,6 +256,7 @@ fn apply_log_batches(s: &mut OverlayState, batches: Vec<log_watcher::LogBatch>) 
                 .apply_activations(&envelope.trigger_activations, now);
             for event in envelope.events.iter() {
                 notifications::apply_log_event(s, event);
+                combat_awareness::apply_log_event(s, event);
             }
             for change in envelope.telemetry_changes.iter() {
                 class_changed |= s.telemetry.apply_change(&mut s.clients, change);

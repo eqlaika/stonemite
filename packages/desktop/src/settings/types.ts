@@ -73,6 +73,8 @@ export interface NotificationSettings {
   tradeProposals: boolean;
   resurrections: boolean;
   deaths: boolean;
+  combatAwarenessEnabled: boolean;
+  combatHitDurationSeconds: number;
 }
 
 export interface BoxCycle {

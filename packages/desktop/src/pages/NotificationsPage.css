@@ -1,8 +1,13 @@
-.notification-events {
+.notification-events,
+.combat-awareness-controls {
   min-width: 0;
   margin: 0;
   padding: 0;
   border: 0;
+}
+
+.combat-awareness-controls:disabled {
+  opacity: 0.55;
 }
 
 .notification-events legend {

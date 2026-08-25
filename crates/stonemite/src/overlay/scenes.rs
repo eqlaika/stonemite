@@ -3,6 +3,7 @@
 //! These are role-specific snapshots, not a generic drawing API. Win32 owns
 //! placement and interaction; the Direct2D compositor consumes complete scenes.
 
+use super::combat_awareness::{CombatVisualLayout, CombatVisualSnapshot};
 use super::labels::{Color, FontSpec, LabelModel, LabelStyle, LabelTheme, Rect};
 use super::notifications::{
     NotificationBorderLayout, NotificationContentLayout, NotificationVisualSnapshot,
@@ -38,6 +39,8 @@ pub(super) enum UiTextRole {
     Timer,
     NotificationPreview,
     InviteButton,
+    CombatStatus,
+    CombatDead,
     StatusBanner,
     Toast,
 }
@@ -49,7 +52,8 @@ impl UiTextRole {
             scale_percent: 100,
             weight: match self {
                 Self::Timer | Self::NotificationPreview | Self::InviteButton | Self::Toast => 700,
-                Self::StatusBanner => 900,
+                Self::CombatStatus => 800,
+                Self::CombatDead | Self::StatusBanner => 900,
             },
         }
     }
@@ -57,7 +61,9 @@ impl UiTextRole {
     pub(super) fn height(self, scale: f64, role_height: i32) -> i32 {
         let logical = match self {
             Self::Timer | Self::InviteButton => 16,
+            Self::CombatStatus => 18,
             Self::NotificationPreview => 26,
+            Self::CombatDead => 32,
             Self::StatusBanner | Self::Toast => role_height,
         };
         (f64::from(logical) * scale).round().max(1.0) as i32
@@ -96,6 +102,7 @@ pub(super) struct PipScene<'a> {
     pub scale: f64,
     pub label: LabelScene<'a>,
     pub timer: Option<TimerScene<'a>>,
+    pub combat: Option<CombatVisualSnapshot>,
     pub notification: Option<NotificationVisualSnapshot>,
     pub interaction: PipInteractionScene,
 }
@@ -115,6 +122,7 @@ pub(super) struct PipSceneLayout {
     pub indicator_frames: Vec<FrameVisual>,
     pub label_bounds: Rect,
     pub timer: Option<TimerLayout>,
+    pub combat: Option<CombatVisualLayout>,
     pub notification_border: Option<NotificationBorderLayout>,
     pub notification_content: Option<NotificationContentLayout>,
 }
@@ -132,6 +140,7 @@ impl PipScene<'_> {
         &self,
         measured_label_width: i32,
         measured_preview_text_width: i32,
+        measured_combat_status_width: i32,
     ) -> PipSceneLayout {
         let border = self.border_width.max(0);
         let canvas = self.canvas;
@@ -160,8 +169,23 @@ impl PipScene<'_> {
         } else {
             Vec::new()
         };
-        let notification_border = (!self.interaction.reorder_dragging
-            && !self.interaction.edit_mode)
+        let chrome_allowed = !self.interaction.reorder_dragging && !self.interaction.edit_mode;
+        let combat_claims_border = self.combat.is_some_and(|combat| combat.claims_border());
+        let combat = chrome_allowed
+            .then(|| {
+                self.combat.map(|combat| {
+                    combat.layout(
+                        canvas,
+                        content,
+                        border,
+                        self.scale,
+                        measured_combat_status_width,
+                        combat_claims_border || self.notification.is_none(),
+                    )
+                })
+            })
+            .flatten();
+        let notification_border = (chrome_allowed && !combat_claims_border)
             .then(|| {
                 self.notification
                     .as_ref()
@@ -184,6 +208,7 @@ impl PipScene<'_> {
             indicator_frames,
             label_bounds: stack.label_bounds,
             timer: stack.timer,
+            combat,
             notification_border,
             notification_content,
         }
@@ -389,10 +414,11 @@ mod tests {
                 remaining_text: "9.9s",
                 progress: 0.25,
             }),
+            combat: None,
             notification: None,
             interaction: PipInteractionScene::default(),
         };
-        let layout = scene.layout(220, 0);
+        let layout = scene.layout(220, 0, 0);
         assert_eq!(scene.content_alpha(), 204);
         assert_eq!(layout.content, Rect::new(3, 3, 317, 177));
         assert_eq!(layout.label_bounds, Rect::new(3, 3, 223, 51));
@@ -423,6 +449,7 @@ mod tests {
                 alpha: 100,
             },
             timer: None,
+            combat: None,
             notification: Some(NotificationVisualSnapshot {
                 kind: super::super::notifications::Kind::Tell,
                 text: "hello".to_owned(),

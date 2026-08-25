@@ -554,6 +554,7 @@ pub(super) unsafe fn render_pip_surface_for_size(
             progress: *progress,
         });
     let now_ms = windows::Win32::System::SystemInformation::GetTickCount64();
+    let combat = s.combat_awareness.snapshot(pip.pid, now_ms);
     let notification = s
         .notification_center
         .entries
@@ -596,6 +597,7 @@ pub(super) unsafe fn render_pip_surface_for_size(
             alpha: s.presentation.label_alpha,
         },
         timer,
+        combat,
         notification,
         interaction: PipInteractionScene {
             hovered: pip.hovered,

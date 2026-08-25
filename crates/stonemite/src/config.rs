@@ -16,6 +16,9 @@ pub const DEFAULT_PIP_LABEL_FONT_SCALE: u32 = 100;
 pub const MIN_PIP_LABEL_FONT_SCALE: u32 = 60;
 pub const MAX_PIP_LABEL_FONT_SCALE: u32 = 120;
 pub const MAX_PIP_LABEL_FONT_FAMILY_LEN: usize = 31;
+pub const DEFAULT_COMBAT_HIT_DURATION_SECONDS: f32 = 3.0;
+pub const MIN_COMBAT_HIT_DURATION_SECONDS: f32 = 0.5;
+pub const MAX_COMBAT_HIT_DURATION_SECONDS: f32 = 10.0;
 pub const MAX_BOX_CYCLES: usize = 16;
 
 /// Screen edge where the PiP strip is anchored.
@@ -315,6 +318,12 @@ pub struct Config {
     /// Notify when a character dies.
     #[serde(default = "default_notification_event_enabled")]
     pub notify_deaths: bool,
+    /// Show log-derived combat activity and recoverable problems on background PiPs.
+    #[serde(default = "default_combat_awareness_enabled")]
+    pub combat_awareness_enabled: bool,
+    /// Seconds that recent outgoing weapon damage keeps the red combat frame visible.
+    #[serde(default = "default_combat_hit_duration_seconds")]
+    pub combat_hit_duration_seconds: f32,
     /// Enable toast notifications. Default: true.
     #[serde(default = "default_toast_enabled")]
     pub toast_enabled: bool,
@@ -388,6 +397,14 @@ fn default_notification_event_enabled() -> bool {
     true
 }
 
+fn default_combat_awareness_enabled() -> bool {
+    true
+}
+
+fn default_combat_hit_duration_seconds() -> f32 {
+    DEFAULT_COMBAT_HIT_DURATION_SECONDS
+}
+
 fn default_toast_enabled() -> bool {
     true
 }
@@ -441,6 +458,8 @@ impl Default for Config {
             notify_trade_proposals: default_notification_event_enabled(),
             notify_resurrections: default_notification_event_enabled(),
             notify_deaths: default_notification_event_enabled(),
+            combat_awareness_enabled: default_combat_awareness_enabled(),
+            combat_hit_duration_seconds: default_combat_hit_duration_seconds(),
             broadcast_hotkey: default_broadcast_hotkey(),
             mouse_clutch_key: default_mouse_clutch_key(),
             broadcast_filter_mode: default_broadcast_filter_mode(),
@@ -513,6 +532,21 @@ impl Config {
 
     pub fn effective_pip_label_font_weight(&self) -> LabelFontWeight {
         self.pip_label_font_weight.unwrap_or_default()
+    }
+
+    pub fn effective_combat_hit_duration_seconds(&self) -> f32 {
+        if self.combat_hit_duration_seconds.is_finite() {
+            self.combat_hit_duration_seconds.clamp(
+                MIN_COMBAT_HIT_DURATION_SECONDS,
+                MAX_COMBAT_HIT_DURATION_SECONDS,
+            )
+        } else {
+            DEFAULT_COMBAT_HIT_DURATION_SECONDS
+        }
+    }
+
+    pub fn effective_combat_hit_duration_ms(&self) -> u64 {
+        (self.effective_combat_hit_duration_seconds() * 1000.0).round() as u64
     }
 
     /// Return the config directory: %APPDATA%\Stonemite\
@@ -934,6 +968,11 @@ mod tests {
         assert!(config.notify_trade_proposals);
         assert!(config.notify_resurrections);
         assert!(config.notify_deaths);
+        assert!(config.combat_awareness_enabled);
+        assert_eq!(
+            config.effective_combat_hit_duration_seconds(),
+            DEFAULT_COMBAT_HIT_DURATION_SECONDS
+        );
         assert!(config.box_order.is_empty());
         assert!(config.box_cycles.is_empty());
         assert!(config.trushar.enabled);
@@ -1046,6 +1085,24 @@ box_cycles = [
         };
         assert_eq!(low.effective_pip_opacity(), MIN_PIP_OPACITY);
         assert_eq!(high.effective_pip_opacity(), MAX_PIP_OPACITY);
+    }
+
+    #[test]
+    fn combat_awareness_defaults_on_and_clamps_hit_duration() {
+        let default = Config::default();
+        assert!(default.combat_awareness_enabled);
+        assert_eq!(default.effective_combat_hit_duration_ms(), 3_000);
+
+        let low = Config {
+            combat_hit_duration_seconds: 0.1,
+            ..Config::default()
+        };
+        let high = Config {
+            combat_hit_duration_seconds: 30.0,
+            ..Config::default()
+        };
+        assert_eq!(low.effective_combat_hit_duration_seconds(), 0.5);
+        assert_eq!(high.effective_combat_hit_duration_seconds(), 10.0);
     }
 
     #[test]

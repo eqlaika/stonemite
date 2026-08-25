@@ -13,6 +13,7 @@ use super::appearance::BORDER_WIDTH;
 use super::clients::focused_foreground_pid;
 use super::geometry::scale as pixels;
 use super::labels::{Color, LabelStyle, Rect};
+use super::log_sources::pid_for_log_source;
 use super::scene_layout::pip_content_stack_layout;
 use super::state::OverlayState;
 use super::surfaces::request_redraw;
@@ -1011,31 +1012,6 @@ pub(super) unsafe fn execute_invite_action(
         },
         InviteAction::Dismiss => dismiss_invite(state, pid),
     }
-}
-
-fn pid_for_log_source(
-    windows: &[crate::eq_windows::EqWindow],
-    source: &crate::log_watcher::LogSource,
-) -> Option<u32> {
-    if let Some(pid) = source.id.as_str().strip_prefix("pid:") {
-        return pid
-            .parse()
-            .ok()
-            .filter(|pid| windows.iter().any(|window| window.pid == *pid));
-    }
-
-    let mut matches = windows.iter().filter(|window| {
-        window
-            .character
-            .as_deref()
-            .is_some_and(|character| character.eq_ignore_ascii_case(&source.character))
-            && window
-                .server
-                .as_deref()
-                .is_some_and(|server| server.eq_ignore_ascii_case(&source.server))
-    });
-    let pid = matches.next()?.pid;
-    matches.next().is_none().then_some(pid)
 }
 
 fn resolve_eq_color(

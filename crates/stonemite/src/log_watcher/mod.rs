@@ -27,9 +27,10 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_USER};
 pub use diagnostic::{DiagnosticKind, LogDiagnostic};
 #[allow(unused_imports)]
 pub use eqlog::{
-    CharacterEvent, CharacterKey, CharacterTelemetry, ChatEvent, DecodedRawLogLine, EqTimestamp,
-    IdentityEvent, IncomingTell, LogEvent, LogEventDomain, LogSource, LogSourceId,
-    NotificationEvent, ParsedLogEvent, PetEvent, RawLogLine, TelemetryChange, WhoResult,
+    AttackProblem, CharacterEvent, CharacterKey, CharacterTelemetry, ChatEvent, CombatEvent,
+    DecodedRawLogLine, EqTimestamp, IdentityEvent, IncomingTell, LogEvent, LogEventDomain,
+    LogSource, LogSourceId, NotificationEvent, ParsedLogEvent, PetEvent, RawLogLine,
+    TelemetryChange, WhoResult,
 };
 pub use pipeline::LogEnvelope;
 #[allow(unused_imports)]
