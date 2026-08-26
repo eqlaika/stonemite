@@ -21,7 +21,9 @@ type EventSetting =
   | "raidInvites"
   | "tradeProposals"
   | "resurrections"
-  | "deaths";
+  | "deaths"
+  | "levelGains"
+  | "aaGains";
 
 type PreviewStatus =
   | { state: "idle" }
@@ -39,10 +41,66 @@ const NOTIFICATION_EVENTS: ReadonlyArray<{
   { setting: "tradeProposals", label: "Trade requests" },
   { setting: "resurrections", label: "Resurrection offers" },
   { setting: "deaths", label: "Character deaths" },
+  { setting: "levelGains", label: "Level gains" },
+  { setting: "aaGains", label: "AA point gains" },
 ];
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function NotificationEventControls({
+  value,
+  onChange,
+}: {
+  value: NotificationSettings;
+  onChange: (update: Partial<NotificationSettings>) => void;
+}) {
+  return (
+    <>
+      <fieldset className="notification-events">
+        <legend>Notify for</legend>
+        <div className="notification-event-list">
+          {NOTIFICATION_EVENTS.map(({ setting, label }) => (
+            <CheckboxOption
+              key={setting}
+              label={label}
+              checked={value[setting]}
+              onChange={(checked) => onChange({ [setting]: checked })}
+            />
+          ))}
+        </div>
+      </fieldset>
+      <fieldset
+        className="aa-notification-controls"
+        disabled={!value.aaGains}
+        aria-label="AA notification interval"
+      >
+        <Field
+          label="AA points per notification"
+          description="Count earned AA points separately for each box, even when available points are spent."
+          descriptionId="aa-notification-interval-help"
+        >
+          <RangeInput
+            value={value.aaPointsPerNotification}
+            min={1}
+            max={100}
+            step={1}
+            suffix={value.aaPointsPerNotification === 1 ? " point" : " points"}
+            ariaLabel="AA points per notification"
+            ariaDescribedBy="aa-notification-interval-help"
+            onChange={(aaPointsPerNotification) =>
+              onChange({ aaPointsPerNotification })
+            }
+          />
+        </Field>
+      </fieldset>
+      <p className="help-text">
+        Chat events use the character&apos;s configured EverQuest color.
+        Progress and system events use Stonemite status colors.
+      </p>
+    </>
+  );
 }
 
 export function CombatAwarenessControls({
@@ -196,28 +254,15 @@ export function NotificationsPage() {
         title="Events"
         description="Choose which EverQuest events trigger enabled visual and sound notifications."
       >
-        <fieldset className="notification-events">
-          <legend>Notify for</legend>
-          <div className="notification-event-list">
-            {NOTIFICATION_EVENTS.map(({ setting, label }) => (
-              <CheckboxOption
-                key={setting}
-                label={label}
-                checked={draft.notifications[setting]}
-                onChange={(checked) =>
-                  updateNotifications((notifications) => ({
-                    ...notifications,
-                    [setting]: checked,
-                  }))
-                }
-              />
-            ))}
-          </div>
-        </fieldset>
-        <p className="help-text">
-          Chat events use the character&apos;s configured EverQuest color.
-          Trade, resurrection, and death use Stonemite status colors.
-        </p>
+        <NotificationEventControls
+          value={draft.notifications}
+          onChange={(update) =>
+            updateNotifications((notifications) => ({
+              ...notifications,
+              ...update,
+            }))
+          }
+        />
       </FormSection>
 
       <FormSection

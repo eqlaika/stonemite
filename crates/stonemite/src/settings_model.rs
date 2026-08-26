@@ -4,9 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{
     Account, BoxCycle, BoxIdentity, Config, LabelFontWeight, PipEdge, TrusharConfig,
-    MAX_BOX_CYCLES, MAX_COMBAT_HIT_DURATION_SECONDS, MAX_PIP_LABEL_FONT_FAMILY_LEN,
-    MAX_PIP_LABEL_FONT_SCALE, MAX_PIP_OPACITY, MIN_COMBAT_HIT_DURATION_SECONDS,
-    MIN_PIP_LABEL_FONT_SCALE, MIN_PIP_OPACITY,
+    MAX_AA_POINTS_PER_NOTIFICATION, MAX_BOX_CYCLES, MAX_COMBAT_HIT_DURATION_SECONDS,
+    MAX_PIP_LABEL_FONT_FAMILY_LEN, MAX_PIP_LABEL_FONT_SCALE, MAX_PIP_OPACITY,
+    MIN_AA_POINTS_PER_NOTIFICATION, MIN_COMBAT_HIT_DURATION_SECONDS, MIN_PIP_LABEL_FONT_SCALE,
+    MIN_PIP_OPACITY,
 };
 use crate::crypt;
 
@@ -165,6 +166,9 @@ pub struct NotificationSettings {
     pub trade_proposals: bool,
     pub resurrections: bool,
     pub deaths: bool,
+    pub level_gains: bool,
+    pub aa_gains: bool,
+    pub aa_points_per_notification: u32,
     pub combat_awareness_enabled: bool,
     pub combat_hit_duration_seconds: f32,
 }
@@ -374,6 +378,9 @@ impl SettingsDraft {
                 trade_proposals: config.notify_trade_proposals,
                 resurrections: config.notify_resurrections,
                 deaths: config.notify_deaths,
+                level_gains: config.notify_level_gains,
+                aa_gains: config.notify_aa_gains,
+                aa_points_per_notification: config.effective_aa_points_per_notification(),
                 combat_awareness_enabled: config.combat_awareness_enabled,
                 combat_hit_duration_seconds: config.effective_combat_hit_duration_seconds(),
             },
@@ -508,6 +515,9 @@ impl SettingsDraft {
             notify_trade_proposals: self.notifications.trade_proposals,
             notify_resurrections: self.notifications.resurrections,
             notify_deaths: self.notifications.deaths,
+            notify_level_gains: self.notifications.level_gains,
+            notify_aa_gains: self.notifications.aa_gains,
+            aa_points_per_notification: self.notifications.aa_points_per_notification,
             combat_awareness_enabled: self.notifications.combat_awareness_enabled,
             combat_hit_duration_seconds: self.notifications.combat_hit_duration_seconds,
             broadcast_hotkey: self.broadcasting.toggle_hotkey,
@@ -558,6 +568,12 @@ impl SettingsDraft {
         )?;
         validate_range("PiP label height", self.pip.label_height, 24, 64)?;
         validate_range("PiP label opacity", self.pip.label_opacity, 10, 100)?;
+        validate_range(
+            "AA points per notification",
+            self.notifications.aa_points_per_notification,
+            MIN_AA_POINTS_PER_NOTIFICATION,
+            MAX_AA_POINTS_PER_NOTIFICATION,
+        )?;
         validate_float_range(
             "Combat hit highlight duration",
             self.notifications.combat_hit_duration_seconds,
@@ -796,6 +812,9 @@ mod tests {
         assert_eq!(draft.general.toast.duration_seconds, 2.0);
         assert!(draft.broadcasting.disable_when_clients_exit);
         assert!(draft.notifications.trade_proposals);
+        assert!(draft.notifications.level_gains);
+        assert!(draft.notifications.aa_gains);
+        assert_eq!(draft.notifications.aa_points_per_notification, 1);
         assert!(draft.notifications.combat_awareness_enabled);
         assert_eq!(draft.notifications.combat_hit_duration_seconds, 3.0);
     }
@@ -843,6 +862,25 @@ mod tests {
         assert_eq!(
             invalid.validate(),
             Err("PiP thumbnail opacity must be between 10 and 100".to_owned())
+        );
+    }
+
+    #[test]
+    fn progression_notifications_are_validated_and_persisted() {
+        let mut draft = SettingsDraft::from_config(&Config::default()).unwrap();
+        draft.notifications.level_gains = false;
+        draft.notifications.aa_gains = false;
+        draft.notifications.aa_points_per_notification = 25;
+        let (config, _) = draft.into_config(Config::default()).unwrap();
+        assert!(!config.notify_level_gains);
+        assert!(!config.notify_aa_gains);
+        assert_eq!(config.aa_points_per_notification, 25);
+
+        let mut invalid = SettingsDraft::from_config(&Config::default()).unwrap();
+        invalid.notifications.aa_points_per_notification = 0;
+        assert_eq!(
+            invalid.validate(),
+            Err("AA points per notification must be between 1 and 100".to_owned())
         );
     }
 

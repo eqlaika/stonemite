@@ -19,6 +19,9 @@ pub const MAX_PIP_LABEL_FONT_FAMILY_LEN: usize = 31;
 pub const DEFAULT_COMBAT_HIT_DURATION_SECONDS: f32 = 3.0;
 pub const MIN_COMBAT_HIT_DURATION_SECONDS: f32 = 0.5;
 pub const MAX_COMBAT_HIT_DURATION_SECONDS: f32 = 10.0;
+pub const DEFAULT_AA_POINTS_PER_NOTIFICATION: u32 = 1;
+pub const MIN_AA_POINTS_PER_NOTIFICATION: u32 = 1;
+pub const MAX_AA_POINTS_PER_NOTIFICATION: u32 = 100;
 pub const MAX_BOX_CYCLES: usize = 16;
 
 /// Screen edge where the PiP strip is anchored.
@@ -321,6 +324,15 @@ pub struct Config {
     /// Notify when a character dies.
     #[serde(default = "default_notification_event_enabled")]
     pub notify_deaths: bool,
+    /// Notify when a character gains a level.
+    #[serde(default = "default_notification_event_enabled")]
+    pub notify_level_gains: bool,
+    /// Notify after a character earns the configured number of AA points.
+    #[serde(default = "default_notification_event_enabled")]
+    pub notify_aa_gains: bool,
+    /// AA points earned per notification, counted independently for each box.
+    #[serde(default = "default_aa_points_per_notification")]
+    pub aa_points_per_notification: u32,
     /// Show log-derived combat activity and recoverable problems on background PiPs.
     #[serde(default = "default_combat_awareness_enabled")]
     pub combat_awareness_enabled: bool,
@@ -404,6 +416,10 @@ fn default_notification_event_enabled() -> bool {
     true
 }
 
+fn default_aa_points_per_notification() -> u32 {
+    DEFAULT_AA_POINTS_PER_NOTIFICATION
+}
+
 fn default_combat_awareness_enabled() -> bool {
     true
 }
@@ -465,6 +481,9 @@ impl Default for Config {
             notify_trade_proposals: default_notification_event_enabled(),
             notify_resurrections: default_notification_event_enabled(),
             notify_deaths: default_notification_event_enabled(),
+            notify_level_gains: default_notification_event_enabled(),
+            notify_aa_gains: default_notification_event_enabled(),
+            aa_points_per_notification: default_aa_points_per_notification(),
             combat_awareness_enabled: default_combat_awareness_enabled(),
             combat_hit_duration_seconds: default_combat_hit_duration_seconds(),
             broadcast_hotkey: default_broadcast_hotkey(),
@@ -540,6 +559,13 @@ impl Config {
 
     pub fn effective_pip_label_font_weight(&self) -> LabelFontWeight {
         self.pip_label_font_weight.unwrap_or_default()
+    }
+
+    pub fn effective_aa_points_per_notification(&self) -> u32 {
+        self.aa_points_per_notification.clamp(
+            MIN_AA_POINTS_PER_NOTIFICATION,
+            MAX_AA_POINTS_PER_NOTIFICATION,
+        )
     }
 
     pub fn effective_combat_hit_duration_seconds(&self) -> f32 {
@@ -976,6 +1002,12 @@ mod tests {
         assert!(config.notify_trade_proposals);
         assert!(config.notify_resurrections);
         assert!(config.notify_deaths);
+        assert!(config.notify_level_gains);
+        assert!(config.notify_aa_gains);
+        assert_eq!(
+            config.effective_aa_points_per_notification(),
+            DEFAULT_AA_POINTS_PER_NOTIFICATION
+        );
         assert!(config.combat_awareness_enabled);
         assert_eq!(
             config.effective_combat_hit_duration_seconds(),
@@ -1103,6 +1135,24 @@ box_cycles = [
         };
         assert_eq!(low.effective_pip_opacity(), MIN_PIP_OPACITY);
         assert_eq!(high.effective_pip_opacity(), MAX_PIP_OPACITY);
+    }
+
+    #[test]
+    fn aa_notifications_default_on_and_clamp_the_interval() {
+        let default = Config::default();
+        assert!(default.notify_aa_gains);
+        assert_eq!(default.effective_aa_points_per_notification(), 1);
+
+        let low = Config {
+            aa_points_per_notification: 0,
+            ..Config::default()
+        };
+        let high = Config {
+            aa_points_per_notification: 101,
+            ..Config::default()
+        };
+        assert_eq!(low.effective_aa_points_per_notification(), 1);
+        assert_eq!(high.effective_aa_points_per_notification(), 100);
     }
 
     #[test]

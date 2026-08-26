@@ -137,7 +137,7 @@ unsafe fn poll_inner(s: &mut OverlayState) {
         }
         s.clients.remove(*pid);
         s.combat_awareness.remove(*pid);
-        s.notification_center.entries.remove(pid);
+        s.notification_center.remove_client(*pid);
     }
     if let Some(label) = last_closed_label {
         show_toast_inner(s, &label);

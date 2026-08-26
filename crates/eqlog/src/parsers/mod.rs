@@ -4,6 +4,7 @@ mod combat;
 mod identity;
 mod notifications;
 mod pets;
+mod progress;
 
 use std::error::Error;
 use std::fmt;
@@ -38,6 +39,7 @@ impl Default for ParserRegistry {
         registry.register(identity::IdentityParser::default());
         registry.register(notifications::NotificationParser);
         registry.register(pets::PetParser);
+        registry.register(progress::ProgressParser);
         registry
     }
 }

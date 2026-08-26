@@ -224,6 +224,31 @@ mod tests {
     }
 
     #[test]
+    fn progression_events_keep_source_attribution() {
+        let (sender, _) = broadcast::channel(8);
+        let mut pipeline = LogPipeline::new(sender);
+
+        let level = pipeline
+            .process(raw("You have gained a level! Welcome to level 125!"))
+            .envelope;
+        assert_eq!(level.raw.source.id.as_str(), "client-1");
+        assert!(matches!(
+            &level.events[0].event,
+            eqlog::LogEvent::Progress(eqlog::ProgressEvent::LevelGained { level: 125 })
+        ));
+
+        let aa = pipeline
+            .process(raw(
+                "You have gained an ability point! You now have 250 ability points.",
+            ))
+            .envelope;
+        assert!(matches!(
+            &aa.events[0].event,
+            eqlog::LogEvent::Progress(eqlog::ProgressEvent::AlternateAdvancementPointGained)
+        ));
+    }
+
+    #[test]
     fn death_notifies_and_updates_persistent_character_state() {
         let (sender, _) = broadcast::channel(8);
         let mut pipeline = LogPipeline::new(sender);

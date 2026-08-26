@@ -26,6 +26,8 @@ pub(super) const LABEL_MIN_ALPHA: u8 = 245;
 pub(super) const TRADE_COLOR: u32 = 0x0040B0EC;
 pub(super) const RESURRECTION_COLOR: u32 = 0x0089DF80;
 pub(super) const DEATH_COLOR: u32 = 0x006F82FF;
+pub(super) const LEVEL_GAIN_COLOR: u32 = 0x0054D6F2;
+pub(super) const AA_GAIN_COLOR: u32 = 0x00D0B050;
 
 const PREVIEW_DURATION_MS: u64 = 6000;
 const ANIMATION_LAP_MS: u64 = 750;
@@ -61,6 +63,8 @@ pub(super) enum Kind {
     Trade,
     Resurrection,
     Death,
+    LevelGain,
+    AlternateAdvancementGain,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,6 +75,8 @@ pub(super) struct EnabledKinds {
     pub trade_proposals: bool,
     pub resurrections: bool,
     pub deaths: bool,
+    pub level_gains: bool,
+    pub aa_gains: bool,
 }
 
 impl EnabledKinds {
@@ -82,6 +88,8 @@ impl EnabledKinds {
             Kind::Trade => self.trade_proposals,
             Kind::Resurrection => self.resurrections,
             Kind::Death => self.deaths,
+            Kind::LevelGain => self.level_gains,
+            Kind::AlternateAdvancementGain => self.aa_gains,
         }
     }
 }
@@ -94,6 +102,8 @@ pub(super) struct NotificationCenter {
     pub(super) sound: String,
     pub(super) enabled_kinds: EnabledKinds,
     pub(super) animations_enabled: bool,
+    aa_points_since_notification: HashMap<u32, u32>,
+    aa_points_per_notification: u32,
 }
 
 impl NotificationCenter {
@@ -110,13 +120,33 @@ impl NotificationCenter {
                 trade_proposals: cfg.notify_trade_proposals,
                 resurrections: cfg.notify_resurrections,
                 deaths: cfg.notify_deaths,
+                level_gains: cfg.notify_level_gains,
+                aa_gains: cfg.notify_aa_gains,
             },
             animations_enabled,
+            aa_points_since_notification: HashMap::new(),
+            aa_points_per_notification: cfg.effective_aa_points_per_notification(),
         }
     }
 
     pub(super) fn acknowledge(&mut self, pid: u32) -> bool {
         self.entries.remove(&pid).is_some()
+    }
+
+    pub(super) fn remove_client(&mut self, pid: u32) {
+        self.entries.remove(&pid);
+        self.aa_points_since_notification.remove(&pid);
+    }
+
+    fn record_aa_point_gain(&mut self, pid: u32) -> Option<u32> {
+        let gained = self.aa_points_since_notification.entry(pid).or_default();
+        *gained = gained.saturating_add(1);
+        let count = *gained;
+        if count < self.aa_points_per_notification {
+            return None;
+        }
+        self.aa_points_since_notification.remove(&pid);
+        Some(count)
     }
 
     /// Apply notification-related settings and report whether the selected
@@ -133,13 +163,22 @@ impl NotificationCenter {
             trade_proposals: cfg.notify_trade_proposals,
             resurrections: cfg.notify_resurrections,
             deaths: cfg.notify_deaths,
+            level_gains: cfg.notify_level_gains,
+            aa_gains: cfg.notify_aa_gains,
         };
+        let aa_points_per_notification = cfg.effective_aa_points_per_notification();
+        let aa_policy_changed = self.enabled_kinds.aa_gains != enabled_kinds.aa_gains
+            || self.aa_points_per_notification != aa_points_per_notification;
         let selection_changed = self.enabled_kinds != enabled_kinds;
         self.visual_enabled = cfg.tell_visual_enabled;
         self.sound_enabled = cfg.tell_sound_enabled;
         self.sound = crate::sound::normalized_id(&cfg.tell_sound).to_owned();
         self.enabled_kinds = enabled_kinds;
         self.animations_enabled = animations_enabled;
+        self.aa_points_per_notification = aa_points_per_notification;
+        if aa_policy_changed {
+            self.aa_points_since_notification.clear();
+        }
         selection_changed
     }
 }
@@ -1055,6 +1094,33 @@ pub(super) fn apply_log_event(
         _ => {}
     }
 
+    if matches!(
+        &event.event,
+        crate::log_watcher::LogEvent::Progress(
+            crate::log_watcher::ProgressEvent::AlternateAdvancementPointGained
+        )
+    ) {
+        let kind = Kind::AlternateAdvancementGain;
+        if !state.notification_center.enabled_kinds.contains(kind) {
+            return;
+        }
+        let Some(pid) = notification_pid(state, &event.source) else {
+            return;
+        };
+        let Some(points) = state.notification_center.record_aa_point_gain(pid) else {
+            return;
+        };
+        let suffix = if points == 1 { "point" } else { "points" };
+        apply_to_pid(
+            state,
+            pid,
+            kind,
+            format!("Gained {points} AA {suffix}"),
+            AA_GAIN_COLOR,
+        );
+        return;
+    }
+
     let (kind, text, color) = match &event.event {
         crate::log_watcher::LogEvent::Chat(crate::log_watcher::ChatEvent::IncomingTell(tell)) => (
             Kind::Tell,
@@ -1103,6 +1169,13 @@ pub(super) fn apply_log_event(
         crate::log_watcher::LogEvent::Notification(
             crate::log_watcher::NotificationEvent::CharacterSlain { killer },
         ) => (Kind::Death, format!("Slain by {killer}"), DEATH_COLOR),
+        crate::log_watcher::LogEvent::Progress(
+            crate::log_watcher::ProgressEvent::LevelGained { level },
+        ) => (
+            Kind::LevelGain,
+            format!("Reached level {level}"),
+            LEVEL_GAIN_COLOR,
+        ),
         _ => return,
     };
     apply(state, &event.source, kind, text, color);
@@ -1129,6 +1202,16 @@ fn visual_delivery(
     }
 }
 
+fn notification_pid(state: &OverlayState, source: &crate::log_watcher::LogSource) -> Option<u32> {
+    pid_for_log_source(&state.clients.windows, source).or_else(|| {
+        debug_log(&format!(
+            "eq_logs: notification source {} is no longer attached to an EQ window",
+            source.id.as_str()
+        ));
+        None
+    })
+}
+
 fn apply(
     state: &mut OverlayState,
     source: &crate::log_watcher::LogSource,
@@ -1139,14 +1222,13 @@ fn apply(
     if !state.notification_center.enabled_kinds.contains(kind) {
         return;
     }
-    let Some(pid) = pid_for_log_source(&state.clients.windows, source) else {
-        debug_log(&format!(
-            "eq_logs: notification source {} is no longer attached to an EQ window",
-            source.id.as_str()
-        ));
+    let Some(pid) = notification_pid(state, source) else {
         return;
     };
+    apply_to_pid(state, pid, kind, text, color);
+}
 
+fn apply_to_pid(state: &mut OverlayState, pid: u32, kind: Kind, text: String, color: u32) {
     if state.notification_center.sound_enabled {
         let _ = crate::sound::play(&state.notification_center.sound);
     }
@@ -1234,6 +1316,43 @@ mod tests {
             received_at_ms,
             false,
         )
+    }
+
+    #[test]
+    fn aa_point_notifications_accumulate_independently_per_box() {
+        let config = crate::config::Config {
+            aa_points_per_notification: 3,
+            ..crate::config::Config::default()
+        };
+        let mut center = NotificationCenter::new(&config, false);
+
+        assert_eq!(center.record_aa_point_gain(42), None);
+        assert_eq!(center.record_aa_point_gain(7), None);
+        assert_eq!(center.record_aa_point_gain(42), None);
+        assert_eq!(center.record_aa_point_gain(42), Some(3));
+        assert_eq!(center.record_aa_point_gain(7), None);
+        assert_eq!(center.record_aa_point_gain(7), Some(3));
+        assert_eq!(center.record_aa_point_gain(42), None);
+    }
+
+    #[test]
+    fn aa_progress_resets_when_a_box_closes_or_the_interval_changes() {
+        let config = crate::config::Config {
+            aa_points_per_notification: 3,
+            ..crate::config::Config::default()
+        };
+        let mut center = NotificationCenter::new(&config, false);
+        assert_eq!(center.record_aa_point_gain(42), None);
+        center.remove_client(42);
+        assert_eq!(center.record_aa_point_gain(42), None);
+
+        let changed = crate::config::Config {
+            aa_points_per_notification: 2,
+            ..crate::config::Config::default()
+        };
+        center.apply_config(&changed, false);
+        assert_eq!(center.record_aa_point_gain(42), None);
+        assert_eq!(center.record_aa_point_gain(42), Some(2));
     }
 
     #[test]

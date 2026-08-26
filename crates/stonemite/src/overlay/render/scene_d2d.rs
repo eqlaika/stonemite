@@ -727,6 +727,28 @@ unsafe fn draw_notification_icon(
                 end(sink);
             })?;
         }
+        Kind::LevelGain | Kind::AlternateAdvancementGain => {
+            context.DrawLine(
+                icon_point(bounds, 12.0, 21.0),
+                icon_point(bounds, 12.0, 4.0),
+                &brush,
+                width,
+                None,
+            );
+            draw_path(context, &brush, width, |sink| {
+                begin(sink, bounds, 6.0, 10.0);
+                sink.AddLine(icon_point(bounds, 12.0, 4.0));
+                sink.AddLine(icon_point(bounds, 18.0, 10.0));
+                end(sink);
+            })?;
+            context.DrawLine(
+                icon_point(bounds, 5.0, 21.0),
+                icon_point(bounds, 19.0, 21.0),
+                &brush,
+                width,
+                None,
+            );
+        }
         Kind::Death => {
             context.DrawLine(
                 icon_point(bounds, 7.0, 17.0),

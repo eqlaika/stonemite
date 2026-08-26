@@ -1,4 +1,5 @@
 .notification-events,
+.aa-notification-controls,
 .combat-awareness-controls {
   min-width: 0;
   margin: 0;
@@ -6,6 +7,7 @@
   border: 0;
 }
 
+.aa-notification-controls:disabled,
 .combat-awareness-controls:disabled {
   opacity: 0.55;
 }

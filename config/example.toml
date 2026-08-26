@@ -77,6 +77,9 @@ pip_edge = "right"
 # notify_trade_proposals = true
 # notify_resurrections = true
 # notify_deaths = true
+# notify_level_gains = true
+# notify_aa_gains = true
+# aa_points_per_notification = 1
 
 # Per-PiP custom positions (set via Edit Layout mode, or manually).
 # Empty = auto strip layout. Each entry needs slot, x, y, width, height.

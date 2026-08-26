@@ -90,7 +90,10 @@ impl TelemetryReducer {
                 entry.telemetry.dead = false;
                 Some(change(entry))
             }
-            LogEvent::Combat(_) | LogEvent::Chat(_) | LogEvent::Notification(_) => None,
+            LogEvent::Combat(_)
+            | LogEvent::Chat(_)
+            | LogEvent::Notification(_)
+            | LogEvent::Progress(_) => None,
         }
     }
 

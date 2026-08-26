@@ -10,6 +10,7 @@ pub enum LogEventDomain {
     Combat,
     Chat,
     Notification,
+    Progress,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +29,7 @@ pub enum LogEvent {
     Combat(CombatEvent),
     Chat(ChatEvent),
     Notification(NotificationEvent),
+    Progress(ProgressEvent),
 }
 
 impl LogEvent {
@@ -39,6 +41,7 @@ impl LogEvent {
             Self::Combat(_) => LogEventDomain::Combat,
             Self::Chat(_) => LogEventDomain::Chat,
             Self::Notification(_) => LogEventDomain::Notification,
+            Self::Progress(_) => LogEventDomain::Progress,
         }
     }
 }
@@ -94,6 +97,12 @@ pub enum ChatEvent {
 pub struct IncomingTell {
     pub sender: Arc<str>,
     pub message: Arc<str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProgressEvent {
+    LevelGained { level: u16 },
+    AlternateAdvancementPointGained,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

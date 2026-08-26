@@ -73,6 +73,9 @@ export interface NotificationSettings {
   tradeProposals: boolean;
   resurrections: boolean;
   deaths: boolean;
+  levelGains: boolean;
+  aaGains: boolean;
+  aaPointsPerNotification: number;
   combatAwarenessEnabled: boolean;
   combatHitDurationSeconds: number;
 }

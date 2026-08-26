@@ -3,7 +3,10 @@ import { useState } from "react";
 import { describe, expect, it } from "vitest";
 
 import type { NotificationSettings } from "../settings/types";
-import { CombatAwarenessControls } from "./NotificationsPage";
+import {
+  CombatAwarenessControls,
+  NotificationEventControls,
+} from "./NotificationsPage";
 
 const initial: NotificationSettings = {
   visualEnabled: true,
@@ -15,9 +18,22 @@ const initial: NotificationSettings = {
   tradeProposals: true,
   resurrections: true,
   deaths: true,
+  levelGains: true,
+  aaGains: true,
+  aaPointsPerNotification: 1,
   combatAwarenessEnabled: true,
   combatHitDurationSeconds: 3,
 };
+
+function NotificationEventHarness() {
+  const [value, setValue] = useState(initial);
+  return (
+    <NotificationEventControls
+      value={value}
+      onChange={(update) => setValue((current) => ({ ...current, ...update }))}
+    />
+  );
+}
 
 function CombatAwarenessHarness() {
   const [value, setValue] = useState(initial);
@@ -28,6 +44,31 @@ function CombatAwarenessHarness() {
     />
   );
 }
+
+describe("NotificationEventControls", () => {
+  it("configures independent level and AA notifications", () => {
+    render(<NotificationEventHarness />);
+
+    expect(screen.getByLabelText("Level gains")).toBeChecked();
+    const aaToggle = screen.getByLabelText("AA point gains");
+    const interval = screen.getByLabelText("AA points per notification");
+    expect(aaToggle).toBeChecked();
+    expect(interval).toHaveValue("1");
+    expect(interval).toHaveAttribute("min", "1");
+    expect(interval).toHaveAttribute("max", "100");
+    expect(interval).toHaveAccessibleDescription(
+      "Count earned AA points separately for each box, even when available points are spent.",
+    );
+
+    fireEvent.change(interval, { target: { value: "25" } });
+    expect(interval).toHaveValue("25");
+    expect(screen.getByText("25 points")).toBeInTheDocument();
+
+    fireEvent.click(aaToggle);
+    expect(aaToggle).not.toBeChecked();
+    expect(interval).toBeDisabled();
+  });
+});
 
 describe("CombatAwarenessControls", () => {
   it("updates the hit duration and disables timing when awareness is off", () => {

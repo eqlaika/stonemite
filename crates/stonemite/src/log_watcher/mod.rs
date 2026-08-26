@@ -29,7 +29,7 @@ pub use diagnostic::{DiagnosticKind, LogDiagnostic};
 pub use eqlog::{
     AttackProblem, CharacterEvent, CharacterKey, CharacterTelemetry, ChatEvent, CombatEvent,
     DecodedRawLogLine, EqTimestamp, IdentityEvent, IncomingTell, LogEvent, LogEventDomain,
-    LogSource, LogSourceId, NotificationEvent, ParsedLogEvent, PetEvent, RawLogLine,
+    LogSource, LogSourceId, NotificationEvent, ParsedLogEvent, PetEvent, ProgressEvent, RawLogLine,
     TelemetryChange, WhoResult,
 };
 pub use pipeline::LogEnvelope;
