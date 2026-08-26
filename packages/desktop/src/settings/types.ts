@@ -91,6 +91,7 @@ export interface HotkeySettings {
 
 export interface BroadcastingSettings {
   toggleHotkey: string;
+  disableWhenClientsExit: boolean;
   mouseClutchKey: string;
   filterMode: BroadcastFilterMode;
   filterKeys: string[];

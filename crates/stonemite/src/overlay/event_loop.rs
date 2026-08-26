@@ -28,6 +28,14 @@ use crate::{config, eq_windows, log_watcher};
 // Poll
 // ---------------------------------------------------------------------------
 
+fn should_disable_broadcast_when_clients_exit(
+    setting_enabled: bool,
+    previous_client_count: usize,
+    current_client_count: usize,
+) -> bool {
+    setting_enabled && previous_client_count > 0 && current_client_count == 0
+}
+
 pub(super) fn poll() {
     let _ = try_with_state_mut(|state| unsafe { poll_inner(state) });
 }
@@ -135,6 +143,15 @@ unsafe fn poll_inner(s: &mut OverlayState) {
         show_toast_inner(s, &label);
     }
 
+    let cfg = config::Config::load();
+    if should_disable_broadcast_when_clients_exit(
+        cfg.disable_broadcast_when_clients_exit,
+        old_pids.len(),
+        new_pids.len(),
+    ) {
+        let _ = crate::broadcast::set_active(false);
+    }
+
     let fg_hwnd = GetForegroundWindow();
     let fg_pid = focused_foreground_pid(&new_windows, fg_hwnd, |hwnd| {
         target_has_keyboard_focus(hwnd)
@@ -161,7 +178,7 @@ unsafe fn poll_inner(s: &mut OverlayState) {
     s.clients.ensure_active();
 
     if let Some(fg) = fg_pid {
-        if s.clients.promote(fg, MAX_PIPS) && config::Config::load().auto_order {
+        if s.clients.promote(fg, MAX_PIPS) && cfg.auto_order {
             s.clients.apply_auto_order();
         }
         crate::broadcast::set_active_pid(fg);
@@ -191,7 +208,7 @@ unsafe fn poll_inner(s: &mut OverlayState) {
     sync_mouse_eligibility(s);
 
     apply_preferred_box_order(&mut s.clients.windows, &s.clients.preferred_order);
-    if config::Config::load().auto_order {
+    if cfg.auto_order {
         s.clients.apply_auto_order();
     }
 
@@ -283,5 +300,19 @@ fn apply_log_batches(s: &mut OverlayState, batches: Vec<log_watcher::LogBatch>) 
             update_active_label(s);
             invalidate_labels(s);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_disable_broadcast_when_clients_exit;
+
+    #[test]
+    fn broadcast_shutoff_only_runs_when_the_last_client_exits() {
+        assert!(should_disable_broadcast_when_clients_exit(true, 1, 0));
+        assert!(should_disable_broadcast_when_clients_exit(true, 6, 0));
+        assert!(!should_disable_broadcast_when_clients_exit(false, 1, 0));
+        assert!(!should_disable_broadcast_when_clients_exit(true, 2, 1));
+        assert!(!should_disable_broadcast_when_clients_exit(true, 0, 0));
     }
 }

@@ -75,6 +75,7 @@ const mockPayload: SettingsPayload = {
     },
     broadcasting: {
       toggleHotkey: "Pause",
+      disableWhenClientsExit: true,
       mouseClutchKey: "F13",
       filterMode: "blacklist",
       filterKeys: ["Enter", "Escape", "Tab"],

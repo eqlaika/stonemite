@@ -7,6 +7,7 @@ import {
   InlineStatus,
   SelectInput,
   TextArea,
+  Toggle,
 } from "../components/Controls";
 import {
   HotkeyCapture,
@@ -137,8 +138,8 @@ export function BroadcastingPage() {
       description="Keyboard broadcasting, Mouse Clutch, and background-key filtering."
     >
       <FormSection
-        title="Broadcast toggle hotkey"
-        description="Toggle key broadcasting on or off."
+        title="Key broadcasting"
+        description="Toggle key broadcasting and choose what happens when a session ends."
       >
         <Field label="Shortcut">
           <HotkeyCapture
@@ -152,6 +153,17 @@ export function BroadcastingPage() {
             }
           />
         </Field>
+        <Toggle
+          label="Turn off after all clients exit"
+          description="Automatically disable key broadcasting when the last EverQuest client closes."
+          checked={draft.broadcasting.disableWhenClientsExit}
+          onChange={(disableWhenClientsExit) =>
+            updateBroadcasting((broadcasting) => ({
+              ...broadcasting,
+              disableWhenClientsExit,
+            }))
+          }
+        />
       </FormSection>
 
       <FormSection

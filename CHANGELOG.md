@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a default-on setting that turns off key broadcasting after the last EverQuest client exits
 - Added a default-on in-game Stonemite button anchored beside the PiP strip, with left-click Settings access and the full tray menu on right-click
 - Added named box cycles with configurable character rings, wrapping next and previous hotkeys, unavailable-client skipping, and no-repeat keyboard-pedal support
 - Added configurable trade-request notifications that clear when EverQuest logs a cancelled trade and remain non-actionable because EQ exposes no trade-accept key binding

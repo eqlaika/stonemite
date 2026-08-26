@@ -273,6 +273,9 @@ pub struct Config {
     /// Hotkey for toggling key broadcasting. Default: "Pause".
     #[serde(default = "default_broadcast_hotkey")]
     pub broadcast_hotkey: String,
+    /// Disable key broadcasting after the last EverQuest client exits. Default: true.
+    #[serde(default = "default_disable_broadcast_when_clients_exit")]
+    pub disable_broadcast_when_clients_exit: bool,
     /// Single hold-to-broadcast mouse key. Default: "F13". Empty means unbound.
     #[serde(default = "default_mouse_clutch_key")]
     pub mouse_clutch_key: String,
@@ -369,6 +372,10 @@ fn default_broadcast_hotkey() -> String {
     "Pause".to_string()
 }
 
+fn default_disable_broadcast_when_clients_exit() -> bool {
+    true
+}
+
 fn default_mouse_clutch_key() -> String {
     "F13".to_string()
 }
@@ -461,6 +468,7 @@ impl Default for Config {
             combat_awareness_enabled: default_combat_awareness_enabled(),
             combat_hit_duration_seconds: default_combat_hit_duration_seconds(),
             broadcast_hotkey: default_broadcast_hotkey(),
+            disable_broadcast_when_clients_exit: default_disable_broadcast_when_clients_exit(),
             mouse_clutch_key: default_mouse_clutch_key(),
             broadcast_filter_mode: default_broadcast_filter_mode(),
             broadcast_filter_keys: Vec::new(),
@@ -1047,6 +1055,16 @@ box_cycles = [
         assert_eq!(upgraded.stonemite_button_position, None);
         let disabled: Config = toml::from_str("show_stonemite_button = false").unwrap();
         assert!(!disabled.show_stonemite_button);
+    }
+
+    #[test]
+    fn broadcast_exit_shutoff_defaults_on_for_new_and_existing_configs() {
+        assert!(Config::default().disable_broadcast_when_clients_exit);
+        let upgraded: Config = toml::from_str("eq_dir = 'C:\\EverQuest'").unwrap();
+        assert!(upgraded.disable_broadcast_when_clients_exit);
+        let disabled: Config =
+            toml::from_str("disable_broadcast_when_clients_exit = false").unwrap();
+        assert!(!disabled.disable_broadcast_when_clients_exit);
     }
 
     #[test]

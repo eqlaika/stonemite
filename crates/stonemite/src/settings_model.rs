@@ -189,6 +189,7 @@ pub struct BoxCycleSettings {
 #[serde(rename_all = "camelCase")]
 pub struct BroadcastingSettings {
     pub toggle_hotkey: String,
+    pub disable_when_clients_exit: bool,
     pub mouse_clutch_key: String,
     pub filter_mode: BroadcastFilterMode,
     pub filter_keys: Vec<String>,
@@ -391,6 +392,7 @@ impl SettingsDraft {
             },
             broadcasting: BroadcastingSettings {
                 toggle_hotkey: config.broadcast_hotkey.clone(),
+                disable_when_clients_exit: config.disable_broadcast_when_clients_exit,
                 mouse_clutch_key: config.mouse_clutch_key.clone(),
                 filter_mode: if config
                     .broadcast_filter_mode
@@ -509,6 +511,7 @@ impl SettingsDraft {
             combat_awareness_enabled: self.notifications.combat_awareness_enabled,
             combat_hit_duration_seconds: self.notifications.combat_hit_duration_seconds,
             broadcast_hotkey: self.broadcasting.toggle_hotkey,
+            disable_broadcast_when_clients_exit: self.broadcasting.disable_when_clients_exit,
             mouse_clutch_key: self.broadcasting.mouse_clutch_key,
             broadcast_filter_mode: match self.broadcasting.filter_mode {
                 BroadcastFilterMode::Blacklist => "blacklist",
@@ -791,9 +794,20 @@ mod tests {
         );
         assert_eq!(draft.pip.font_weight, LabelFontWeight::Bold);
         assert_eq!(draft.general.toast.duration_seconds, 2.0);
+        assert!(draft.broadcasting.disable_when_clients_exit);
         assert!(draft.notifications.trade_proposals);
         assert!(draft.notifications.combat_awareness_enabled);
         assert_eq!(draft.notifications.combat_hit_duration_seconds, 3.0);
+    }
+
+    #[test]
+    fn broadcast_exit_shutoff_round_trips_through_settings() {
+        let mut draft = SettingsDraft::from_config(&Config::default()).unwrap();
+        draft.broadcasting.disable_when_clients_exit = false;
+
+        let (config, _) = draft.into_config(Config::default()).unwrap();
+
+        assert!(!config.disable_broadcast_when_clients_exit);
     }
 
     #[test]

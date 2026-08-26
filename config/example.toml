@@ -7,6 +7,9 @@ eq_dir = "C:\\Users\\Public\\Daybreak Game Company\\Installed Games\\EverQuest"
 # Key to toggle PiP overlay visibility (F1-F24, Pause, ScrollLock, Insert, Delete, Home, End, PageUp, PageDown).
 hide_hotkey = "F9"
 
+# Turn off key broadcasting after the last EverQuest client exits (default true).
+# disable_broadcast_when_clients_exit = true
+
 # Hold-to-broadcast mouse key. F13 is the default; set empty to unbind.
 # Keyboard-emulating foot pedals and F13-F24 are supported.
 mouse_clutch_key = "F13"
