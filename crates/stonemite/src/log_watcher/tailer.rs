@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
 
-use eqlog::{LogSource, RawLogLine};
+use eqcombat::GapReason;
+use eqlog::{LogSource, LogSourceId, RawLogLine, SourceRecordId};
 
 use super::diagnostic::{DiagnosticKind, LogDiagnostic};
 
@@ -36,18 +37,33 @@ pub(crate) struct SourceSpec {
     pub source: LogSource,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SourceGap {
+    pub source: LogSource,
+    pub generation: u64,
+    pub reason: GapReason,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TailedRecord {
+    pub id: SourceRecordId,
+    pub line: RawLogLine,
+}
+
 #[derive(Default)]
 pub(crate) struct SyncOutcome {
     pub removed_sources: Vec<LogSource>,
+    pub gaps: Vec<SourceGap>,
     pub diagnostics: Vec<LogDiagnostic>,
 }
 
 #[derive(Default)]
 pub(crate) struct ReadOutcome {
-    pub lines: Vec<RawLogLine>,
+    pub lines: Vec<TailedRecord>,
+    pub gaps: Vec<SourceGap>,
+    pub stable_eof: Option<(LogSourceId, u64)>,
     pub diagnostics: Vec<LogDiagnostic>,
     pub more_work: bool,
-    pub generation_reset: Option<LogSource>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,6 +111,7 @@ struct FileState {
     discard_until_newline: bool,
     signature: Vec<u8>,
     generation: u64,
+    next_sequence: u64,
 }
 
 impl FileState {
@@ -109,6 +126,7 @@ impl FileState {
             discard_until_newline: false,
             signature: Vec::new(),
             generation: 0,
+            next_sequence: 0,
         }
     }
 }
@@ -147,11 +165,19 @@ impl LogTailer {
         for (key, spec) in expected {
             if let Some(state) = self.files.get_mut(&key) {
                 if state.source != spec.source {
-                    outcome.removed_sources.push(state.source.clone());
+                    let old_source = state.source.clone();
+                    outcome.removed_sources.push(old_source.clone());
+                    advance_generation(state);
+                    if !state.pending.is_empty() || state.discard_until_newline {
+                        state.pending.clear();
+                        state.discard_until_newline = true;
+                    }
+                    outcome.gaps.push(SourceGap {
+                        source: old_source,
+                        generation: state.generation,
+                        reason: GapReason::SourceReassociated,
+                    });
                     state.source = spec.source;
-                    // Framing remains tied to the file path and byte offset.
-                    // Preserve an incomplete record across a client/process
-                    // reassociation so source publication cannot lose bytes.
                 }
                 state.path = spec.path;
                 continue;
@@ -192,6 +218,13 @@ impl LogTailer {
         self.files
             .values()
             .map(|state| state.path.clone())
+            .collect()
+    }
+
+    pub fn tracked_sources(&self) -> Vec<(LogSource, u64)> {
+        self.files
+            .values()
+            .map(|state| (state.source.clone(), state.generation))
             .collect()
     }
 
@@ -279,7 +312,17 @@ fn read_file(state: &mut FileState, budget: ReadBudget) -> ReadOutcome {
             "file contents changed before the stored offset"
         };
         reset_generation(state, current_identity.clone());
-        outcome.generation_reset = Some(state.source.clone());
+        outcome.gaps.push(SourceGap {
+            source: state.source.clone(),
+            generation: state.generation,
+            reason: if recreated {
+                GapReason::FileRecreated
+            } else if shrank {
+                GapReason::FileTruncated
+            } else {
+                GapReason::BoundaryChanged
+            },
+        });
         outcome.diagnostics.push(file_diagnostic(
             DiagnosticKind::FileReset,
             &state.path,
@@ -334,7 +377,19 @@ fn read_file(state: &mut FileState, budget: ReadBudget) -> ReadOutcome {
         .map(|value| value.len())
         .unwrap_or(metadata.len());
     outcome.more_work = pending_has_complete_line(state) || latest_len > state.offset;
+    if !outcome.more_work
+        && state.pending.is_empty()
+        && !state.discard_until_newline
+        && latest_len == state.offset
+    {
+        outcome.stable_eof = Some((state.source.id.clone(), state.generation));
+    }
     outcome
+}
+
+fn advance_generation(state: &mut FileState) {
+    state.generation = state.generation.checked_add(1).unwrap_or(u64::MAX);
+    state.next_sequence = 0;
 }
 
 fn reset_generation(state: &mut FileState, identity: FileIdentity) {
@@ -343,7 +398,7 @@ fn reset_generation(state: &mut FileState, identity: FileIdentity) {
     state.pending.clear();
     state.discard_until_newline = false;
     state.signature.clear();
-    state.generation = state.generation.wrapping_add(1);
+    advance_generation(state);
 }
 
 fn append_bytes(state: &mut FileState, bytes: &[u8]) {
@@ -380,6 +435,12 @@ fn extract_complete_lines(state: &mut FileState, max_records: usize, outcome: &m
         }
 
         if line_end - line_start > MAX_LINE_BYTES {
+            advance_generation(state);
+            outcome.gaps.push(SourceGap {
+                source: state.source.clone(),
+                generation: state.generation,
+                reason: GapReason::OversizedRecord,
+            });
             outcome.diagnostics.push(file_diagnostic(
                 DiagnosticKind::FileRead,
                 &state.path,
@@ -395,7 +456,16 @@ fn extract_complete_lines(state: &mut FileState, max_records: usize, outcome: &m
                     "replaced invalid UTF-8 in one complete log record",
                 ));
             }
-            outcome.lines.push(decoded.line);
+            let id = SourceRecordId::new(
+                state.source.id.clone(),
+                state.generation,
+                state.next_sequence,
+            );
+            state.next_sequence = state.next_sequence.checked_add(1).unwrap_or(u64::MAX);
+            outcome.lines.push(TailedRecord {
+                id,
+                line: decoded.line,
+            });
             emitted += 1;
         }
         consumed = newline + 1;
@@ -408,6 +478,12 @@ fn extract_complete_lines(state: &mut FileState, max_records: usize, outcome: &m
     if state.pending.len() > MAX_LINE_BYTES && !state.pending.contains(&b'\n') {
         state.pending.clear();
         state.discard_until_newline = true;
+        advance_generation(state);
+        outcome.gaps.push(SourceGap {
+            source: state.source.clone(),
+            generation: state.generation,
+            reason: GapReason::DiscardUntilNewline,
+        });
         outcome.diagnostics.push(file_diagnostic(
             DiagnosticKind::FileRead,
             &state.path,
@@ -534,7 +610,7 @@ mod tests {
         outcome
             .lines
             .iter()
-            .map(|line| line.body.as_ref())
+            .map(|record| record.line.body.as_ref())
             .collect()
     }
 
@@ -619,13 +695,9 @@ mod tests {
         fs::write(&path, b"[new] reset\n").unwrap();
         let outcome = read(&mut tailer, &path);
         assert_eq!(bodies(&outcome), vec!["reset"]);
-        assert_eq!(
-            outcome
-                .generation_reset
-                .as_ref()
-                .map(|source| source.id.as_str()),
-            Some("client-1")
-        );
+        assert_eq!(outcome.gaps.len(), 1);
+        assert_eq!(outcome.gaps[0].source.id.as_str(), "client-1");
+        assert_eq!(outcome.gaps[0].generation, 1);
         assert!(outcome
             .diagnostics
             .iter()
@@ -650,7 +722,7 @@ mod tests {
             bodies(&outcome),
             vec!["replacement begins at zero and is longer than history"]
         );
-        assert!(outcome.generation_reset.is_some());
+        assert!(!outcome.gaps.is_empty());
     }
 
     #[test]
@@ -665,7 +737,7 @@ mod tests {
         fs::write(&path, b"[new] replacement generation\n").unwrap();
         let outcome = read(&mut tailer, &path);
         assert_eq!(bodies(&outcome), vec!["replacement generation"]);
-        assert!(outcome.generation_reset.is_some());
+        assert!(!outcome.gaps.is_empty());
     }
 
     #[test]
@@ -705,10 +777,12 @@ mod tests {
         append(&saabra_path, b"[now] mage line\n");
         let bilka = read(&mut tailer, &bilka_path);
         let saabra = read(&mut tailer, &saabra_path);
-        assert_eq!(bilka.lines[0].source.id.as_str(), "client-11");
-        assert_eq!(&*bilka.lines[0].source.character, "Bilka");
-        assert_eq!(saabra.lines[0].source.id.as_str(), "client-22");
-        assert_eq!(&*saabra.lines[0].source.character, "Saabra");
+        assert_eq!(bilka.lines[0].line.source.id.as_str(), "client-11");
+        assert_eq!(&*bilka.lines[0].line.source.character, "Bilka");
+        assert_eq!(saabra.lines[0].line.source.id.as_str(), "client-22");
+        assert_eq!(&*saabra.lines[0].line.source.character, "Saabra");
+        assert_eq!(bilka.lines[0].id.sequence, 0);
+        assert_eq!(saabra.lines[0].id.sequence, 0);
     }
 
     #[test]
@@ -721,5 +795,50 @@ mod tests {
 
         append(&path, b" suffix\n[now] first live record\n");
         assert_eq!(bodies(&read(&mut tailer, &path)), vec!["first live record"]);
+    }
+
+    #[test]
+    fn source_reassociation_never_finishes_pending_bytes_under_the_new_identity() {
+        let directory = TempDirectory::new();
+        let path = directory.path("eqlog_Bilka_teek.txt");
+        fs::write(&path, []).unwrap();
+        let mut tailer = LogTailer::new();
+        track(&mut tailer, &path, source(1, "Bilka", "teek"));
+        append(&path, b"[now] old partial");
+        assert!(read(&mut tailer, &path).lines.is_empty());
+
+        let sync = tailer.sync_sources(vec![SourceSpec {
+            path: path.clone(),
+            source: source(2, "Saabra", "teek"),
+        }]);
+        assert_eq!(sync.gaps.len(), 1);
+        assert_eq!(sync.gaps[0].reason, GapReason::SourceReassociated);
+        append(&path, b" remainder\n[now] new complete\n");
+        let outcome = read(&mut tailer, &path);
+        assert_eq!(bodies(&outcome), vec!["new complete"]);
+        assert_eq!(outcome.lines[0].line.source.id.as_str(), "client-2");
+        assert_eq!(outcome.lines[0].id.generation, 1);
+        assert_eq!(outcome.lines[0].id.sequence, 0);
+    }
+
+    #[test]
+    fn oversized_unterminated_record_emits_a_source_gap() {
+        let directory = TempDirectory::new();
+        let path = directory.path("eqlog_Bilka_teek.txt");
+        fs::write(&path, []).unwrap();
+        let mut tailer = LogTailer::new();
+        track(&mut tailer, &path, source(1, "Bilka", "teek"));
+        append(&path, &vec![b'x'; MAX_LINE_BYTES + 1]);
+        let mut gaps = Vec::new();
+        while gaps.is_empty() {
+            let outcome = read(&mut tailer, &path);
+            gaps.extend(outcome.gaps);
+            if !outcome.more_work {
+                break;
+            }
+        }
+        assert!(gaps
+            .iter()
+            .any(|gap| gap.reason == GapReason::DiscardUntilNewline));
     }
 }

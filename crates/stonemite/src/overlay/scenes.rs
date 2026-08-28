@@ -3,13 +3,16 @@
 //! These are role-specific snapshots, not a generic drawing API. Win32 owns
 //! placement and interaction; the Direct2D compositor consumes complete scenes.
 
+use std::sync::Arc;
+
+use super::casting::CastingOutcome;
 use super::combat_awareness::{CombatVisualLayout, CombatVisualSnapshot};
 use super::labels::{Color, FontSpec, LabelModel, LabelStyle, LabelTheme, Rect};
 use super::notifications::{
     NotificationBorderLayout, NotificationContentLayout, NotificationVisualSnapshot,
 };
-pub(super) use super::scene_layout::TimerLayout;
 use super::scene_layout::{pip_content_stack_layout, TIMER_PANEL_GAP};
+pub(super) use super::scene_layout::{CastingLayout, TimerLayout};
 /// The DWM thumbnail is already reduced to its legacy drag opacity. This
 /// restrained overlay adds the gray drag cue without obscuring live imagery.
 pub(super) const REORDER_DIM_ALPHA: u8 = 64;
@@ -37,10 +40,14 @@ impl SceneColor {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum UiTextRole {
     Timer,
+    Casting,
     NotificationPreview,
     InviteButton,
     CombatStatus,
     CombatDead,
+    DpsTitle,
+    DpsColumn,
+    DpsRow,
     StatusBanner,
     Toast,
 }
@@ -51,7 +58,14 @@ impl UiTextRole {
             family: "Segoe UI".to_owned(),
             scale_percent: 100,
             weight: match self {
-                Self::Timer | Self::NotificationPreview | Self::InviteButton | Self::Toast => 700,
+                Self::DpsColumn => 600,
+                Self::DpsRow => 650,
+                Self::DpsTitle => 700,
+                Self::Timer
+                | Self::Casting
+                | Self::NotificationPreview
+                | Self::InviteButton
+                | Self::Toast => 700,
                 Self::CombatStatus => 800,
                 Self::CombatDead | Self::StatusBanner => 900,
             },
@@ -61,6 +75,10 @@ impl UiTextRole {
     pub(super) fn height(self, scale: f64, role_height: i32) -> i32 {
         let logical = match self {
             Self::Timer | Self::InviteButton => 16,
+            Self::Casting => 14,
+            Self::DpsColumn => 12,
+            Self::DpsRow => 14,
+            Self::DpsTitle => 16,
             Self::CombatStatus => 18,
             Self::NotificationPreview => 26,
             Self::CombatDead => 32,
@@ -86,6 +104,22 @@ pub(super) struct TimerScene<'a> {
     pub progress: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct CastingScene<'a> {
+    pub spell_name: &'a str,
+    pub outcome: Option<CastingOutcome>,
+    /// Elapsed fraction; the bar drains, and only a confirmed terminal event
+    /// reaches 1.0 and empties it completely.
+    pub progress: f32,
+    pub alpha: u8,
+}
+
+impl CastingScene<'_> {
+    pub(super) fn outcome_label(self) -> &'static str {
+        self.outcome.map_or("", CastingOutcome::label)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct PipInteractionScene {
     pub hovered: bool,
@@ -101,6 +135,7 @@ pub(super) struct PipScene<'a> {
     pub border_width: i32,
     pub scale: f64,
     pub label: LabelScene<'a>,
+    pub casting: Option<CastingScene<'a>>,
     pub timer: Option<TimerScene<'a>>,
     pub combat: Option<CombatVisualSnapshot>,
     pub notification: Option<NotificationVisualSnapshot>,
@@ -121,6 +156,7 @@ pub(super) struct PipSceneLayout {
     pub dim_overlay: Option<SceneColor>,
     pub indicator_frames: Vec<FrameVisual>,
     pub label_bounds: Rect,
+    pub casting: Option<CastingLayout>,
     pub timer: Option<TimerLayout>,
     pub combat: Option<CombatVisualLayout>,
     pub notification_border: Option<NotificationBorderLayout>,
@@ -129,7 +165,7 @@ pub(super) struct PipSceneLayout {
 
 impl PipScene<'_> {
     pub(super) fn content_alpha(&self) -> u8 {
-        if self.notification.is_some() {
+        if self.notification.is_some() || self.casting.is_some() {
             self.label.alpha.max(super::notifications::LABEL_MIN_ALPHA)
         } else {
             self.label.alpha
@@ -139,6 +175,8 @@ impl PipScene<'_> {
     pub(super) fn layout(
         &self,
         measured_label_width: i32,
+        measured_cast_spell_width: i32,
+        measured_cast_outcome_width: i32,
         measured_preview_text_width: i32,
         measured_combat_status_width: i32,
     ) -> PipSceneLayout {
@@ -149,6 +187,13 @@ impl PipScene<'_> {
             border,
             self.label.style,
             measured_label_width,
+            self.casting.map(|casting| {
+                (
+                    casting.progress,
+                    measured_cast_spell_width,
+                    measured_cast_outcome_width,
+                )
+            }),
             self.timer.map(|timer| timer.progress),
         );
         let content = stack.content;
@@ -207,6 +252,7 @@ impl PipScene<'_> {
             dim_overlay,
             indicator_frames,
             label_bounds: stack.label_bounds,
+            casting: stack.casting,
             timer: stack.timer,
             combat,
             notification_border,
@@ -260,6 +306,224 @@ impl ActiveLabelScene<'_> {
             label_bounds,
             timer,
         }
+    }
+}
+
+pub(super) const DPS_SURFACE_ALPHA: u8 = 232;
+pub(super) const DPS_HEADER_DIP: i32 = 38;
+pub(super) const DPS_COLUMNS_DIP: i32 = 22;
+pub(super) const DPS_ROW_DIP: i32 = 27;
+pub(super) const DPS_MIN_ROW_DIP: i32 = 21;
+pub(super) const DPS_SEPARATOR_DIP: i32 = 7;
+pub(super) const DPS_VERTICAL_PADDING_DIP: i32 = 8;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DpsSceneRow {
+    pub rank: usize,
+    pub name: Arc<str>,
+    pub damage: Arc<str>,
+    pub dps: Arc<str>,
+    pub sdps: Arc<str>,
+    pub contribution_millionths: u32,
+    pub has_pet_damage: bool,
+    pub managed_extra: bool,
+    pub active_managed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DpsScene {
+    pub bounds: Rect,
+    pub scale_millionths: u32,
+    pub title: Arc<str>,
+    pub duration: Arc<str>,
+    pub rows: Arc<[DpsSceneRow]>,
+    pub row_height: i32,
+    pub edit_mode: bool,
+    pub preview: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DpsColumnsLayout {
+    pub rank: Rect,
+    pub player: Rect,
+    pub damage: Rect,
+    pub dps: Rect,
+    pub sdps: Rect,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DpsRowLayout {
+    pub bounds: Rect,
+    pub bar: Rect,
+    pub columns: DpsColumnsLayout,
+    pub separator: Option<Rect>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DpsSceneLayout {
+    pub panel: Rect,
+    pub header: Rect,
+    pub title: Rect,
+    pub duration: Rect,
+    pub column_header: Rect,
+    pub columns: DpsColumnsLayout,
+    pub rows: Vec<DpsRowLayout>,
+}
+
+impl DpsScene {
+    pub(super) fn scale(&self) -> f64 {
+        f64::from(self.scale_millionths) / 1_000_000.0
+    }
+
+    pub(super) fn content_height(
+        row_count: usize,
+        managed_separator: bool,
+        row_height: i32,
+        scale: f64,
+    ) -> i32 {
+        let fixed = DPS_VERTICAL_PADDING_DIP * 2
+            + DPS_HEADER_DIP
+            + DPS_COLUMNS_DIP
+            + (managed_separator as i32) * DPS_SEPARATOR_DIP;
+        ((f64::from(fixed) * scale).round() as i32)
+            .saturating_add(row_height.saturating_mul(row_count as i32))
+            .max(1)
+    }
+
+    pub(super) fn row_height_for(
+        row_count: usize,
+        managed_separator: bool,
+        max_height: i32,
+        scale: f64,
+    ) -> i32 {
+        let preferred = (f64::from(DPS_ROW_DIP) * scale).round() as i32;
+        let minimum = (f64::from(DPS_MIN_ROW_DIP) * scale).round().max(1.0) as i32;
+        if row_count == 0 {
+            return preferred;
+        }
+        let fixed = Self::content_height(0, managed_separator, 0, scale);
+        ((max_height - fixed) / row_count as i32).clamp(minimum, preferred)
+    }
+
+    pub(super) fn layout(&self) -> DpsSceneLayout {
+        let scale = self.scale();
+        let padding = (8.0 * scale).round() as i32;
+        let gap = (6.0 * scale).round().max(1.0) as i32;
+        let header_height = (f64::from(DPS_HEADER_DIP) * scale).round() as i32;
+        let columns_height = (f64::from(DPS_COLUMNS_DIP) * scale).round() as i32;
+        let separator_height = (f64::from(DPS_SEPARATOR_DIP) * scale).round() as i32;
+        let panel = self.bounds;
+        let header = Rect::new(
+            panel.left + padding,
+            panel.top,
+            panel.right - padding,
+            panel.top + header_height,
+        );
+        let duration_width = (58.0 * scale).round() as i32;
+        let title = Rect::new(
+            header.left,
+            header.top,
+            (header.right - duration_width - gap).max(header.left),
+            header.bottom,
+        );
+        let duration = Rect::new(
+            (header.right - duration_width).max(header.left),
+            header.top,
+            header.right,
+            header.bottom,
+        );
+        let column_header = Rect::new(
+            header.left,
+            header.bottom,
+            header.right,
+            header.bottom + columns_height,
+        );
+        let columns = dps_columns(column_header, gap, scale);
+        let mut y = column_header.bottom;
+        let mut rows = Vec::with_capacity(self.rows.len());
+        let mut separator_inserted = false;
+        for row in self.rows.iter() {
+            let separator = if row.managed_extra && !separator_inserted {
+                separator_inserted = true;
+                let bounds = Rect::new(header.left, y, header.right, y + separator_height);
+                y += separator_height;
+                Some(bounds)
+            } else {
+                None
+            };
+            let bounds = Rect::new(
+                header.left,
+                y,
+                header.right,
+                (y + self.row_height).min(panel.bottom - padding),
+            );
+            let ratio = row.contribution_millionths.min(1_000_000);
+            let bar_width = ((bounds.width() as i64 * i64::from(ratio)) / 1_000_000) as i32;
+            rows.push(DpsRowLayout {
+                bounds,
+                bar: Rect::new(
+                    bounds.left,
+                    bounds.top,
+                    bounds.left + bar_width,
+                    bounds.bottom,
+                ),
+                columns: dps_columns(bounds, gap, scale),
+                separator,
+            });
+            y = bounds.bottom;
+        }
+        DpsSceneLayout {
+            panel,
+            header,
+            title,
+            duration,
+            column_header,
+            columns,
+            rows,
+        }
+    }
+}
+
+fn dps_columns(bounds: Rect, gap: i32, scale: f64) -> DpsColumnsLayout {
+    let rank_width = (28.0 * scale).round() as i32;
+    let damage_width = (92.0 * scale).round() as i32;
+    let rate_width = (64.0 * scale).round() as i32;
+    let sdps = Rect::new(
+        (bounds.right - rate_width).max(bounds.left),
+        bounds.top,
+        bounds.right,
+        bounds.bottom,
+    );
+    let dps = Rect::new(
+        (sdps.left - gap - rate_width).max(bounds.left),
+        bounds.top,
+        (sdps.left - gap).max(bounds.left),
+        bounds.bottom,
+    );
+    let damage = Rect::new(
+        (dps.left - gap - damage_width).max(bounds.left),
+        bounds.top,
+        (dps.left - gap).max(bounds.left),
+        bounds.bottom,
+    );
+    let rank = Rect::new(
+        bounds.left,
+        bounds.top,
+        (bounds.left + rank_width).min(bounds.right),
+        bounds.bottom,
+    );
+    let player = Rect::new(
+        (rank.right + gap).min(bounds.right),
+        bounds.top,
+        (damage.left - gap).max(rank.right + gap),
+        bounds.bottom,
+    );
+    DpsColumnsLayout {
+        rank,
+        player,
+        damage,
+        dps,
+        sdps,
     }
 }
 
@@ -391,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn pip_layout_combines_inset_label_and_timer_without_overlap() {
+    fn pip_layout_stacks_casting_confirmation_and_timer_without_overlap() {
         let theme = LabelTheme::default();
         let scene = PipScene {
             canvas: Rect::new(0, 0, 320, 180),
@@ -409,6 +673,12 @@ mod tests {
                 theme: &theme,
                 alpha: 204,
             },
+            casting: Some(CastingScene {
+                spell_name: "Complete Heal",
+                outcome: None,
+                progress: 0.88,
+                alpha: 255,
+            }),
             timer: Some(TimerScene {
                 label: "Mez",
                 remaining_text: "9.9s",
@@ -418,14 +688,22 @@ mod tests {
             notification: None,
             interaction: PipInteractionScene::default(),
         };
-        let layout = scene.layout(220, 0, 0);
-        assert_eq!(scene.content_alpha(), 204);
+        let layout = scene.layout(220, 112, 0, 0, 0);
+        assert_eq!(
+            scene.content_alpha(),
+            super::super::notifications::LABEL_MIN_ALPHA
+        );
         assert_eq!(layout.content, Rect::new(3, 3, 317, 177));
         assert_eq!(layout.label_bounds, Rect::new(3, 3, 223, 51));
         assert_eq!(
-            layout.timer.map(|timer| timer.panel),
-            Some(Rect::new(3, 55, 223, 97))
+            layout.casting.map(|casting| casting.panel),
+            Some(Rect::new(3, 54, 223, 84))
         );
+        assert_eq!(
+            layout.timer.map(|timer| timer.panel),
+            Some(Rect::new(3, 88, 223, 130))
+        );
+        assert!(layout.casting.unwrap().fill.right < layout.casting.unwrap().track.right);
         assert!(layout.indicator_frames.is_empty());
     }
 
@@ -448,6 +726,7 @@ mod tests {
                 theme: &theme,
                 alpha: 100,
             },
+            casting: None,
             timer: None,
             combat: None,
             notification: Some(NotificationVisualSnapshot {
@@ -490,7 +769,7 @@ mod tests {
         let canvas = Rect::new(0, 0, 420, 180);
         let style = LabelStyle::new(1.0, 48);
         let unconstrained = super::super::notifications::notification_content_layout(
-            &snapshot, canvas, 3, style, None, 180,
+            &snapshot, canvas, 3, style, None, None, 180,
         );
         assert_eq!(
             unconstrained.preview.as_ref().unwrap().buttons.len(),
@@ -503,6 +782,7 @@ mod tests {
             canvas,
             3,
             style,
+            None,
             Some(0.5),
             180,
         );
@@ -578,5 +858,47 @@ mod tests {
             tiny.intersect(Rect::new(50, 50, 60, 60)),
             Rect::new(50, 50, 50, 50)
         );
+    }
+
+    #[test]
+    fn dps_columns_reserve_numeric_width_and_names_never_overlap() {
+        let row = DpsSceneRow {
+            rank: 1,
+            name: Arc::from("A participant with a deliberately long name"),
+            damage: Arc::from("1,234,567"),
+            dps: Arc::from("30,864"),
+            sdps: Arc::from("29,394"),
+            contribution_millionths: 750_000,
+            has_pet_damage: false,
+            managed_extra: false,
+            active_managed: false,
+        };
+        let scene = DpsScene {
+            bounds: Rect::new(0, 0, 360, 95),
+            scale_millionths: 1_000_000,
+            title: Arc::from("Terris Thule"),
+            duration: Arc::from("0:42"),
+            rows: vec![row].into(),
+            row_height: 27,
+            edit_mode: false,
+            preview: false,
+        };
+        let layout = scene.layout();
+        let columns = layout.rows[0].columns;
+        assert!(columns.player.right <= columns.damage.left);
+        assert!(columns.damage.right <= columns.dps.left);
+        assert!(columns.dps.right <= columns.sdps.left);
+        assert_eq!(
+            layout.rows[0].bar.width(),
+            layout.rows[0].bounds.width() * 3 / 4
+        );
+    }
+
+    #[test]
+    fn top_fifteen_plus_six_managed_rows_fit_640_by_540_dips() {
+        let row_height = DpsScene::row_height_for(21, true, 540, 1.0);
+        let height = DpsScene::content_height(21, true, row_height, 1.0);
+        assert!(row_height >= DPS_MIN_ROW_DIP);
+        assert!(height <= 540);
     }
 }

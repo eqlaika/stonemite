@@ -27,10 +27,12 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_USER};
 pub use diagnostic::{DiagnosticKind, LogDiagnostic};
 #[allow(unused_imports)]
 pub use eqlog::{
-    AttackProblem, CharacterEvent, CharacterKey, CharacterTelemetry, ChatEvent, CombatEvent,
-    DecodedRawLogLine, EqTimestamp, IdentityEvent, IncomingTell, LogEvent, LogEventDomain,
-    LogSource, LogSourceId, NotificationEvent, ParsedLogEvent, PetEvent, ProgressEvent, RawLogLine,
-    TelemetryChange, WhoResult,
+    AttackProblem, CastKind, CastingEvent, CharacterEvent, CharacterKey, CharacterTelemetry,
+    ChatEvent, CombatAttempt, CombatEvent, DamageKind, DamageModifiers, DamageObservation,
+    DamageOutcome, DecodedRawLogLine, EqSecond, EqTimestamp, IdentityEvent, IncomingTell, LogEvent,
+    LogEventDomain, LogSource, LogSourceId, NotificationEvent, ObservedCombatant, ParsedLogEvent,
+    ParserProvenance, PersonaLoaded, Perspective, PetEvent, ProgressEvent, RawLogLine,
+    SourceRecordId, TelemetryChange, WhoResult,
 };
 pub use pipeline::LogEnvelope;
 #[allow(unused_imports)]
@@ -160,6 +162,7 @@ struct RuntimeState {
     wake: Arc<WorkerWake>,
     desired: Arc<Mutex<DesiredSources>>,
     output_receiver: mpsc::Receiver<LogBatch>,
+    dps_mailbox: Arc<Mutex<Option<Arc<eqcombat::EncounterBookSnapshot>>>>,
     output_wake: Arc<OutputWake>,
     event_bus: broadcast::Sender<Arc<LogEnvelope>>,
     worker: Option<JoinHandle<()>>,
@@ -182,11 +185,13 @@ pub fn start(hwnd: HWND) -> Result<(), String> {
         hwnd: hwnd.0 as usize,
         posted: AtomicBool::new(false),
     });
+    let dps_mailbox = Arc::new(Mutex::new(None));
 
     let worker_wake = wake.clone();
     let worker_desired = desired.clone();
     let worker_output_wake = output_wake.clone();
     let worker_event_bus = event_bus.clone();
+    let worker_dps_mailbox = dps_mailbox.clone();
     let worker = std::thread::Builder::new()
         .name("stonemite-eq-logs".to_owned())
         .spawn(move || {
@@ -197,6 +202,7 @@ pub fn start(hwnd: HWND) -> Result<(), String> {
                 output_sender,
                 worker_output_wake,
                 worker_event_bus,
+                worker_dps_mailbox,
             );
         })
         .map_err(|error| format!("could not start EQ log worker: {error}"))?;
@@ -205,6 +211,7 @@ pub fn start(hwnd: HWND) -> Result<(), String> {
         wake,
         desired,
         output_receiver,
+        dps_mailbox,
         output_wake,
         event_bus,
         worker: Some(worker),
@@ -254,6 +261,15 @@ pub(crate) fn drain_ready() -> Vec<LogBatch> {
     batches
 }
 
+/// Take the newest immutable DPS encounter book. Intermediate live frames are
+/// overwritten in the worker-owned latest-value mailbox rather than queued.
+pub(crate) fn take_dps_snapshot() -> Option<Arc<eqcombat::EncounterBookSnapshot>> {
+    let runtime = lock(&RUNTIME);
+    let state = runtime.as_ref()?;
+    let snapshot = lock(&state.dps_mailbox).take();
+    snapshot
+}
+
 #[allow(dead_code)]
 pub fn subscribe() -> Option<broadcast::Receiver<Arc<LogEnvelope>>> {
     lock(&RUNTIME)
@@ -280,6 +296,7 @@ fn worker_main(
     output_sender: mpsc::SyncSender<LogBatch>,
     output_wake: Arc<OutputWake>,
     event_bus: broadcast::Sender<Arc<LogEnvelope>>,
+    dps_mailbox: Arc<Mutex<Option<Arc<eqcombat::EncounterBookSnapshot>>>>,
 ) {
     let mut worker = LogWorker {
         wake,
@@ -287,6 +304,7 @@ fn worker_main(
         signal_receiver,
         output_sender,
         output_wake,
+        dps_mailbox,
         watcher: None,
         tailer: LogTailer::new(),
         pipeline: LogPipeline::new(event_bus),
@@ -306,6 +324,7 @@ struct LogWorker {
     signal_receiver: mpsc::Receiver<()>,
     output_sender: mpsc::SyncSender<LogBatch>,
     output_wake: Arc<OutputWake>,
+    dps_mailbox: Arc<Mutex<Option<Arc<eqcombat::EncounterBookSnapshot>>>>,
     watcher: Option<DirectoryWatcher>,
     tailer: LogTailer,
     pipeline: LogPipeline,
@@ -327,6 +346,9 @@ impl LogWorker {
             self.apply_source_changes();
             self.collect_watcher_activity();
             self.maybe_reconcile();
+            if let Some(snapshot) = self.pipeline.tick(Instant::now()) {
+                self.publish_dps(snapshot);
+            }
 
             if !self.flush_pending_output() {
                 return;
@@ -352,6 +374,9 @@ impl LogWorker {
                     ReadBudget::default(),
                 );
                 let more_work = batch.1;
+                if let Some(snapshot) = batch.2 {
+                    self.publish_dps(snapshot);
+                }
                 if more_work {
                     self.schedule(
                         work.path.clone(),
@@ -366,9 +391,15 @@ impl LogWorker {
 
             let timeout = self
                 .next_reconciliation
-                .saturating_duration_since(Instant::now());
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(100));
             let _ = self.signal_receiver.recv_timeout(timeout);
         }
+    }
+
+    fn publish_dps(&self, snapshot: Arc<eqcombat::EncounterBookSnapshot>) {
+        *lock(&self.dps_mailbox) = Some(snapshot);
+        self.output_wake.post();
     }
 
     fn flush_pending_output(&mut self) -> bool {
@@ -410,8 +441,24 @@ impl LogWorker {
             })
             .unwrap_or_default();
         let outcome = self.tailer.sync_sources(specs);
+        let now = Instant::now();
         for source in outcome.removed_sources {
-            self.pipeline.reset_source(&source);
+            if let Some(snapshot) = self.pipeline.remove_source(&source, now) {
+                self.publish_dps(snapshot);
+            }
+        }
+        for gap in outcome.gaps {
+            if let Some(snapshot) =
+                self.pipeline
+                    .source_gap(&gap.source, gap.generation, gap.reason, now)
+            {
+                self.publish_dps(snapshot);
+            }
+        }
+        for (source, generation) in self.tailer.tracked_sources() {
+            if let Some(snapshot) = self.pipeline.register_source(source, generation, now) {
+                self.publish_dps(snapshot);
+            }
         }
         self.deferred_diagnostics.extend(outcome.diagnostics);
         self.active_desired = replacement;
@@ -528,19 +575,48 @@ fn process_work_item(
     pipeline: &mut LogPipeline,
     work: &WorkItem,
     budget: ReadBudget,
-) -> (LogBatch, bool) {
+) -> (LogBatch, bool, Option<Arc<eqcombat::EncounterBookSnapshot>>) {
     let outcome = tailer.read_path(&work.path, budget);
-    if let Some(source) = &outcome.generation_reset {
-        pipeline.reset_source(source);
-    }
+    let receipt = Instant::now();
+    let mut latest_snapshot = None;
+    let mut records: VecDeque<_> = outcome.lines.into();
     let mut batch = LogBatch {
-        envelopes: Vec::with_capacity(outcome.lines.len()),
+        envelopes: Vec::with_capacity(records.len()),
         diagnostics: outcome.diagnostics,
     };
-    for line in outcome.lines {
-        let processed = pipeline.process(line);
+    for gap in &outcome.gaps {
+        while records
+            .front()
+            .is_some_and(|record| record.id.generation < gap.generation)
+        {
+            let record = records.pop_front().expect("front record exists");
+            let processed = pipeline.process_record(record.id, record.line, receipt);
+            if let Some(snapshot) = processed.dps_snapshot {
+                latest_snapshot = Some(snapshot);
+            }
+            batch.envelopes.push(processed.envelope);
+            batch.diagnostics.extend(processed.diagnostics);
+        }
+        if let Some(snapshot) =
+            pipeline.source_gap(&gap.source, gap.generation, gap.reason, receipt)
+        {
+            latest_snapshot = Some(snapshot);
+        }
+    }
+    for record in records {
+        let processed = pipeline.process_record(record.id, record.line, receipt);
+        if let Some(snapshot) = processed.dps_snapshot {
+            latest_snapshot = Some(snapshot);
+        }
         batch.envelopes.push(processed.envelope);
         batch.diagnostics.extend(processed.diagnostics);
+    }
+    if matches!(work.origin, WorkOrigin::Reconciliation { .. }) {
+        if let Some((source, generation)) = outcome.stable_eof {
+            if let Some(snapshot) = pipeline.stable_eof(source, generation, receipt) {
+                latest_snapshot = Some(snapshot);
+            }
+        }
     }
     if matches!(work.origin, WorkOrigin::Reconciliation { reported: false })
         && !batch.envelopes.is_empty()
@@ -554,7 +630,7 @@ fn process_work_item(
             ),
         ));
     }
-    (batch, outcome.more_work)
+    (batch, outcome.more_work, latest_snapshot)
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -664,7 +740,7 @@ mod tests {
 
         let (sender, _) = broadcast::channel(8);
         let mut pipeline = LogPipeline::new(sender);
-        let (batch, more_work) = process_work_item(
+        let (batch, more_work, _snapshot) = process_work_item(
             &mut tailer,
             &mut pipeline,
             &WorkItem {

@@ -120,6 +120,8 @@ pub(super) struct PresentationState {
     pub(super) active_scene_key: Option<ActiveSceneKey>,
     pub(super) banner_scene_key: Option<BannerSceneKey>,
     pub(super) broadcast_label_hwnd: HWND,
+    pub(super) dps_hwnd: HWND,
+    pub(super) dps_scene_ready: bool,
     pub(super) label_height: i32,
     pub(super) label_alpha: u8,
     pub(super) label_theme: LabelTheme,

@@ -64,6 +64,7 @@ fn is_overlay_window(hwnd: HWND, state: &OverlayState) -> bool {
         || hwnd == state.presentation.stonemite_button.hwnd
         || hwnd == state.presentation.active_label_hwnd
         || hwnd == state.presentation.broadcast_label_hwnd
+        || hwnd == state.presentation.dps_hwnd
         || hwnd == state.presentation.toast.hwnd
     {
         return true;

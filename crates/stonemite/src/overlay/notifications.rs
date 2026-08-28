@@ -494,6 +494,7 @@ pub(super) fn notification_content_layout(
     canvas: Rect,
     border_width: i32,
     style: LabelStyle,
+    casting: Option<(f32, i32, i32)>,
     timer_progress: Option<f32>,
     measured_preview_text_width: i32,
 ) -> NotificationContentLayout {
@@ -502,6 +503,7 @@ pub(super) fn notification_content_layout(
         border_width,
         style,
         canvas.inset(border_width.max(0)).width().max(0),
+        casting,
         timer_progress,
     );
     snapshot.content_layout(
@@ -851,6 +853,10 @@ unsafe fn invite_interaction_at_point(
     windows::Win32::UI::WindowsAndMessaging::GetClientRect(pip.hwnd, &mut client).ok()?;
     let now = Instant::now();
     let source_id = format!("pid:{}", pip.pid);
+    let casting = state
+        .casting
+        .snapshot(pip.pid, now)
+        .map(|snapshot| (snapshot.progress, 0, 0));
     let timer_progress = state
         .timers
         .visible_for(Some(&source_id), now)
@@ -864,6 +870,7 @@ unsafe fn invite_interaction_at_point(
         rect_from_win32(client),
         pixels(BORDER_WIDTH, state.layout.dpi_scale),
         LabelStyle::new(state.layout.dpi_scale, state.presentation.label_height),
+        casting,
         timer_progress,
         0,
     );
@@ -1629,6 +1636,7 @@ mod tests {
             Rect::new(0, 0, 420, 180),
             3,
             LabelStyle::new(1.0, 48),
+            None,
             Some(0.5),
             180,
         );

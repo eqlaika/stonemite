@@ -12,7 +12,7 @@ use super::presentation::{ComApartment, PipWindowEntry};
 use super::render::Compositor;
 use super::runtime;
 use super::scenes::{
-    ActiveLabelScene, LabelScene, PipInteractionScene, PipScene, StatusBannerScene,
+    ActiveLabelScene, CastingScene, LabelScene, PipInteractionScene, PipScene, StatusBannerScene,
     StonemiteButtonScene, TimerScene, ToastScene,
 };
 use super::state::OverlayState;
@@ -120,6 +120,9 @@ pub(super) fn client_scene_rect(hwnd: HWND) -> Option<Rect> {
 }
 
 pub(super) unsafe fn hide_unready_pip_pairs(s: &OverlayState) {
+    if !surface_is_ready(s, s.presentation.dps_hwnd) {
+        let _ = ShowWindow(s.presentation.dps_hwnd, SW_HIDE);
+    }
     if !surface_is_ready(s, s.presentation.stonemite_button.hwnd) {
         let _ = ShowWindow(s.presentation.stonemite_button.hwnd, SW_HIDE);
     }
@@ -132,6 +135,7 @@ pub(super) unsafe fn hide_unready_pip_pairs(s: &OverlayState) {
 }
 
 pub(super) unsafe fn hide_all_pip_pairs(s: &OverlayState) {
+    let _ = ShowWindow(s.presentation.dps_hwnd, SW_HIDE);
     let _ = ShowWindow(s.presentation.stonemite_button.hwnd, SW_HIDE);
     for pip in &s.presentation.pip_windows {
         let _ = ShowWindow(pip.hwnd, SW_HIDE);
@@ -398,6 +402,9 @@ pub(super) unsafe fn service_compositor_recovery_guarded(s: &mut OverlayState) {
     if has_redraw_request(s.presentation.broadcast_label_hwnd) {
         render_banner_surface(s);
     }
+    if has_redraw_request(s.presentation.dps_hwnd) {
+        render_dps_surface(s);
+    }
     if has_redraw_request(s.presentation.toast.hwnd) {
         render_toast_surface(s);
     }
@@ -408,6 +415,7 @@ pub(super) unsafe fn service_compositor_recovery_guarded(s: &mut OverlayState) {
     }
 
     apply_pip_pair_visibility(s, overlay_visibility_allowed(s));
+    apply_dps_visibility(s);
     apply_stonemite_button_visibility(s);
     if toast_publication_allowed(
         s.presentation.toast.phase,
@@ -553,6 +561,13 @@ pub(super) unsafe fn render_pip_surface_for_size(
             remaining_text: remaining,
             progress: *progress,
         });
+    let casting_snapshot = s.casting.snapshot(pip.pid, now);
+    let casting = casting_snapshot.as_ref().map(|snapshot| CastingScene {
+        spell_name: &snapshot.spell_name,
+        outcome: snapshot.outcome,
+        progress: snapshot.progress,
+        alpha: snapshot.alpha,
+    });
     let now_ms = windows::Win32::System::SystemInformation::GetTickCount64();
     let combat = s.combat_awareness.snapshot(pip.pid, now_ms);
     let notification = s
@@ -596,6 +611,7 @@ pub(super) unsafe fn render_pip_surface_for_size(
             theme: &s.presentation.label_theme,
             alpha: s.presentation.label_alpha,
         },
+        casting,
         timer,
         combat,
         notification,
@@ -655,6 +671,43 @@ pub(super) fn input_indicator_background() -> Color {
         }
     };
     Color::from_colorref(value)
+}
+
+pub(super) unsafe fn render_dps_surface(s: &mut OverlayState) {
+    s.presentation.dps_scene_ready = false;
+    let Some(scene) = s.dps.scene.clone() else {
+        let _ = ShowWindow(s.presentation.dps_hwnd, SW_HIDE);
+        return;
+    };
+    if !ensure_surface(
+        s,
+        s.presentation.dps_hwnd,
+        scene.bounds.width(),
+        scene.bounds.height(),
+        1.0,
+    ) {
+        let _ = ShowWindow(s.presentation.dps_hwnd, SW_HIDE);
+        return;
+    }
+    match s
+        .presentation
+        .compositor
+        .as_mut()
+        .expect("compositor ensured")
+        .render_dps_scene(s.presentation.dps_hwnd, &scene)
+    {
+        Ok(()) => {
+            clear_redraw_request(s.presentation.dps_hwnd);
+            s.presentation.dps_scene_ready = true;
+        }
+        Err(error) => {
+            debug_log(&format!("DirectComposition DPS render failed: {error}"));
+            retain_redraw_request(s.presentation.dps_hwnd);
+            s.presentation.dps_scene_ready = false;
+            let _ = ShowWindow(s.presentation.dps_hwnd, SW_HIDE);
+            service_compositor_recovery(s);
+        }
+    }
 }
 
 pub(super) unsafe fn render_banner_surface(s: &mut OverlayState) {
@@ -846,6 +899,21 @@ pub(super) fn overlay_visibility_policy(
     !hidden_by_user && has_pip && (context_menu_open || foreground_is_eq_or_ours)
 }
 
+pub(super) fn dps_visibility_policy(
+    hidden_by_user: bool,
+    enabled: bool,
+    edit_mode: bool,
+    has_managed_client: bool,
+    has_scene: bool,
+    foreground_is_eq_or_ours: bool,
+) -> bool {
+    !hidden_by_user
+        && (enabled || edit_mode)
+        && has_managed_client
+        && has_scene
+        && foreground_is_eq_or_ours
+}
+
 pub(super) unsafe fn overlay_visibility_allowed(s: &OverlayState) -> bool {
     let has_pip = !s.clients.pips().is_empty();
     let foreground_matches = if s.hidden_by_user || !has_pip {
@@ -857,6 +925,19 @@ pub(super) unsafe fn overlay_visibility_allowed(s: &OverlayState) -> bool {
         s.hidden_by_user,
         has_pip,
         s.interaction.context_menu_open,
+        foreground_matches,
+    )
+}
+
+unsafe fn dps_visibility_allowed(s: &OverlayState) -> bool {
+    let foreground_matches = !s.hidden_by_user
+        && (s.interaction.context_menu_open || owns_foreground(GetForegroundWindow(), s));
+    dps_visibility_policy(
+        s.hidden_by_user,
+        s.dps.enabled,
+        s.interaction.edit_mode,
+        !s.clients.windows.is_empty(),
+        s.dps.scene.is_some(),
         foreground_matches,
     )
 }
@@ -887,6 +968,30 @@ unsafe fn apply_one_pip_pair_visibility(s: &OverlayState, pip: &PipWindowEntry, 
 pub(super) unsafe fn apply_pip_pair_visibility(s: &OverlayState, visible: bool) {
     for pip in &s.presentation.pip_windows {
         apply_one_pip_pair_visibility(s, pip, visible);
+    }
+}
+
+unsafe fn apply_dps_visibility(s: &mut OverlayState) {
+    let allowed = dps_visibility_allowed(s);
+    if allowed && has_redraw_request(s.presentation.dps_hwnd) {
+        render_dps_surface(s);
+    }
+    if allowed && s.presentation.dps_scene_ready && surface_is_ready(s, s.presentation.dps_hwnd) {
+        let _ = ShowWindow(s.presentation.dps_hwnd, SW_SHOWNOACTIVATE);
+        let _ = SetWindowPos(
+            s.presentation.dps_hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    } else {
+        let _ = ShowWindow(s.presentation.dps_hwnd, SW_HIDE);
+        if allowed {
+            request_redraw(s.presentation.dps_hwnd);
+        }
     }
 }
 
@@ -968,6 +1073,7 @@ pub(super) unsafe fn update_visibility(s: &mut OverlayState) {
         s.presentation.toast.phase = ToastPhase::Hidden;
         s.presentation.toast.scene_ready = false;
     }
+    apply_dps_visibility(s);
     apply_stonemite_button_visibility(s);
 }
 
@@ -982,5 +1088,24 @@ mod tests {
         assert!(!overlay_visibility_policy(true, true, true, true));
         assert!(!overlay_visibility_policy(false, false, true, true));
         assert!(!overlay_visibility_policy(false, true, false, false));
+    }
+
+    #[test]
+    fn dps_visibility_is_independent_of_pip_count() {
+        assert!(dps_visibility_policy(false, true, false, true, true, true));
+        assert!(dps_visibility_policy(false, false, true, true, true, true));
+        assert!(!dps_visibility_policy(true, true, false, true, true, true));
+        assert!(!dps_visibility_policy(
+            false, false, false, true, true, true
+        ));
+        assert!(!dps_visibility_policy(
+            false, true, false, false, true, true
+        ));
+        assert!(!dps_visibility_policy(
+            false, true, false, true, false, true
+        ));
+        assert!(!dps_visibility_policy(
+            false, true, false, true, true, false
+        ));
     }
 }

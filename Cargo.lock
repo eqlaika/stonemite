@@ -4075,7 +4075,9 @@ version = "2026.8.2200"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "eqcombat",
  "eqlog",
+ "eqspell",
  "futures-util",
  "image",
  "notify",

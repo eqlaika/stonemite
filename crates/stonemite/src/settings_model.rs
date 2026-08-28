@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{
     Account, BoxCycle, BoxIdentity, Config, LabelFontWeight, PipEdge, TrusharConfig,
-    MAX_AA_POINTS_PER_NOTIFICATION, MAX_BOX_CYCLES, MAX_COMBAT_HIT_DURATION_SECONDS,
-    MAX_PIP_LABEL_FONT_FAMILY_LEN, MAX_PIP_LABEL_FONT_SCALE, MAX_PIP_OPACITY,
-    MIN_AA_POINTS_PER_NOTIFICATION, MIN_COMBAT_HIT_DURATION_SECONDS, MIN_PIP_LABEL_FONT_SCALE,
-    MIN_PIP_OPACITY,
+    DPS_OVERLAY_TOP_ROW_OPTIONS, MAX_AA_POINTS_PER_NOTIFICATION, MAX_BOX_CYCLES,
+    MAX_COMBAT_HIT_DURATION_SECONDS, MAX_PIP_LABEL_FONT_FAMILY_LEN, MAX_PIP_LABEL_FONT_SCALE,
+    MAX_PIP_OPACITY, MIN_AA_POINTS_PER_NOTIFICATION, MIN_COMBAT_HIT_DURATION_SECONDS,
+    MIN_PIP_LABEL_FONT_SCALE, MIN_PIP_OPACITY,
 };
 use crate::crypt;
 
@@ -90,6 +90,7 @@ pub struct SettingsDraft {
     pub accounts: AccountsSettings,
     pub box_order: Vec<BoxIdentity>,
     pub pip: PipSettings,
+    pub dps_overlay: DpsOverlaySettings,
     pub notifications: NotificationSettings,
     pub hotkeys: HotkeySettings,
     pub broadcasting: BroadcastingSettings,
@@ -137,6 +138,13 @@ pub struct AccountsSettings {
 pub struct AccountDraft {
     pub username: String,
     pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DpsOverlaySettings {
+    pub enabled: bool,
+    pub top_rows: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -368,6 +376,10 @@ impl SettingsDraft {
                 auto_order: config.auto_order,
                 hide_hotkey: config.hide_hotkey.clone(),
             },
+            dps_overlay: DpsOverlaySettings {
+                enabled: config.dps_overlay_enabled,
+                top_rows: config.effective_dps_overlay_top_rows(),
+            },
             notifications: NotificationSettings {
                 visual_enabled: config.tell_visual_enabled,
                 sound_enabled: config.tell_sound_enabled,
@@ -501,6 +513,9 @@ impl SettingsDraft {
             pip_strip_width: existing.pip_strip_width,
             pip_opacity: Some(self.pip.thumbnail_opacity),
             pip_positions: existing.pip_positions,
+            dps_overlay_enabled: self.dps_overlay.enabled,
+            dps_overlay_top_rows: self.dps_overlay.top_rows,
+            dps_overlay_placement: existing.dps_overlay_placement,
             snap_grid: existing.snap_grid,
             trusik: existing.trusik,
             swap_hotkeys: self.hotkeys.swap_hotkeys,
@@ -568,6 +583,9 @@ impl SettingsDraft {
         )?;
         validate_range("PiP label height", self.pip.label_height, 24, 64)?;
         validate_range("PiP label opacity", self.pip.label_opacity, 10, 100)?;
+        if !DPS_OVERLAY_TOP_ROW_OPTIONS.contains(&self.dps_overlay.top_rows) {
+            return Err("DPS overlay rows must be 5, 10, or 15".to_owned());
+        }
         validate_range(
             "AA points per notification",
             self.notifications.aa_points_per_notification,
@@ -796,6 +814,8 @@ mod tests {
         assert!(draft.box_order.is_empty());
         assert_eq!(draft.pip.edge, PipEdge::Right);
         assert!(draft.pip.show_stonemite_button);
+        assert!(draft.dps_overlay.enabled);
+        assert_eq!(draft.dps_overlay.top_rows, 10);
         assert_eq!(
             draft.pip.thumbnail_opacity,
             crate::config::DEFAULT_PIP_OPACITY
@@ -862,6 +882,32 @@ mod tests {
         assert_eq!(
             invalid.validate(),
             Err("PiP thumbnail opacity must be between 10 and 100".to_owned())
+        );
+    }
+
+    #[test]
+    fn dps_overlay_settings_validate_and_preserve_controller_placement() {
+        let existing = Config {
+            dps_overlay_placement: Some(crate::config::DpsOverlayPlacement {
+                x_dip: 30,
+                y_dip: 40,
+                width_dip: 480,
+            }),
+            ..Config::default()
+        };
+        let mut draft = SettingsDraft::from_config(&existing).unwrap();
+        draft.dps_overlay.enabled = false;
+        draft.dps_overlay.top_rows = 15;
+        let (config, _) = draft.into_config(existing).unwrap();
+        assert!(!config.dps_overlay_enabled);
+        assert_eq!(config.dps_overlay_top_rows, 15);
+        assert_eq!(config.dps_overlay_placement.as_ref().unwrap().x_dip, 30);
+
+        let mut invalid = SettingsDraft::from_config(&Config::default()).unwrap();
+        invalid.dps_overlay.top_rows = 12;
+        assert_eq!(
+            invalid.validate(),
+            Err("DPS overlay rows must be 5, 10, or 15".to_owned())
         );
     }
 

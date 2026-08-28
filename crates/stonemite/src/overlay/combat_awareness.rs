@@ -19,7 +19,6 @@ const DAMAGE_EFFECT_MS: u64 = 850;
 const DAMAGE_IMPACT_MS: u64 = 150;
 const DAMAGE_DECAY_MS: u64 = 450;
 const ATTACK_ISSUE_MS: u64 = 10_000;
-const BARD_SONG_GAP_MS: u64 = 10_000;
 
 const ATTACK_RED: Color = Color::from_colorref(0x003648E8);
 const IMPACT_WHITE: Color = Color::from_colorref(0x00FFFFFF);
@@ -34,7 +33,6 @@ pub(super) enum CombatStatus {
     OutOfRange,
     TooClose,
     LineOfSight,
-    MelodyStopped,
     Dead,
 }
 
@@ -44,7 +42,6 @@ impl CombatStatus {
             Self::OutOfRange => "OUT OF RANGE",
             Self::TooClose => "TOO CLOSE",
             Self::LineOfSight => "NO LINE OF SIGHT",
-            Self::MelodyStopped => "MELODY STOPPED",
             Self::Dead => "DEAD",
         }
     }
@@ -94,10 +91,6 @@ struct Entry {
     last_hit_flash_ms: Option<u64>,
     last_damage_taken_ms: Option<u64>,
     attack_issue: Option<AttackIssue>,
-    song_observations: u8,
-    song_armed: bool,
-    last_song_ms: Option<u64>,
-    song_interrupted: bool,
     dead: bool,
     rendered: Option<VisualKey>,
 }
@@ -112,11 +105,6 @@ impl Entry {
             };
         }
 
-        let melody_stopped = self.song_interrupted
-            || (self.song_armed
-                && self
-                    .last_song_ms
-                    .is_some_and(|last| now_ms.saturating_sub(last) >= BARD_SONG_GAP_MS));
         let attack_status = self.attack_issue.and_then(|issue| {
             (now_ms.saturating_sub(issue.observed_at_ms) < ATTACK_ISSUE_MS).then_some(
                 match issue.problem {
@@ -126,7 +114,7 @@ impl Entry {
                 },
             )
         });
-        let status = attack_status.or(melody_stopped.then_some(CombatStatus::MelodyStopped));
+        let status = attack_status;
         let attacking = self
             .last_weapon_hit_ms
             .is_some_and(|last| now_ms.saturating_sub(last) < hit_duration_ms);
@@ -177,11 +165,6 @@ impl Entry {
             || self
                 .attack_issue
                 .is_some_and(|issue| now_ms.saturating_sub(issue.observed_at_ms) < ATTACK_ISSUE_MS)
-            || (self.song_armed
-                && !self.song_interrupted
-                && self
-                    .last_song_ms
-                    .is_some_and(|last| now_ms.saturating_sub(last) < BARD_SONG_GAP_MS))
     }
 }
 
@@ -243,7 +226,7 @@ impl CombatAwarenessCenter {
     fn apply_event(
         &mut self,
         pid: u32,
-        is_bard: bool,
+        _is_bard: bool,
         event: &crate::log_watcher::LogEvent,
         now_ms: u64,
     ) -> bool {
@@ -289,30 +272,6 @@ impl CombatAwarenessCenter {
                     problem: *problem,
                     observed_at_ms: now_ms,
                 });
-            }
-            crate::log_watcher::LogEvent::Combat(crate::log_watcher::CombatEvent::SongStarted)
-                if is_bard && !entry.dead =>
-            {
-                let continues_sequence = entry
-                    .last_song_ms
-                    .is_some_and(|last| now_ms.saturating_sub(last) < BARD_SONG_GAP_MS);
-                entry.song_observations = if entry.song_armed {
-                    entry.song_observations.max(2)
-                } else if continues_sequence {
-                    entry.song_observations.saturating_add(1)
-                } else {
-                    1
-                };
-                entry.song_armed = entry.song_armed || entry.song_observations >= 2;
-                entry.last_song_ms = Some(now_ms);
-                entry.song_interrupted = false;
-            }
-            crate::log_watcher::LogEvent::Combat(
-                crate::log_watcher::CombatEvent::SongInterrupted,
-            ) if !entry.dead => {
-                entry.song_observations = entry.song_observations.max(2);
-                entry.song_armed = true;
-                entry.song_interrupted = true;
             }
             crate::log_watcher::LogEvent::Character(crate::log_watcher::CharacterEvent::Died) => {
                 *entry = Entry {
@@ -570,17 +529,10 @@ pub(super) fn apply_log_event(
         ));
         return;
     };
-    let is_bard = state
-        .clients
-        .windows
-        .iter()
-        .find(|window| window.pid == pid)
-        .and_then(|window| window.class.as_deref())
-        .is_some_and(|class| class.eq_ignore_ascii_case("BRD"));
     let now_ms = unsafe { windows::Win32::System::SystemInformation::GetTickCount64() };
     let visual_changed = state
         .combat_awareness
-        .apply_event(pid, is_bard, &event.event, now_ms);
+        .apply_event(pid, false, &event.event, now_ms);
     unsafe {
         if visual_changed {
             if let Some(pip) = state
@@ -742,63 +694,6 @@ mod tests {
                 .visual_key(2_001, center.hit_duration_ms, false)
                 .status,
             None
-        );
-    }
-
-    #[test]
-    fn bard_song_sequence_arms_the_gap_warning_and_next_song_recovers_it() {
-        let mut center = center(3_000, false);
-        center.apply_event(7, true, &LogEvent::Combat(CombatEvent::SongStarted), 1_000);
-        assert!(!center.entries[&7].song_armed);
-        center.apply_event(7, true, &LogEvent::Combat(CombatEvent::SongStarted), 4_000);
-        assert!(center.entries[&7].song_armed);
-        assert_eq!(
-            center.entries[&7]
-                .visual_key(13_999, center.hit_duration_ms, false)
-                .status,
-            None
-        );
-        assert_eq!(
-            center.entries[&7]
-                .visual_key(14_000, center.hit_duration_ms, false)
-                .status,
-            Some(CombatStatus::MelodyStopped)
-        );
-        center.apply_event(7, true, &LogEvent::Combat(CombatEvent::SongStarted), 15_000);
-        assert_eq!(
-            center.entries[&7]
-                .visual_key(15_001, center.hit_duration_ms, false)
-                .status,
-            None
-        );
-    }
-
-    #[test]
-    fn current_attack_problem_temporarily_outweighs_a_stopped_melody() {
-        let mut center = center(3_000, false);
-        center.apply_event(
-            7,
-            true,
-            &LogEvent::Combat(CombatEvent::SongInterrupted),
-            1_000,
-        );
-        center.apply_event(
-            7,
-            true,
-            &LogEvent::Combat(CombatEvent::AttackBlocked(AttackProblem::LineOfSight)),
-            2_000,
-        );
-        assert_eq!(
-            center.entries[&7]
-                .visual_key(2_001, center.hit_duration_ms, false)
-                .status,
-            Some(CombatStatus::LineOfSight)
-        );
-        assert_eq!(
-            center.entries[&7]
-                .visual_key(12_000, center.hit_duration_ms, false)
-                .status,
-            Some(CombatStatus::MelodyStopped)
         );
     }
 

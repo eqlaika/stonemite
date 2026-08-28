@@ -27,8 +27,9 @@ use super::super::notifications::{
     NotificationPreviewLayout, NotificationVisualSnapshot,
 };
 use super::super::scenes::{
-    ActiveLabelScene, PipScene, PipSceneLayout, SceneColor, StatusBannerScene,
-    StonemiteButtonScene, TimerLayout, TimerScene, ToastScene, UiTextRole,
+    ActiveLabelScene, CastingLayout, CastingScene, DpsScene, DpsSceneLayout, PipScene,
+    PipSceneLayout, SceneColor, StatusBannerScene, StonemiteButtonScene, TimerLayout, TimerScene,
+    ToastScene, UiTextRole, DPS_SURFACE_ALPHA,
 };
 use super::compositor::TextResources;
 
@@ -43,6 +44,165 @@ pub(super) unsafe fn draw_active_label(
     draw_label(context, text, icon, &scene.label, layout.label_bounds)?;
     if let (Some(timer), Some(timer_layout)) = (scene.timer, layout.timer) {
         draw_timer(context, text, timer, timer_layout)?;
+    }
+    Ok(())
+}
+
+pub(super) unsafe fn draw_dps_scene(
+    context: &ID2D1DeviceContext,
+    text: &TextResources,
+    scene: &DpsScene,
+) -> WindowsResult<()> {
+    prepare_context(context);
+    let layout = scene.layout();
+    let scale = scene.scale();
+    fill_rounded(
+        context,
+        layout.panel,
+        pixels(8, scale),
+        SceneColor::from_colorref(0x00181716, DPS_SURFACE_ALPHA),
+    )?;
+    draw_dps_header(context, text, scene, &layout)?;
+    for (row, row_layout) in scene.rows.iter().zip(layout.rows.iter()) {
+        if let Some(separator) = row_layout.separator {
+            let line_y = separator.top + separator.height() / 2;
+            fill_rect(
+                context,
+                Rect::new(separator.left, line_y, separator.right, line_y + 1),
+                SceneColor::from_colorref(0x006D706F, 150),
+            )?;
+        }
+        if !row_layout.bar.is_empty() {
+            fill_rect(
+                context,
+                row_layout.bar,
+                SceneColor::from_colorref(
+                    if row.active_managed {
+                        0x008D7460
+                    } else {
+                        0x006C4A3A
+                    },
+                    if row.active_managed { 86 } else { 58 },
+                ),
+            )?;
+        }
+        let role = UiTextRole::DpsRow;
+        let font = role.font();
+        let font_height = role
+            .height(scale, 0)
+            .min((row_layout.bounds.height() - 2).max(1));
+        let primary = if row.active_managed {
+            SceneColor::from_colorref(0x00FFF0D8, 255)
+        } else {
+            SceneColor::from_colorref(0x00FFFFFF, 255)
+        };
+        draw_text(
+            context,
+            text,
+            &row.rank.to_string(),
+            &font,
+            font_height,
+            row_layout.columns.rank,
+            primary,
+            DWRITE_TEXT_ALIGNMENT_LEADING,
+            false,
+        )?;
+        draw_text(
+            context,
+            text,
+            &row.name,
+            &font,
+            font_height,
+            row_layout.columns.player,
+            primary,
+            DWRITE_TEXT_ALIGNMENT_LEADING,
+            true,
+        )?;
+        for (value, bounds) in [
+            (row.damage.as_ref(), row_layout.columns.damage),
+            (row.dps.as_ref(), row_layout.columns.dps),
+            (row.sdps.as_ref(), row_layout.columns.sdps),
+        ] {
+            draw_text(
+                context,
+                text,
+                value,
+                &font,
+                font_height,
+                bounds,
+                primary,
+                DWRITE_TEXT_ALIGNMENT_TRAILING,
+                false,
+            )?;
+        }
+    }
+    if scene.edit_mode {
+        fill_inward_frame(
+            context,
+            layout.panel,
+            SceneColor::from_colorref(0x0000E5FF, 255),
+        )?;
+        fill_inward_frame(
+            context,
+            layout.panel.inset(1),
+            SceneColor::from_colorref(0x0000E5FF, 255),
+        )?;
+    }
+    Ok(())
+}
+
+unsafe fn draw_dps_header(
+    context: &ID2D1DeviceContext,
+    text: &TextResources,
+    scene: &DpsScene,
+    layout: &DpsSceneLayout,
+) -> WindowsResult<()> {
+    let scale = scene.scale();
+    let title_role = UiTextRole::DpsTitle;
+    draw_text(
+        context,
+        text,
+        &scene.title,
+        &title_role.font(),
+        title_role.height(scale, 0),
+        layout.title,
+        SceneColor::from_colorref(0x00FFFFFF, 255),
+        DWRITE_TEXT_ALIGNMENT_LEADING,
+        true,
+    )?;
+    draw_text(
+        context,
+        text,
+        &scene.duration,
+        &title_role.font(),
+        title_role.height(scale, 0),
+        layout.duration,
+        SceneColor::from_colorref(0x00D3D6D5, 255),
+        DWRITE_TEXT_ALIGNMENT_TRAILING,
+        false,
+    )?;
+    let role = UiTextRole::DpsColumn;
+    let font = role.font();
+    let height = role.height(scale, 0);
+    let secondary = SceneColor::from_colorref(0x00B6B9B8, 255);
+    for (value, bounds, alignment) in [
+        ("#", layout.columns.rank, DWRITE_TEXT_ALIGNMENT_LEADING),
+        (
+            "Player",
+            layout.columns.player,
+            DWRITE_TEXT_ALIGNMENT_LEADING,
+        ),
+        (
+            "Damage",
+            layout.columns.damage,
+            DWRITE_TEXT_ALIGNMENT_TRAILING,
+        ),
+        ("DPS", layout.columns.dps, DWRITE_TEXT_ALIGNMENT_TRAILING),
+        ("SDPS", layout.columns.sdps, DWRITE_TEXT_ALIGNMENT_TRAILING),
+    ] {
+        draw_text(
+            context, text, value, &font, height, bounds, secondary, alignment, false,
+        )?;
     }
     Ok(())
 }
@@ -81,6 +241,11 @@ pub(super) unsafe fn draw_pip_scene(
     }
     draw_pip_content_group(context, scene.content_alpha(), layout.canvas, || {
         draw_label(context, text, icon, &scene.label, layout.label_bounds)?;
+        if let (Some(casting), Some(casting_layout)) = (scene.casting, layout.casting) {
+            draw_pip_content_group(context, casting.alpha, casting_layout.panel, || {
+                draw_casting(context, text, casting, casting_layout)
+            })?;
+        }
         if let (Some(timer), Some(timer_layout)) = (scene.timer, layout.timer) {
             draw_timer(context, text, timer, timer_layout)?;
         }
@@ -330,6 +495,129 @@ unsafe fn draw_label(
             layout.text,
             SceneColor::opaque(scene.theme.text_color),
             DWRITE_TEXT_ALIGNMENT_LEADING,
+            false,
+        )?;
+    }
+    Ok(())
+}
+
+unsafe fn draw_casting(
+    context: &ID2D1DeviceContext,
+    text: &TextResources,
+    scene: CastingScene<'_>,
+    layout: CastingLayout,
+) -> WindowsResult<()> {
+    let (panel, accent) = match scene.outcome {
+        None => (
+            Color {
+                red: 18,
+                green: 24,
+                blue: 34,
+            },
+            Color {
+                red: 91,
+                green: 188,
+                blue: 255,
+            },
+        ),
+        Some(super::super::casting::CastingOutcome::Completed) => (
+            Color {
+                red: 15,
+                green: 34,
+                blue: 29,
+            },
+            Color {
+                red: 101,
+                green: 227,
+                blue: 174,
+            },
+        ),
+        Some(super::super::casting::CastingOutcome::Fizzled) => (
+            Color {
+                red: 39,
+                green: 19,
+                blue: 24,
+            },
+            Color {
+                red: 255,
+                green: 105,
+                blue: 118,
+            },
+        ),
+        Some(super::super::casting::CastingOutcome::Resisted) => (
+            Color {
+                red: 42,
+                green: 31,
+                blue: 15,
+            },
+            Color {
+                red: 255,
+                green: 191,
+                blue: 83,
+            },
+        ),
+        Some(super::super::casting::CastingOutcome::Interrupted) => (
+            Color {
+                red: 37,
+                green: 18,
+                blue: 21,
+            },
+            Color {
+                red: 242,
+                green: 89,
+                blue: 100,
+            },
+        ),
+    };
+    fill_rounded(
+        context,
+        layout.panel,
+        layout.corner_radius,
+        SceneColor::opaque(panel),
+    )?;
+    fill_rounded(
+        context,
+        layout.track,
+        (layout.track.height() / 2).max(1),
+        SceneColor::with_alpha(
+            Color {
+                red: 5,
+                green: 8,
+                blue: 13,
+            },
+            238,
+        ),
+    )?;
+    if !layout.fill.is_empty() {
+        fill_rounded(
+            context,
+            layout.fill,
+            (layout.fill.height() / 2).max(1),
+            SceneColor::opaque(accent),
+        )?;
+    }
+    let font = UiTextRole::Casting.font();
+    draw_text(
+        context,
+        text,
+        scene.spell_name,
+        &font,
+        layout.font_height,
+        layout.spell_text,
+        SceneColor::from_colorref(0x00FFFFFF, 255),
+        DWRITE_TEXT_ALIGNMENT_LEADING,
+        true,
+    )?;
+    if scene.outcome.is_some() {
+        draw_text(
+            context,
+            text,
+            scene.outcome_label(),
+            &font,
+            layout.font_height,
+            layout.outcome_text,
+            SceneColor::opaque(accent),
+            DWRITE_TEXT_ALIGNMENT_TRAILING,
             false,
         )?;
     }

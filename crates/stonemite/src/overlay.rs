@@ -1,9 +1,11 @@
 mod activation;
 mod appearance;
+mod casting;
 mod client_controller;
 mod clients;
 mod combat_awareness;
 mod control_bridge;
+mod dps_overlay;
 mod edit_mode;
 mod event_loop;
 mod geometry;

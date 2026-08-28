@@ -31,12 +31,15 @@ pub(super) unsafe fn toggle_inner(state: &mut OverlayState) {
         let _ = config::Config::update(move |config| {
             config.pip_positions = positions;
         });
+        super::dps_overlay::save_placement(state);
         state.layout.has_custom_positions = true;
         state.interaction.edit_mode = false;
     } else {
         state.interaction.edit_mode = true;
     }
+    super::dps_overlay::set_edit_mode(state, state.interaction.edit_mode);
     for pip in &state.presentation.pip_windows {
         request_redraw(pip.label_hwnd);
     }
+    super::surfaces::update_visibility(state);
 }

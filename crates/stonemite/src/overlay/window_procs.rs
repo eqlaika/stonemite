@@ -6,6 +6,7 @@ use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+use super::casting;
 use super::combat_awareness;
 use super::hosts::update_active_label;
 use super::menu::queue_char_menu;
@@ -123,6 +124,12 @@ unsafe fn tick_combat_awareness(timer_hwnd: HWND) {
     }
 }
 
+unsafe fn tick_casting(timer_hwnd: HWND) {
+    if try_with_state_mut(|state| unsafe { casting::tick(state, timer_hwnd) }).is_err() {
+        let _ = KillTimer(timer_hwnd, casting::TIMER_ID);
+    }
+}
+
 unsafe fn tick_timer_overlay(timer_hwnd: HWND) {
     if try_with_state_mut(|state| unsafe { tick_timer_overlay_inner(state, timer_hwnd) }).is_err() {
         let _ = KillTimer(timer_hwnd, TIMER_OVERLAY_TICK);
@@ -196,6 +203,10 @@ pub(super) unsafe extern "system" fn label_wnd_proc(
         }
         WM_TIMER if wparam.0 == combat_awareness::TIMER_ID => {
             tick_combat_awareness(hwnd);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == casting::TIMER_ID => {
+            tick_casting(hwnd);
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_OVERLAY_TICK => {

@@ -124,6 +124,7 @@ pub fn run_standalone() {
             load_settings,
             load_running_characters,
             save_settings,
+            reset_dps_overlay_placement,
             choose_eq_directory,
             preview_notification_sound,
             begin_pairing,
@@ -283,6 +284,14 @@ fn save_settings(draft: SettingsDraft) -> Result<SaveOutcome, String> {
     let outcome = draft.save()?;
     notify_tray();
     Ok(outcome)
+}
+
+#[tauri::command]
+fn reset_dps_overlay_placement() -> Result<(), String> {
+    Config::update(|config| config.dps_overlay_placement = None)
+        .map_err(|error| format!("Stonemite could not reset DPS overlay placement: {error}"))?;
+    notify_tray();
+    Ok(())
 }
 
 #[tauri::command(rename_all = "camelCase")]

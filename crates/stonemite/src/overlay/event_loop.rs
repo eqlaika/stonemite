@@ -4,6 +4,7 @@ use std::time::Instant;
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, KillTimer, SetTimer};
 
 use super::activation::target_has_keyboard_focus;
+use super::casting;
 use super::clients::{
     apply_preferred_box_order, focused_foreground_pid, next_available_number, MAX_PIPS,
 };
@@ -120,6 +121,7 @@ unsafe fn poll_inner(s: &mut OverlayState) {
             super::in_game_button::update_layout(s);
         }
         s.window_styles.apply(&s.clients);
+        super::dps_overlay::reconcile(s);
         service_compositor_recovery(s);
         update_visibility(s);
         s.clients.debug_assert_partition();
@@ -136,6 +138,7 @@ unsafe fn poll_inner(s: &mut OverlayState) {
             last_closed_label = Some(format!("Window #{} closed", w.number));
         }
         s.clients.remove(*pid);
+        s.casting.remove(*pid);
         s.combat_awareness.remove(*pid);
         s.notification_center.remove_client(*pid);
     }
@@ -214,6 +217,7 @@ unsafe fn poll_inner(s: &mut OverlayState) {
 
     s.window_styles.apply(&s.clients);
     rebuild_thumbnails(s);
+    super::dps_overlay::reconcile(s);
     service_compositor_recovery(s);
     update_visibility(s);
     s.clients.debug_assert_partition();
@@ -248,12 +252,20 @@ pub(super) fn publish_log_sources() {
 pub(super) fn drain_log_events() -> bool {
     match try_with_state_mut(|state| {
         let batches = log_watcher::drain_ready();
+        let dps_snapshot = log_watcher::take_dps_snapshot();
         apply_log_batches(state, batches);
+        if let Some(snapshot) = dps_snapshot {
+            unsafe {
+                super::dps_overlay::apply_book(state, snapshot);
+                update_visibility(state);
+            }
+        }
     }) {
         Ok(()) => true,
         Err(AccessError::Busy) => false,
         Err(AccessError::Unavailable) => {
             let _ = log_watcher::drain_ready();
+            let _ = log_watcher::take_dps_snapshot();
             true
         }
     }
@@ -271,18 +283,23 @@ fn apply_log_batches(s: &mut OverlayState, batches: Vec<log_watcher::LogBatch>) 
             timers_changed |= s
                 .timers
                 .apply_activations(&envelope.trigger_activations, now);
+            // Persona changes must update the current class before a later cast
+            // in the same drained batch is keyed and estimated.
+            for change in envelope.telemetry_changes.iter() {
+                class_changed |= s.telemetry.apply_change(&mut s.clients, change);
+            }
+            casting::apply_log_envelope(s, &envelope);
             for event in envelope.events.iter() {
                 notifications::apply_log_event(s, event);
                 combat_awareness::apply_log_event(s, event);
             }
-            for change in envelope.telemetry_changes.iter() {
-                class_changed |= s.telemetry.apply_change(&mut s.clients, change);
-            }
         }
     }
     s.telemetry.save();
+    s.casting.save();
 
     if class_changed {
+        s.casting.reconcile_clients(&s.clients.windows);
         unsafe { rebuild_thumbnails(s) };
     }
     if timers_changed {

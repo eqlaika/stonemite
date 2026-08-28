@@ -1,4 +1,5 @@
 import {
+  BarChart3,
   Bell,
   CircleHelp,
   Gamepad2,
@@ -20,6 +21,7 @@ import { AboutPage } from "./pages/AboutPage";
 import { AccountsPage } from "./pages/AccountsPage";
 import { BoxOrderPage } from "./pages/BoxOrderPage";
 import { BroadcastingPage } from "./pages/BroadcastingPage";
+import { DpsOverlayPage } from "./pages/DpsOverlayPage";
 import { GeneralPage } from "./pages/GeneralPage";
 import { HotkeysPage } from "./pages/HotkeysPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
@@ -32,6 +34,7 @@ type PageId =
   | "accounts"
   | "boxOrder"
   | "pip"
+  | "dpsOverlay"
   | "notifications"
   | "hotkeys"
   | "broadcasting"
@@ -48,6 +51,7 @@ const navigation: NavigationItem[] = [
   { id: "accounts", label: "Accounts", icon: UserRound },
   { id: "boxOrder", label: "Box order", icon: ListOrdered },
   { id: "pip", label: "PiP overlay", icon: MonitorUp },
+  { id: "dpsOverlay", label: "DPS overlay", icon: BarChart3 },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "hotkeys", label: "Hotkeys", icon: Keyboard },
   { id: "broadcasting", label: "Broadcasting", icon: Radio },
@@ -64,6 +68,8 @@ function CurrentPage({ page }: { page: PageId }) {
       return <BoxOrderPage />;
     case "pip":
       return <PipPage />;
+    case "dpsOverlay":
+      return <DpsOverlayPage />;
     case "notifications":
       return <NotificationsPage />;
     case "hotkeys":

@@ -50,6 +50,11 @@ export interface AccountsSettings {
   accounts: AccountDraft[];
 }
 
+export interface DpsOverlaySettings {
+  enabled: boolean;
+  topRows: 5 | 10 | 15;
+}
+
 export interface PipSettings {
   edge: PipEdge;
   showStonemiteButton: boolean;
@@ -105,6 +110,7 @@ export interface SettingsDraft {
   accounts: AccountsSettings;
   boxOrder: BoxIdentity[];
   pip: PipSettings;
+  dpsOverlay: DpsOverlaySettings;
   notifications: NotificationSettings;
   hotkeys: HotkeySettings;
   broadcasting: BroadcastingSettings;

@@ -16,6 +16,10 @@ pub const DEFAULT_PIP_LABEL_FONT_SCALE: u32 = 100;
 pub const MIN_PIP_LABEL_FONT_SCALE: u32 = 60;
 pub const MAX_PIP_LABEL_FONT_SCALE: u32 = 120;
 pub const MAX_PIP_LABEL_FONT_FAMILY_LEN: usize = 31;
+pub const DEFAULT_DPS_OVERLAY_TOP_ROWS: u8 = 10;
+pub const DPS_OVERLAY_TOP_ROW_OPTIONS: &[u8] = &[5, 10, 15];
+pub const DEFAULT_DPS_OVERLAY_WIDTH_DIP: u32 = 440;
+pub const MIN_DPS_OVERLAY_WIDTH_DIP: u32 = 360;
 pub const DEFAULT_COMBAT_HIT_DURATION_SECONDS: f32 = 3.0;
 pub const MIN_COMBAT_HIT_DURATION_SECONDS: f32 = 0.5;
 pub const MAX_COMBAT_HIT_DURATION_SECONDS: f32 = 10.0;
@@ -125,6 +129,15 @@ pub struct PipPosition {
     pub y: i32,
     pub width: u32,
     pub height: u32,
+}
+
+/// Work-area-relative DPS overlay placement persisted in device-independent
+/// pixels so one global preference can follow the active EQ monitor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DpsOverlayPlacement {
+    pub x_dip: i32,
+    pub y_dip: i32,
+    pub width_dip: u32,
 }
 
 /// An EverQuest account for auto-login.
@@ -243,6 +256,15 @@ pub struct Config {
     /// Per-pip custom positions. Empty = auto strip layout.
     #[serde(default)]
     pub pip_positions: Vec<PipPosition>,
+    /// Show the passive encounter DPS panel. Default: true.
+    #[serde(default = "default_dps_overlay_enabled")]
+    pub dps_overlay_enabled: bool,
+    /// Global participant cutoff before omitted managed boxes are appended.
+    #[serde(default = "default_dps_overlay_top_rows")]
+    pub dps_overlay_top_rows: u8,
+    /// Work-area-relative placement and width in DIPs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dps_overlay_placement: Option<DpsOverlayPlacement>,
     /// Snap grid size in pixels. 0 = no grid snap. Default: 16.
     #[serde(default = "default_snap_grid")]
     pub snap_grid: u32,
@@ -376,6 +398,14 @@ fn default_snap_grid() -> u32 {
     16
 }
 
+fn default_dps_overlay_enabled() -> bool {
+    true
+}
+
+fn default_dps_overlay_top_rows() -> u8 {
+    DEFAULT_DPS_OVERLAY_TOP_ROWS
+}
+
 fn default_show_stonemite_button() -> bool {
     true
 }
@@ -459,6 +489,9 @@ impl Default for Config {
             pip_strip_width: None,
             pip_opacity: None,
             pip_positions: Vec::new(),
+            dps_overlay_enabled: default_dps_overlay_enabled(),
+            dps_overlay_top_rows: default_dps_overlay_top_rows(),
+            dps_overlay_placement: None,
             snap_grid: default_snap_grid(),
             pip_label_height: None,
             pip_label_opacity: None,
@@ -533,6 +566,13 @@ impl Drop for ConfigLock {
 }
 
 impl Config {
+    pub fn effective_dps_overlay_top_rows(&self) -> u8 {
+        DPS_OVERLAY_TOP_ROW_OPTIONS
+            .contains(&self.dps_overlay_top_rows)
+            .then_some(self.dps_overlay_top_rows)
+            .unwrap_or(DEFAULT_DPS_OVERLAY_TOP_ROWS)
+    }
+
     pub fn effective_pip_opacity(&self) -> u32 {
         self.pip_opacity
             .unwrap_or(DEFAULT_PIP_OPACITY)
@@ -991,6 +1031,9 @@ mod tests {
         let config: Config = toml::from_str("eq_dir = 'C:\\EverQuest'").unwrap();
 
         assert!(config.show_stonemite_button);
+        assert!(config.dps_overlay_enabled);
+        assert_eq!(config.effective_dps_overlay_top_rows(), 10);
+        assert_eq!(config.dps_overlay_placement, None);
         assert_eq!(config.mouse_clutch_key, "F13");
         assert_eq!(config.mouse_clutch_vk(), Ok(Some(0x7c)));
         assert!(config.tell_visual_enabled);
@@ -1107,6 +1150,33 @@ box_cycles = [
         let serialized = toml::to_string_pretty(&config).unwrap();
         let reparsed: Config = toml::from_str(&serialized).unwrap();
         assert_eq!(reparsed.stonemite_button_position, Some([0.25, 0.75]));
+    }
+
+    #[test]
+    fn dps_overlay_defaults_validates_rows_and_round_trips_dip_placement() {
+        let upgraded: Config = toml::from_str("eq_dir = 'C:\\EverQuest'").unwrap();
+        assert!(upgraded.dps_overlay_enabled);
+        assert_eq!(upgraded.effective_dps_overlay_top_rows(), 10);
+
+        let malformed = Config {
+            dps_overlay_top_rows: 12,
+            ..Config::default()
+        };
+        assert_eq!(malformed.effective_dps_overlay_top_rows(), 10);
+
+        let config = Config {
+            dps_overlay_top_rows: 15,
+            dps_overlay_placement: Some(DpsOverlayPlacement {
+                x_dip: 24,
+                y_dip: 32,
+                width_dip: 500,
+            }),
+            ..Config::default()
+        };
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let reparsed: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.effective_dps_overlay_top_rows(), 15);
+        assert_eq!(reparsed.dps_overlay_placement, config.dps_overlay_placement);
     }
 
     #[test]

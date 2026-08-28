@@ -8,6 +8,7 @@ pub enum DiagnosticKind {
     FileRead,
     FileReset,
     Parser,
+    Combat,
     Reconciliation,
 }
 
@@ -54,6 +55,7 @@ fn kind_name(kind: DiagnosticKind) -> &'static str {
         DiagnosticKind::FileRead => "log read",
         DiagnosticKind::FileReset => "log reset",
         DiagnosticKind::Parser => "log parser",
+        DiagnosticKind::Combat => "combat engine",
         DiagnosticKind::Reconciliation => "log reconciliation",
     }
 }

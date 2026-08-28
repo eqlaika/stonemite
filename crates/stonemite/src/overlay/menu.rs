@@ -364,7 +364,9 @@ pub(super) unsafe fn apply_menu_command(s: &mut OverlayState, cmd_id: u32) {
             config.pip_positions.clear();
         });
         s.layout.has_custom_positions = false;
+        super::dps_overlay::save_placement(s);
         s.interaction.edit_mode = false;
+        super::dps_overlay::set_edit_mode(s, false);
         rebuild_thumbnails(s);
         update_visibility(s);
     } else if (IDM_EDGE_BASE..IDM_EDGE_BASE + 4).contains(&cmd_id) {

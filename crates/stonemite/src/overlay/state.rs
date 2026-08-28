@@ -1,7 +1,9 @@
 use windows::Win32::UI::Accessibility::HWINEVENTHOOK;
 
+use super::casting::CastingCenter;
 use super::clients::ClientRegistry;
 use super::combat_awareness::CombatAwarenessCenter;
+use super::dps_overlay::DpsOverlayController;
 use super::interaction::InteractionState;
 use super::layout::LayoutState;
 use super::notifications::NotificationCenter;
@@ -22,8 +24,11 @@ pub(super) struct OverlayState {
     pub(super) interaction: InteractionState,
     pub(super) window_styles: WindowStyleState,
     pub(super) telemetry: TelemetryState,
+    /// Log-only spell casting state and persona-safe recent timing estimates.
+    pub(super) casting: CastingCenter,
     /// High-frequency, recoverable combat presentation kept separate from unread events.
     pub(super) combat_awareness: CombatAwarenessCenter,
+    pub(super) dps: DpsOverlayController,
     pub(super) notification_center: NotificationCenter,
     /// Passive display-only timers started by log trigger activations.
     pub(super) timers: TimerOverlayState,

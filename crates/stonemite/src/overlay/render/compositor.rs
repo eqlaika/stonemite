@@ -47,7 +47,8 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use super::super::combat_awareness::CombatStatus;
 use super::super::labels::{required_width, FontSpec, LabelModel, LabelStyle, LabelTheme};
 use super::super::scenes::{
-    ActiveLabelScene, PipScene, StatusBannerScene, StonemiteButtonScene, ToastScene, UiTextRole,
+    ActiveLabelScene, DpsScene, PipScene, StatusBannerScene, StonemiteButtonScene, ToastScene,
+    UiTextRole,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -828,6 +829,17 @@ impl Compositor {
             scene.label.theme,
             scene.canvas.width().max(1),
         )?;
+        let (cast_spell_width, cast_outcome_width) = if let Some(casting) = scene.casting {
+            let role = UiTextRole::Casting;
+            let font = role.font();
+            let height = role.height(scene.scale, 0);
+            (
+                self.measure_text(casting.spell_name, &font, height)?,
+                self.measure_text(casting.outcome_label(), &font, height)?,
+            )
+        } else {
+            (0, 0)
+        };
         let preview_width = if let Some(notification) = &scene.notification {
             self.measure_text(
                 &notification.text,
@@ -848,7 +860,13 @@ impl Compositor {
             } else {
                 0
             };
-        let layout = scene.layout(label_width, preview_width, combat_status_width);
+        let layout = scene.layout(
+            label_width,
+            cast_spell_width,
+            cast_outcome_width,
+            preview_width,
+            combat_status_width,
+        );
         let icon = match scene.label.model.class {
             Some(class) => self.class_icon_bitmap(class)?,
             None => None,
@@ -880,6 +898,22 @@ impl Compositor {
             scene.bounds.width().max(1) as u32,
             scene.bounds.height().max(1) as u32,
             |context| super::scene_d2d::draw_stonemite_button(context, &icon, scene),
+        )?;
+        self.flush()
+    }
+
+    pub(in crate::overlay) unsafe fn render_dps_scene(
+        &mut self,
+        hwnd: HWND,
+        scene: &DpsScene,
+    ) -> WindowsResult<()> {
+        self.set_surface_opacity(hwnd, 1.0)?;
+        let text = self.text.clone();
+        self.replace_surface_frame(
+            hwnd,
+            scene.bounds.width().max(1) as u32,
+            scene.bounds.height().max(1) as u32,
+            |context| super::scene_d2d::draw_dps_scene(context, &text, scene),
         )?;
         self.flush()
     }
@@ -1468,10 +1502,11 @@ mod tests {
 
     #[test]
     fn creates_every_role_specific_scene_on_a_hardware_direct2d_target() {
+        use super::super::super::casting::CastingOutcome;
         use super::super::super::notifications::{Kind, Notification};
         use super::super::super::scenes::{
-            ActiveLabelScene, LabelScene, PipInteractionScene, PipScene, StatusBannerScene,
-            TimerScene, ToastScene, UiTextRole,
+            ActiveLabelScene, CastingScene, LabelScene, PipInteractionScene, PipScene,
+            StatusBannerScene, TimerScene, ToastScene, UiTextRole,
         };
         use windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED;
 
@@ -1559,6 +1594,12 @@ mod tests {
                 border_width: 3,
                 scale: 1.0,
                 label,
+                casting: Some(CastingScene {
+                    spell_name: "Complete Heal",
+                    outcome: Some(CastingOutcome::Completed),
+                    progress: 1.0,
+                    alpha: 255,
+                }),
                 timer: Some(timer),
                 combat: None,
                 notification: Some(notification.clone()),
@@ -1574,7 +1615,7 @@ mod tests {
                     UiTextRole::NotificationPreview.height(1.0, 0),
                 )
                 .expect("measure notification text");
-            let pip_layout = pip.layout(240, preview_width, 0);
+            let pip_layout = pip.layout(240, 110, 72, preview_width, 0);
             super::super::scene_d2d::draw_pip_scene(
                 &graphics.d2d_context,
                 &text,

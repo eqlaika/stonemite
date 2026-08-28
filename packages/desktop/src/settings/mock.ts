@@ -39,6 +39,10 @@ const mockPayload: SettingsPayload = {
       autoOrder: true,
       hideHotkey: "F9",
     },
+    dpsOverlay: {
+      enabled: true,
+      topRows: 10,
+    },
     notifications: {
       visualEnabled: true,
       soundEnabled: true,
@@ -150,6 +154,10 @@ export function loadMockRunningCharacters(): Promise<RunningCharacter[]> {
 
 export function saveMockSettings(): Promise<SaveOutcome> {
   return Promise.resolve({ restartRequired: false });
+}
+
+export function resetMockDpsOverlayPlacement(): Promise<void> {
+  return Promise.resolve();
 }
 
 export function beginMockPairing(): Promise<PairingSession> {

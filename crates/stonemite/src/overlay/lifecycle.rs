@@ -8,9 +8,11 @@ use super::appearance::{
     configured_label_theme, opacity_percent_to_alpha, DEFAULT_LABEL_HEIGHT, DEFAULT_LABEL_OPACITY,
     LABEL_COLORS,
 };
+use super::casting::{self, CastingCenter};
 use super::client_controller::foreground_event_proc;
 use super::clients::{apply_preferred_box_order, ClientRegistry};
 use super::combat_awareness::{self, CombatAwarenessCenter};
+use super::dps_overlay::{self, DpsOverlayController};
 use super::geometry::{client_animations_enabled, dpi_scale};
 use super::hosts::rebuild_thumbnails;
 use super::in_game_button::{create_tooltip, wnd_proc as stonemite_button_wnd_proc};
@@ -182,6 +184,36 @@ unsafe fn initialize_state() -> (OverlayState, HWND) {
     )
     .expect("Failed to create broadcast label window");
 
+    // Register the passive, topmost DPS panel. Normal hit testing is
+    // click-through; edit mode temporarily removes WS_EX_TRANSPARENT.
+    let dps_class = w!("StonemiteDpsOverlayClass");
+    let dps_wc = WNDCLASSW {
+        lpfnWndProc: Some(dps_overlay::wnd_proc),
+        lpszClassName: dps_class,
+        hCursor: cursor,
+        ..Default::default()
+    };
+    RegisterClassW(&dps_wc);
+    let dps_hwnd = CreateWindowExW(
+        WS_EX_TOPMOST
+            | WS_EX_TOOLWINDOW
+            | WS_EX_TRANSPARENT
+            | WS_EX_NOACTIVATE
+            | WS_EX_NOREDIRECTIONBITMAP,
+        dps_class,
+        w!("Stonemite DPS"),
+        WS_POPUP,
+        0,
+        0,
+        0,
+        0,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("Failed to create DPS overlay window");
+
     // Register toast notification window class.
     let toast_class = w!("StonemiteToastClass");
     let toast_wc = WNDCLASSW {
@@ -271,6 +303,8 @@ unsafe fn initialize_state() -> (OverlayState, HWND) {
             active_scene_key: None,
             banner_scene_key: None,
             broadcast_label_hwnd: bc_hwnd,
+            dps_hwnd,
+            dps_scene_ready: false,
             label_height,
             label_alpha,
             label_theme,
@@ -300,7 +334,9 @@ unsafe fn initialize_state() -> (OverlayState, HWND) {
         interaction: InteractionState::new(),
         window_styles: WindowStyleState::new(cfg.hide_from_alt_tab),
         telemetry: TelemetryState::new(&cfg),
+        casting: CastingCenter::new(&cfg, client_animations_enabled()),
         combat_awareness: CombatAwarenessCenter::new(&cfg, client_animations_enabled()),
+        dps: DpsOverlayController::new(&cfg),
         notification_center: NotificationCenter::new(&cfg, client_animations_enabled()),
         timers: TimerOverlayState::default(),
     };
@@ -335,6 +371,7 @@ pub(super) fn force_rebuild() {
             .min(100);
         s.presentation.label_alpha = opacity_percent_to_alpha(opacity);
         s.presentation.label_theme = configured_label_theme(&cfg);
+        s.dps.apply_config(&cfg);
         // Handle hide_from_alt_tab setting change.
         let was_hiding_background = s.window_styles.hide_background();
         s.window_styles.set_hide_background(cfg.hide_from_alt_tab);
@@ -347,6 +384,8 @@ pub(super) fn force_rebuild() {
         let notification_selection_changed = s
             .notification_center
             .apply_config(&cfg, client_animations_enabled());
+        s.casting.apply_config(&cfg, client_animations_enabled());
+        let _ = KillTimer(s.presentation.active_label_hwnd, casting::TIMER_ID);
         let combat_appearance_changed = s
             .combat_awareness
             .apply_config(&cfg, client_animations_enabled());
@@ -374,6 +413,7 @@ pub(super) fn force_rebuild() {
             .map(|d| (d * 1000.0) as u32)
             .unwrap_or(DEFAULT_TOAST_DURATION_MS);
         rebuild_thumbnails(s);
+        dps_overlay::reconcile(s);
         update_visibility(s);
     });
 }
@@ -381,6 +421,7 @@ pub(super) fn force_rebuild() {
 pub(super) fn cleanup() {
     let _ = runtime::shutdown(|mut state| unsafe {
         let s = &mut state;
+        s.casting.save();
         // Restore original ex styles on all EQ windows before shutting down.
         s.window_styles.restore_all(&s.clients);
         if !window_styles::flush() {
@@ -403,6 +444,7 @@ pub(super) fn cleanup() {
                 s.presentation.stonemite_button.hwnd,
                 s.presentation.active_label_hwnd,
                 s.presentation.broadcast_label_hwnd,
+                s.presentation.dps_hwnd,
                 s.presentation.toast.hwnd,
             ]) {
                 if let Err(error) = compositor.unregister_surface(hwnd) {
@@ -433,6 +475,7 @@ pub(super) fn cleanup() {
         let _ = DestroyWindow(s.presentation.stonemite_button.hwnd);
         let _ = DestroyWindow(s.presentation.active_label_hwnd);
         let _ = DestroyWindow(s.presentation.broadcast_label_hwnd);
+        let _ = DestroyWindow(s.presentation.dps_hwnd);
         let _ = KillTimer(s.presentation.toast.hwnd, TIMER_TOAST_FADE);
         let _ = DestroyWindow(s.presentation.toast.hwnd);
     });

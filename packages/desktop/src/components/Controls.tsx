@@ -152,15 +152,17 @@ export function Toggle({
   disabled?: boolean;
 }) {
   const id = useId();
+  const descriptionId = description ? `${id}-description` : undefined;
   return (
     <div className="toggle-row">
       <div className="field-copy">
         <label htmlFor={id}>{label}</label>
-        {description ? <p>{description}</p> : null}
+        {description ? <p id={descriptionId}>{description}</p> : null}
       </div>
       <input
         id={id}
         className="toggle-input"
+        aria-describedby={descriptionId}
         type="checkbox"
         role="switch"
         checked={checked}

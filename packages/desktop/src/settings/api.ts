@@ -5,6 +5,7 @@ import {
   beginMockPairing,
   loadMockRunningCharacters,
   loadMockSettings,
+  resetMockDpsOverlayPlacement,
   saveMockSettings,
 } from "./mock";
 import type {
@@ -34,6 +35,12 @@ export function saveSettings(draft: SettingsDraft): Promise<SaveOutcome> {
   return browserPreview
     ? saveMockSettings()
     : invoke<SaveOutcome>("save_settings", { draft });
+}
+
+export function resetDpsOverlayPlacement(): Promise<void> {
+  return browserPreview
+    ? resetMockDpsOverlayPlacement()
+    : invoke("reset_dps_overlay_placement");
 }
 
 export function chooseEqDirectory(
