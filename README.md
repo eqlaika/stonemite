@@ -6,7 +6,7 @@
 
 EverQuest multiboxing tool for Windows. Requires Windows 10 or later.
 
-Stonemite makes multiboxing EQ easy: PiP overlays with click-to-swap, exact-window hotkeys, named next/previous box cycles for keyboard pedals, keyboard key broadcasting, hold-to-broadcast Mouse Clutch, character login, automatic character window labels, optional Stream Deck controls, drag-and-drop layout editor, and more. Stonemite is hi-DPI aware, works out of the box with no dependencies or configuration wizards, and is free and open source.
+Stonemite makes multiboxing EQ easy: PiP overlays with click-to-swap, a passive live group/raid DPS overlay, exact-window hotkeys, named next/previous box cycles for keyboard pedals, keyboard key broadcasting, hold-to-broadcast Mouse Clutch, character login, automatic character window labels, optional Stream Deck controls, drag-and-drop layout editor, and more. Stonemite is hi-DPI aware, works out of the box with no dependencies or configuration wizards, and is free and open source.
 
 <p align="center">
   <img src="docs/images/pip-overlays.jpg" width="760" alt="EverQuest running with five labeled Stonemite PiP overlays">
@@ -72,6 +72,7 @@ The app checks for updates against [eqlaika/stonemite](https://github.com/eqlaik
 | **Price** | Free, open source | ~$50/year subscription |
 | **Setup** | Run the installer, done | Inner Space install, wizard pages, character slots, window layout configs |
 | **PiP overlays** | Native DWM thumbnails, click-to-swap, drag-to-reorder | Video FX regions routed through Inner Space |
+| **DPS overlay** | Automatic multi-log encounter meter with one elected source per participant | External parser or scripted integration |
 | **Character labels** | Auto-detected | Manual per-character setup |
 | **Auto-login** | Encrypted credentials, automatic server select, one-click launch | Not available |
 | **Input broadcasting** | Filtered key broadcasting plus hold-to-broadcast physical Mouse Clutch | Full key/mouse broadcasting and round-robin |

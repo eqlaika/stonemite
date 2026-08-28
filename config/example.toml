@@ -39,6 +39,14 @@ pip_edge = "right"
 # pip_label_font_scale = 100
 # pip_label_font_weight = "bold"
 
+# Live group/raid DPS overlay. The panel is topmost, no-activate, and
+# click-through outside Edit overlay mode. Rows may be 5, 10, or 15;
+# participating managed boxes below the cutoff are appended automatically.
+# dps_overlay_enabled = true
+# dps_overlay_top_rows = 10
+# Placement is normally saved by Edit overlay mode as work-area-relative DIPs.
+# dps_overlay_placement = { x_dip = 24, y_dip = 24, width_dip = 440 }
+
 # Automatically order PiP windows by slot number (default true)
 # auto_order = true
 
