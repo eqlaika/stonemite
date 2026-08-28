@@ -18,6 +18,7 @@ pub(super) const TIMER_ID: usize = 47;
 pub(super) const TIMER_INTERVAL_MS: u32 = 16;
 
 const RECENT_SAMPLE_WEIGHT: f64 = 0.90;
+const VISUAL_LEAD: Duration = Duration::from_millis(250);
 const UNCONFIRMED_GRACE: Duration = Duration::from_millis(750);
 const UNCONFIRMED_FADE: Duration = Duration::from_millis(220);
 const COMPLETION_FILL: Duration = Duration::from_millis(110);
@@ -595,16 +596,12 @@ fn active_snapshot(
 }
 
 fn active_progress(active: &ActiveCast, now: Instant) -> f32 {
-    let estimate = active.estimated_duration.as_secs_f64().max(0.001);
+    let visual_duration = active.estimated_duration.saturating_sub(VISUAL_LEAD);
     let ratio = now
         .saturating_duration_since(active.started_at)
         .as_secs_f64()
-        / estimate;
-    if ratio <= 1.0 {
-        (0.88 * ratio.clamp(0.0, 1.0)) as f32
-    } else {
-        (0.88 + 0.09 * (1.0 - (-3.0 * (ratio - 1.0)).exp())).min(0.97) as f32
-    }
+        / visual_duration.as_secs_f64().max(0.001);
+    ratio.clamp(0.0, 1.0) as f32
 }
 
 fn terminal_snapshot(
@@ -759,12 +756,38 @@ mod tests {
     }
 
     #[test]
-    fn estimated_progress_never_claims_completion() {
+    fn predictive_progress_leads_the_observed_endpoint_without_changing_the_estimate() {
         let start = Instant::now();
         let cast = active(Duration::from_secs(10), Duration::from_secs(10), start);
+
         assert_eq!(active_progress(&cast, start), 0.0);
-        assert!((active_progress(&cast, start + Duration::from_secs(10)) - 0.88).abs() < 0.001);
-        assert!(active_progress(&cast, start + Duration::from_millis(10_700)) < 0.98);
+        assert!(active_progress(&cast, start + Duration::from_millis(9_749)) < 1.0);
+        assert_eq!(
+            active_progress(&cast, start + Duration::from_millis(9_750)),
+            1.0
+        );
+        assert_eq!(cast.estimated_duration, Duration::from_secs(10));
+
+        let awaiting_confirmation =
+            active_snapshot(&cast, start + cast.estimated_duration, true).unwrap();
+        assert_eq!(awaiting_confirmation.progress, 1.0);
+        assert_eq!(awaiting_confirmation.outcome, None);
+    }
+
+    #[test]
+    fn casts_shorter_than_the_visual_lead_complete_safely() {
+        let start = Instant::now();
+        let cast = active(
+            Duration::from_millis(100),
+            Duration::from_millis(100),
+            start,
+        );
+
+        assert_eq!(active_progress(&cast, start), 0.0);
+        assert_eq!(
+            active_progress(&cast, start + Duration::from_millis(1)),
+            1.0
+        );
     }
 
     #[test]
