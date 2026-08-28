@@ -1,9 +1,9 @@
 //! Resolve semantic EverQuest actions through the effective `[KeyMaps]` profile.
 //!
 //! Live EQ stores global overrides in `eqclient.ini`. Since October 2025,
-//! character/persona profiles can instead store overriding keymaps in
+//! character/persona profiles can store sparse overriding keymaps in
 //! `<Character>_<server>_<class>.ini`. An older `<Character>_<server>.ini`
-//! profile is also supported for compatibility.
+//! profile is also supported as an intermediate compatibility layer.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -118,19 +118,26 @@ impl EqKeymapResolver {
         Ok(mapped)
     }
 
-    /// A character/persona file with a `[KeyMaps]` section is the complete
-    /// override source for that profile. Missing entries then fall back to EQ
-    /// defaults, not to another character's legacy global overrides.
+    /// EQ stores character/persona `[KeyMaps]` sections as sparse overlays.
+    /// Build the effective map from the shared file through the legacy
+    /// character profile to the current class/persona profile, preserving an
+    /// explicit zero while inheriting entries that a more specific file omits.
     fn effective_keymaps(
         &mut self,
         identity: ClientIdentity<'_>,
     ) -> Result<Option<KeymapFile>, ResolveError> {
-        for path in self.profile_candidates(identity) {
-            if let Some(keymaps) = self.load_keymaps(&path)? {
-                return Ok(Some(keymaps));
+        let mut effective = self.load_keymaps(&self.eq_dir.join("eqclient.ini"))?;
+        for path in self.profile_candidates(identity).into_iter().rev() {
+            let Some(profile) = self.load_keymaps(&path)? else {
+                continue;
+            };
+            if let Some(effective) = &mut effective {
+                effective.values.extend(profile.values);
+            } else {
+                effective = Some(profile);
             }
         }
-        self.load_keymaps(&self.eq_dir.join("eqclient.ini"))
+        Ok(effective)
     }
 
     fn profile_candidates(&self, identity: ClientIdentity<'_>) -> Vec<PathBuf> {
@@ -551,22 +558,79 @@ mod tests {
     }
 
     #[test]
-    fn profile_missing_entry_uses_eq_default_not_global_override() {
+    fn sparse_persona_profile_inherits_global_binding() {
         let dir = TestDir::new();
-        dir.write("eqclient.ini", "[KeyMaps]\nKEYMAPPING_USE_1=18\n");
-        dir.write("Laika_xegony_RNG.ini", "[KeyMaps]\nKEYMAPPING_DUCK_1=44\n");
+        dir.write("eqclient.ini", "[KeyMaps]\nKEYMAPPING_HOT2_2_1=536870915\n");
+        dir.write(
+            "Mudkip_frostreaver_BRD.ini",
+            "[KeyMaps]\nKEYMAPPING_MOUSELOOK_1=0\nKEYMAPPING_STRAFE_RIGHT_1=0\n",
+        );
+        let identity = ClientIdentity {
+            character: Some("Mudkip"),
+            server: Some("frostreaver"),
+            class_code: Some("BRD"),
+        };
         let mut resolver = EqKeymapResolver::new(dir.0.clone());
         assert_eq!(
-            resolver.resolve(
-                &EqAction::UseCenterScreen,
-                ClientIdentity {
-                    character: Some("Laika"),
-                    server: Some("xegony"),
-                    class_code: Some("RNG"),
-                },
-            ),
-            Ok(ResolvedBinding { scans: vec![0x16] })
+            resolver.resolve(&EqAction::hotbar(2, 2).unwrap(), identity),
+            Ok(ResolvedBinding {
+                scans: vec![LEFT_CONTROL_SCAN, 0x03]
+            })
         );
+        assert!(resolver
+            .mapped_actions(identity)
+            .unwrap()
+            .contains(&EqMappingName::new("HOT2_2").unwrap()));
+    }
+
+    #[test]
+    fn sparse_persona_profile_can_explicitly_unbind_a_global_binding() {
+        let dir = TestDir::new();
+        dir.write("eqclient.ini", "[KeyMaps]\nKEYMAPPING_HOT2_2_1=536870915\n");
+        dir.write(
+            "Mudkip_frostreaver_BRD.ini",
+            "[KeyMaps]\nKEYMAPPING_HOT2_2_1=0\n",
+        );
+        let identity = ClientIdentity {
+            character: Some("Mudkip"),
+            server: Some("frostreaver"),
+            class_code: Some("BRD"),
+        };
+        let mut resolver = EqKeymapResolver::new(dir.0.clone());
+        assert_eq!(
+            resolver.resolve(&EqAction::hotbar(2, 2).unwrap(), identity),
+            Err(ResolveError::Unbound)
+        );
+        assert!(!resolver
+            .mapped_actions(identity)
+            .unwrap()
+            .contains(&EqMappingName::new("HOT2_2").unwrap()));
+    }
+
+    #[test]
+    fn persona_overrides_legacy_and_global_entries_independently() {
+        let dir = TestDir::new();
+        dir.write(
+            "eqclient.ini",
+            "[KeyMaps]\nKEYMAPPING_USE_1=18\nKEYMAPPING_DUCK_1=44\n",
+        );
+        dir.write(
+            "Laika_xegony.ini",
+            "[KeyMaps]\nKEYMAPPING_USE_1=20\nKEYMAPPING_SIT_STAND_1=45\n",
+        );
+        dir.write("Laika_xegony_RNG.ini", "[KeyMaps]\nKEYMAPPING_USE_1=21\n");
+        let identity = ClientIdentity {
+            character: Some("Laika"),
+            server: Some("xegony"),
+            class_code: Some("RNG"),
+        };
+        let mut resolver = EqKeymapResolver::new(dir.0.clone());
+        for (mapping, scan) in [("USE", 21), ("SIT_STAND", 45), ("DUCK", 44)] {
+            assert_eq!(
+                resolver.resolve(&EqAction::keymap(mapping).unwrap(), identity),
+                Ok(ResolvedBinding { scans: vec![scan] })
+            );
+        }
     }
 
     #[test]
@@ -687,7 +751,7 @@ mod tests {
             })
             .unwrap();
         assert!(mapped.contains(&EqMappingName::new("SIT_STAND").unwrap()));
-        assert!(!mapped.contains(&EqMappingName::new("DUCK").unwrap()));
+        assert!(mapped.contains(&EqMappingName::new("DUCK").unwrap()));
     }
 
     #[test]

@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- Resolved sparse character and persona keymap overrides over legacy and shared EverQuest bindings so mapped Stream Deck actions are not falsely reported as unbound
 - Prevented PiP mouse input from reaching the foreground EQ client and kept window swapping responsive while PiP context menus are open
 
 ## v2026.08.22
