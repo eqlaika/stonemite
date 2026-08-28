@@ -5,11 +5,11 @@ pub(super) const CASTING_PANEL_HEIGHT: i32 = 30;
 pub(super) const TIMER_PANEL_GAP: i32 = 4;
 pub(super) const TIMER_PANEL_HEIGHT: i32 = 42;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct CastingLayout {
     pub panel: Rect,
     pub track: Rect,
-    pub fill: Rect,
+    pub fill_right: f32,
     pub spell_text: Rect,
     pub outcome_text: Rect,
     pub corner_radius: i32,
@@ -32,10 +32,7 @@ impl CastingLayout {
         )
         .intersect(panel);
         let remaining_fraction = 1.0 - elapsed_progress.clamp(0.0, 1.0);
-        let fill_right = track.left
-            + ((track.width().max(0) as f32 * remaining_fraction).round() as i32)
-                .clamp(0, track.width().max(0));
-        let fill = Rect::new(track.left, track.top, fill_right, track.bottom);
+        let fill_right = track.left as f32 + track.width().max(0) as f32 * remaining_fraction;
         let text_bottom = (track.top - pixels(2)).max(panel.top);
         let outcome_width = outcome_width.clamp(0, panel.width().max(0) / 2);
         let outcome_left = if outcome_width > 0 {
@@ -46,7 +43,7 @@ impl CastingLayout {
         Self {
             panel,
             track,
-            fill,
+            fill_right,
             spell_text: Rect::new(
                 (panel.left + inset).min(panel.right),
                 panel.top,
@@ -66,6 +63,10 @@ impl CastingLayout {
             corner_radius: pixels(6).max(2),
             font_height: pixels(14).max(1),
         }
+    }
+
+    pub(super) fn fill_width(self) -> f32 {
+        (self.fill_right - self.track.left as f32).max(0.0)
     }
 }
 
@@ -126,7 +127,7 @@ impl TimerLayout {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct PipContentStackLayout {
     pub content: Rect,
     pub label_bounds: Rect,
@@ -208,11 +209,13 @@ mod tests {
         let bounds = Rect::new(0, 0, 120, 30);
         let started = CastingLayout::new(bounds, 1.0, 0.0, 0);
         let halfway = CastingLayout::new(bounds, 1.0, 0.5, 0);
+        let fractional = CastingLayout::new(bounds, 1.0, 2.0 / 3.0, 0);
         let completed = CastingLayout::new(bounds, 1.0, 1.0, 0);
 
-        assert_eq!(started.fill, started.track);
-        assert!(halfway.fill.width() < started.fill.width());
-        assert!(halfway.fill.width() > completed.fill.width());
-        assert_eq!(completed.fill.width(), 0);
+        assert_eq!(started.fill_right, started.track.right as f32);
+        assert!(halfway.fill_width() < started.fill_width());
+        assert!(halfway.fill_width() > completed.fill_width());
+        assert_ne!(fractional.fill_right.fract(), 0.0);
+        assert_eq!(completed.fill_width(), 0.0);
     }
 }

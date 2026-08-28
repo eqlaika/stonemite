@@ -588,11 +588,16 @@ unsafe fn draw_casting(
             238,
         ),
     )?;
-    if !layout.fill.is_empty() {
-        fill_rounded(
+    if layout.fill_width() > 0.0 {
+        fill_rounded_f32(
             context,
-            layout.fill,
-            (layout.fill.height() / 2).max(1),
+            D2D_RECT_F {
+                left: layout.track.left as f32,
+                top: layout.track.top as f32,
+                right: layout.fill_right,
+                bottom: layout.track.bottom as f32,
+            },
+            (layout.track.height() / 2).max(1) as f32,
             SceneColor::opaque(accent),
         )?;
     }
@@ -1205,8 +1210,27 @@ unsafe fn fill_rounded(
     color: SceneColor,
 ) -> WindowsResult<()> {
     if !rect.is_empty() {
+        fill_rounded_f32(context, d2d_rect(rect), radius.max(0) as f32, color)?;
+    }
+    Ok(())
+}
+
+unsafe fn fill_rounded_f32(
+    context: &ID2D1DeviceContext,
+    rect: D2D_RECT_F,
+    radius: f32,
+    color: SceneColor,
+) -> WindowsResult<()> {
+    if rect.right > rect.left && rect.bottom > rect.top {
         let brush = solid_brush(context, color)?;
-        context.FillRoundedRectangle(&rounded(rect, radius), &brush);
+        context.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect,
+                radiusX: radius.max(0.0),
+                radiusY: radius.max(0.0),
+            },
+            &brush,
+        );
     }
     Ok(())
 }

@@ -16,7 +16,7 @@
 ### Changed
 
 - Extracted passive EverQuest spell-data parsing into the reusable platform-neutral `eqspell` crate and keyed learned cast timing by stable spell ID
-- Changed PiP casting bars to drain from full to empty as the cast completes
+- Changed PiP casting bars to drain smoothly from full to empty at roughly 60 FPS as the cast completes
 - Enlarged the in-game Stonemite control into a transparent draggable logo whose monitor-relative position persists across restarts, DPI changes, and display moves
 - Kept PiP hosts persistent across client swaps, with a sliding thumbnail handoff and animated reordering instead of rebuilding all five windows through a blank frame
 - Pushed Mouse Clutch phase and readiness changes through Trushar so every deck tile reflects physical-key, duplicate-tile, focus-cancellation, and release-drain transitions

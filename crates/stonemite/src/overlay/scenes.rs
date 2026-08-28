@@ -703,7 +703,7 @@ mod tests {
             layout.timer.map(|timer| timer.panel),
             Some(Rect::new(3, 88, 223, 130))
         );
-        assert!(layout.casting.unwrap().fill.right < layout.casting.unwrap().track.right);
+        assert!(layout.casting.unwrap().fill_right < layout.casting.unwrap().track.right as f32);
         assert!(layout.indicator_frames.is_empty());
     }
 

@@ -15,7 +15,7 @@ use crate::{config, log_watcher};
 use eqspell::{SpellCatalog, SpellDefinition, SpellId};
 
 pub(super) const TIMER_ID: usize = 47;
-pub(super) const TIMER_INTERVAL_MS: u32 = 50;
+pub(super) const TIMER_INTERVAL_MS: u32 = 16;
 
 const RECENT_SAMPLE_WEIGHT: f64 = 0.90;
 const UNCONFIRMED_GRACE: Duration = Duration::from_millis(750);
