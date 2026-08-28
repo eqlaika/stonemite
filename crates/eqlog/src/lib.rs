@@ -12,9 +12,14 @@ mod raw;
 mod telemetry;
 
 pub use event::{
-    AttackProblem, CharacterEvent, ChatEvent, CombatEvent, IdentityEvent, IncomingTell, LogEvent,
-    LogEventDomain, NotificationEvent, ParsedLogEvent, PetEvent, ProgressEvent, WhoResult,
+    AttackProblem, CastKind, CastingEvent, CharacterEvent, ChatEvent, CombatAttempt, CombatEvent,
+    DamageKind, DamageModifiers, DamageObservation, DamageOutcome, IdentityEvent, IncomingTell,
+    LogEvent, LogEventDomain, NotificationEvent, ObservedCombatant, ParsedLogEvent,
+    ParserProvenance, PersonaLoaded, Perspective, PetEvent, PetOwnershipObservation,
+    PlayerEvidence, ProgressEvent, TargetSlainObservation, WhoResult, ZoneObservation,
 };
 pub use parsers::{DomainParser, ParseOutcome, ParserError, ParserFailure, ParserRegistry};
-pub use raw::{DecodedRawLogLine, EqTimestamp, LogSource, LogSourceId, RawLogLine};
+pub use raw::{
+    DecodedRawLogLine, EqSecond, EqTimestamp, LogSource, LogSourceId, RawLogLine, SourceRecordId,
+};
 pub use telemetry::{CharacterKey, CharacterTelemetry, TelemetryChange, TelemetryReducer};

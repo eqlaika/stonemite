@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
+use chrono::NaiveDateTime;
+
 /// Opaque, stable identity for one EQ log source.
 ///
 /// Applications choose the identifier. It may be a process ID, account slot,
 /// file identity, UUID, or any other value that is stable for the lifetime of
 /// the source.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LogSourceId(Arc<str>);
 
 impl LogSourceId {
@@ -51,19 +53,81 @@ impl LogSource {
     }
 }
 
-/// EQ's display timestamp. It is deliberately not a timer clock because a log
-/// timestamp can be absent, malformed, or adjusted.
+/// A stable source-local identity assigned by the complete-record framer.
+/// Sequence zero is the first accepted record in a generation.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SourceRecordId {
+    pub source: LogSourceId,
+    pub generation: u64,
+    pub sequence: u64,
+}
+
+impl SourceRecordId {
+    pub fn new(source: LogSourceId, generation: u64, sequence: u64) -> Self {
+        Self {
+            source,
+            generation,
+            sequence,
+        }
+    }
+}
+
+/// A comparable local civil second from an EverQuest log timestamp.
+///
+/// The numeric representation deliberately performs no timezone conversion.
+/// It is only an ordering/duration coordinate for logs produced on one host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EqSecond(i64);
+
+impl EqSecond {
+    pub const fn new(value: i64) -> Self {
+        Self(value)
+    }
+
+    pub const fn value(self) -> i64 {
+        self.0
+    }
+
+    pub fn checked_add(self, seconds: i64) -> Option<Self> {
+        self.0.checked_add(seconds).map(Self)
+    }
+
+    pub fn checked_sub(self, other: Self) -> Option<i64> {
+        self.0.checked_sub(other.0)
+    }
+}
+
+/// EQ's display timestamp, retaining the exact source text and a validated,
+/// comparable local civil second when the standard envelope parses.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EqTimestamp(Arc<str>);
+pub struct EqTimestamp {
+    original: Arc<str>,
+    second: Option<EqSecond>,
+}
 
 impl EqTimestamp {
     pub fn new(timestamp: impl Into<Arc<str>>) -> Self {
-        Self(timestamp.into())
+        let original = timestamp.into();
+        let second = parse_eq_second(&original);
+        Self { original, second }
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.original
     }
+
+    pub const fn second(&self) -> Option<EqSecond> {
+        self.second
+    }
+}
+
+fn parse_eq_second(value: &str) -> Option<EqSecond> {
+    // EQ uses an English weekday/month timestamp. `%e` accepts a space-padded
+    // day while `%d` covers zero-padded clients and captured fixtures.
+    ["%a %b %e %H:%M:%S %Y", "%a %b %d %H:%M:%S %Y"]
+        .into_iter()
+        .find_map(|format| NaiveDateTime::parse_from_str(value, format).ok())
+        .map(|timestamp| EqSecond::new(timestamp.and_utc().timestamp()))
 }
 
 /// A complete newline-terminated record supplied to the parser pipeline.
@@ -151,11 +215,37 @@ mod tests {
             Some("Wed Mar 25 11:15:35 2026")
         );
         assert_eq!(&*decoded.line.body, "Players in EverQuest:");
+        assert!(decoded
+            .line
+            .timestamp
+            .as_ref()
+            .and_then(EqTimestamp::second)
+            .is_some());
 
         let unknown = RawLogLine::decode(source(), b"unrecognized line");
         assert!(!unknown.had_invalid_utf8);
         assert!(unknown.line.timestamp.is_none());
         assert_eq!(&*unknown.line.body, "unrecognized line");
+    }
+
+    #[test]
+    fn retains_malformed_timestamp_text_without_fabricating_event_time() {
+        let decoded = RawLogLine::decode(source(), b"[now] unparseable time");
+        let timestamp = decoded.line.timestamp.expect("timestamp envelope");
+        assert_eq!(timestamp.as_str(), "now");
+        assert_eq!(timestamp.second(), None);
+    }
+
+    #[test]
+    fn comparable_seconds_preserve_civil_duration_and_order() {
+        let first = EqTimestamp::new("Wed Mar 25 11:15:35 2026")
+            .second()
+            .unwrap();
+        let second = EqTimestamp::new("Wed Mar 25 11:15:41 2026")
+            .second()
+            .unwrap();
+        assert_eq!(second.checked_sub(first), Some(6));
+        assert!(second > first);
     }
 
     #[test]

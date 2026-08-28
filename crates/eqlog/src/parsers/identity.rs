@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{DomainParser, ParserError};
-use crate::{IdentityEvent, LogEvent, LogSource, RawLogLine, WhoResult};
+use crate::{IdentityEvent, LogEvent, LogSource, PersonaLoaded, RawLogLine, WhoResult};
 
 #[derive(Default)]
 pub(super) struct IdentityParser {
@@ -24,6 +24,10 @@ impl DomainParser for IdentityParser {
     fn parse(&mut self, line: &RawLogLine, events: &mut Vec<LogEvent>) -> Result<(), ParserError> {
         let body = line.body.as_ref();
         if body.starts_with("OFFLINE MODE") {
+            return Ok(());
+        }
+        if let Some(persona) = parse_persona_loaded(body) {
+            events.push(LogEvent::Identity(IdentityEvent::PersonaLoaded(persona)));
             return Ok(());
         }
 
@@ -193,6 +197,21 @@ fn parse_zone_short(value: &str) -> Option<&str> {
     (close > open + 1).then_some(&rest[open + 1..close])
 }
 
+fn parse_persona_loaded(body: &str) -> Option<PersonaLoaded> {
+    let payload = body
+        .strip_prefix("You successfully loaded your ")?
+        .strip_suffix(" set.")?;
+    // Live currently reports either an equipment/persona set after the class.
+    // Drop that final descriptor while preserving two-word class names.
+    let (class_name, _) = payload.rsplit_once(' ')?;
+    let class_name = class_name.trim();
+    let abbreviation = class_abbreviation(class_name)?;
+    Some(PersonaLoaded {
+        class_name: Arc::from(class_name),
+        class_abbreviation: Arc::from(abbreviation),
+    })
+}
+
 fn class_abbreviation(name: &str) -> Option<&'static str> {
     match name.to_ascii_lowercase().as_str() {
         "bard" => Some("BRD"),
@@ -319,6 +338,32 @@ mod tests {
         ]);
         assert_eq!(results.len(), 1);
         assert_eq!(&*results[0].character, "Saabra");
+    }
+
+    #[test]
+    fn parses_local_persona_class_changes_outside_who_blocks() {
+        let mut parser = IdentityParser::default();
+        let mut events = Vec::new();
+        for body in [
+            "You successfully loaded your Wizard persona set.",
+            "You successfully loaded your Shadow Knight equipment set.",
+        ] {
+            parser.parse(&line(body), &mut events).unwrap();
+        }
+        assert_eq!(
+            events,
+            vec![
+                LogEvent::Identity(IdentityEvent::PersonaLoaded(PersonaLoaded {
+                    class_name: Arc::from("Wizard"),
+                    class_abbreviation: Arc::from("WIZ"),
+                })),
+                LogEvent::Identity(IdentityEvent::PersonaLoaded(PersonaLoaded {
+                    class_name: Arc::from("Shadow Knight"),
+                    class_abbreviation: Arc::from("SHK"),
+                })),
+            ]
+        );
+        assert!(parse_persona_loaded("Bob successfully loaded your Wizard persona set.").is_none());
     }
 
     #[test]

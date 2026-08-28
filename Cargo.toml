@@ -1,6 +1,8 @@
 [workspace]
 members = [
+    "crates/eqcombat",
     "crates/eqlog",
+    "crates/eqspell",
     "crates/stonemite",
     "crates/trushar",
     "crates/trusik",

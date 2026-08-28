@@ -7,8 +7,9 @@ Reusable, platform-neutral EverQuest log parsing and telemetry primitives.
 It provides:
 
 - canonical `RawLogLine` records with application-defined source attribution;
-- EQ timestamp/body decoding;
+- EQ timestamp/body decoding with validated, comparable local civil seconds;
 - an extensible parser registry;
+- normalized melee, spell, periodic, damage-shield, attempt, and slain observations;
 - typed `/who` identity, pet ownership, incoming-Tell chat, invitation and trade lifecycles, resurrection, death, level, and AA-point events;
 - persistent, case-insensitive per-character telemetry reduction;
 - explicit reset behavior for truncated, recreated, or removed sources.

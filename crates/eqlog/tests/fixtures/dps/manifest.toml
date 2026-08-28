@@ -1,0 +1,156 @@
+version = 1
+client = "EverQuest live / pinned EQLogParser behavioral reference"
+
+[[case]]
+id = "first-person-melee"
+provenance = "eqlp-2741f255"
+body = "You slash a wan ghoul knight for 28 points of damage."
+expect = "damage"
+included = true
+
+[[case]]
+id = "third-person-melee"
+provenance = "eqlp-2741f255"
+body = "Astralx crushes Sontalak for 126225 points of damage. (Strikethrough Critical)"
+expect = "damage"
+included = true
+
+[[case]]
+id = "melee-miss"
+provenance = "eqlp-2741f255"
+body = "You try to crush a desert madman, but miss!"
+expect = "attempt"
+included = false
+
+[[case]]
+id = "melee-dodge"
+provenance = "eqlp-2741f255"
+body = "A bat tries to bite YOU, but YOU dodge!"
+expect = "attempt"
+included = false
+
+[[case]]
+id = "melee-invulnerable"
+provenance = "eqlp-2741f255"
+body = "Tolzol tries to crush Dendritic Golem, but Dendritic Golem is INVULNERABLE!"
+expect = "attempt"
+included = false
+
+[[case]]
+id = "direct-spell"
+provenance = "eqlp-2741f255"
+body = "You hit a gnoll for 123 points of fire damage by Burst of Flames."
+expect = "damage"
+included = true
+
+[[case]]
+id = "dot-your"
+provenance = "eqlp-2741f255"
+body = "A gnoll has taken 108790 damage from your Mind Coil Rk. II."
+expect = "damage"
+included = true
+
+[[case]]
+id = "dot-named-caster"
+provenance = "eqlp-2741f255"
+body = "Dovhesi has taken 173674 damage from Curse of the Shrine by Grendish the Crusader."
+expect = "damage"
+included = true
+
+[[case]]
+id = "explicit-pet-owner"
+provenance = "eqlp-2741f255"
+body = "Gaber (Owner: Claus) hits a worry wraith for 116 points of damage."
+expect = "damage"
+included = true
+
+[[case]]
+id = "slain-modern"
+provenance = "eqlp-2741f255"
+body = "Kizante`s pet was slain by a rockborn!"
+expect = "slain"
+included = false
+
+[[case]]
+id = "slain-old"
+provenance = "eqlp-2741f255"
+body = "Strangle`s pet has been slain by Kzerk!"
+expect = "slain"
+included = false
+
+[[case]]
+id = "slain-you"
+provenance = "eqlp-2741f255"
+body = "You have slain a failed bodyguard!"
+expect = "slain"
+included = false
+
+[[case]]
+id = "malformed-amount"
+provenance = "synthetic-validation"
+body = "You slash a rat for 1,23 points of damage."
+expect = "attempt"
+included = false
+
+[[case]]
+id = "timestamp-free"
+provenance = "synthetic-validation"
+body = "unrecognized record"
+expect = "none"
+included = false
+
+[[case]]
+id = "damage-shield"
+provenance = "eqlp-2741f255"
+body = "Tantor is pierced by Tolzol's thorns for 6718 points of non-melee damage."
+expect = "damage"
+included = true
+
+[[case]]
+id = "bane-special"
+provenance = "eqlp-2741f255"
+body = "a wave sentinel has taken an extra 6250000 points of non-melee damage from your Divergent Lightning spell."
+expect = "damage"
+included = true
+
+[[case]]
+id = "proc-weapon-spell"
+provenance = "eqlp-2741f255"
+body = "Sonozen hit Jortreva the Crusader for 38948 points of fire damage by Burst of Flames. (Lucky Critical Twincast)"
+expect = "damage"
+included = true
+
+[[case]]
+id = "melee-parry"
+provenance = "eqlp-2741f255"
+body = "Romance tries to bash Vulak`Aerr, but Vulak`Aerr parries!"
+expect = "attempt"
+included = false
+
+[[case]]
+id = "melee-block"
+provenance = "eqlp-2741f255"
+body = "A carrion bat tries to bite YOU, but YOU block with your shield!"
+expect = "attempt"
+included = false
+
+[[case]]
+id = "melee-riposte"
+provenance = "eqlp-2741f255"
+body = "An enchanted stalker tries to crush YOU, but YOU riposte!"
+expect = "attempt"
+included = false
+
+[[case]]
+id = "melee-absorption"
+provenance = "eqlp-2741f255"
+body = "An enchanted stalker tries to crush YOU, but YOU absorb the blow!"
+expect = "attempt"
+included = false
+
+[[case]]
+id = "pvp-self"
+provenance = "synthetic-policy"
+body = "You slash Yourself for 20 points of damage."
+expect = "damage"
+included = false

@@ -1,0 +1,8 @@
+[package]
+name = "eqspell"
+version = "0.1.0"
+edition = "2021"
+description = "Platform-neutral EverQuest client spell-data parsing and lookup"
+license = "GPL-3.0-only"
+repository = "https://github.com/eqlaika/stonemite"
+readme = "README.md"

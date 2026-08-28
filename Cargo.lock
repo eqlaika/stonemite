@@ -1109,7 +1109,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "eqcombat"
+version = "0.1.0"
+dependencies = [
+ "eqlog",
+]
+
+[[package]]
 name = "eqlog"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "toml 0.8.2",
+]
+
+[[package]]
+name = "eqspell"
 version = "0.1.0"
 
 [[package]]

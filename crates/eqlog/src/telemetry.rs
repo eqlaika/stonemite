@@ -52,11 +52,11 @@ impl TelemetryReducer {
             LogEvent::Identity(IdentityEvent::WhoResult(result)) => {
                 let class_code = result.class_abbreviation.as_ref()?;
                 let entry = self.entry(event.source.server.clone(), result.character.clone());
-                if entry.telemetry.class_code.as_deref() == Some(class_code.as_ref()) {
-                    return None;
-                }
-                entry.telemetry.class_code = Some(class_code.clone());
-                Some(change(entry))
+                update_class(entry, class_code)
+            }
+            LogEvent::Identity(IdentityEvent::PersonaLoaded(persona)) => {
+                let entry = self.entry(event.source.server.clone(), event.source.character.clone());
+                update_class(entry, &persona.class_abbreviation)
             }
             LogEvent::Pet(PetEvent::OwnershipClaimed { pet, owner }) => {
                 let entry = self.entry(event.source.server.clone(), owner.clone());
@@ -90,7 +90,8 @@ impl TelemetryReducer {
                 entry.telemetry.dead = false;
                 Some(change(entry))
             }
-            LogEvent::Combat(_)
+            LogEvent::Casting(_)
+            | LogEvent::Combat(_)
             | LogEvent::Chat(_)
             | LogEvent::Notification(_)
             | LogEvent::Progress(_) => None,
@@ -106,6 +107,14 @@ impl TelemetryReducer {
     }
 }
 
+fn update_class(entry: &mut Entry, class_code: &Arc<str>) -> Option<TelemetryChange> {
+    if entry.telemetry.class_code.as_deref() == Some(class_code.as_ref()) {
+        return None;
+    }
+    entry.telemetry.class_code = Some(class_code.clone());
+    Some(change(entry))
+}
+
 fn change(entry: &Entry) -> TelemetryChange {
     TelemetryChange {
         character: entry.display_key.clone(),
@@ -116,7 +125,7 @@ fn change(entry: &Entry) -> TelemetryChange {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{IdentityEvent, LogSource, WhoResult};
+    use crate::{IdentityEvent, LogSource, PersonaLoaded, WhoResult};
 
     fn event(source: LogSource, event: LogEvent) -> ParsedLogEvent {
         ParsedLogEvent {
@@ -161,6 +170,23 @@ mod tests {
         assert_eq!(change.character.character.as_ref(), "Bilka");
         assert_eq!(change.telemetry.class_code.as_deref(), Some("BRD"));
         assert!(reducer.apply(&repeated).is_none());
+    }
+
+    #[test]
+    fn persona_changes_update_the_local_source_class() {
+        let source = LogSource::new("client-1", "Bilka", "Teek");
+        let mut reducer = TelemetryReducer::new();
+        let change = reducer
+            .apply(&event(
+                source,
+                LogEvent::Identity(IdentityEvent::PersonaLoaded(PersonaLoaded {
+                    class_name: Arc::from("Wizard"),
+                    class_abbreviation: Arc::from("WIZ"),
+                })),
+            ))
+            .expect("persona changes class");
+        assert_eq!(change.character.character.as_ref(), "Bilka");
+        assert_eq!(change.telemetry.class_code.as_deref(), Some("WIZ"));
     }
 
     #[test]

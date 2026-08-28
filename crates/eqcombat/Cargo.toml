@@ -1,0 +1,10 @@
+[package]
+name = "eqcombat"
+version = "0.1.0"
+edition = "2021"
+description = "Platform-neutral event-sourced EverQuest combat encounter engine"
+license = "GPL-3.0-only"
+repository = "https://github.com/eqlaika/stonemite"
+
+[dependencies]
+eqlog = { path = "../eqlog" }

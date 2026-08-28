@@ -6,3 +6,9 @@ description = "Platform-neutral EverQuest log parsing and character telemetry pr
 license = "GPL-3.0-only"
 repository = "https://github.com/eqlaika/stonemite"
 readme = "README.md"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+toml = "0.8"

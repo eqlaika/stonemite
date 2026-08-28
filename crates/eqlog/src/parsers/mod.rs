@@ -1,3 +1,4 @@
+mod casting;
 mod character;
 mod chat;
 mod combat;
@@ -33,6 +34,7 @@ pub struct ParserRegistry {
 impl Default for ParserRegistry {
     fn default() -> Self {
         let mut registry = Self::empty();
+        registry.register(casting::CastingParser);
         registry.register(character::CharacterParser);
         registry.register(chat::ChatParser);
         registry.register(combat::CombatParser);

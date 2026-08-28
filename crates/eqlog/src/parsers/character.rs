@@ -1,4 +1,8 @@
-use crate::{CharacterEvent, DomainParser, LogEvent, ParserError, RawLogLine};
+use std::sync::Arc;
+
+use crate::{
+    CharacterEvent, CombatEvent, DomainParser, LogEvent, ParserError, RawLogLine, ZoneObservation,
+};
 
 const SLAIN_PREFIX: &str = "You have been slain by ";
 const ZONE_ENTERED_PREFIX: &str = "You have entered ";
@@ -20,12 +24,17 @@ impl DomainParser for CharacterParser {
             events.push(LogEvent::Character(CharacterEvent::Died));
             return Ok(());
         }
-        if body
+        if let Some(zone) = body
             .strip_prefix(ZONE_ENTERED_PREFIX)
             .and_then(|zone| zone.strip_suffix('.'))
-            .is_some_and(|zone| !zone.trim().is_empty())
+            .filter(|zone| !zone.trim().is_empty())
         {
             events.push(LogEvent::Character(CharacterEvent::Revived));
+            events.push(LogEvent::Combat(CombatEvent::ZoneChanged(
+                ZoneObservation {
+                    zone: Arc::from(zone.trim()),
+                },
+            )));
         }
         Ok(())
     }
@@ -52,7 +61,12 @@ mod tests {
         );
         assert_eq!(
             parse("You have entered The Nexus."),
-            vec![LogEvent::Character(CharacterEvent::Revived)]
+            vec![
+                LogEvent::Character(CharacterEvent::Revived),
+                LogEvent::Combat(CombatEvent::ZoneChanged(ZoneObservation {
+                    zone: Arc::from("The Nexus"),
+                })),
+            ]
         );
     }
 
