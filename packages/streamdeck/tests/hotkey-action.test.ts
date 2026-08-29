@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardStore } from "../src/state/store";
-import { stateFixture } from "./fixtures";
+import { emptyXTargetState, stateFixture } from "./fixtures";
 
 const sdk = vi.hoisted(() => ({
   sendToPropertyInspector: vi.fn(),
@@ -141,6 +141,7 @@ describe("HotkeyAction", () => {
           active: false,
           activatable: true,
           input_ready: true,
+          xtarget: emptyXTargetState(),
         },
       ],
     });

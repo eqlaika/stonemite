@@ -298,6 +298,22 @@ export class TrusharClient {
     );
   }
 
+  async sendEqAction(
+    clientId: string,
+    action: EqAction,
+  ): Promise<Extract<ServerMessage, { type: "result" }>> {
+    return this.#request(
+      {
+        type: "send_eq_action",
+        version: PROTOCOL_VERSION,
+        request_id: this.#nextRequestId("eq-action"),
+        client_id: clientId,
+        action,
+      },
+      "eq_action_delivered",
+    );
+  }
+
   async swapWindowNumbers(
     clientId: string,
   ): Promise<Extract<ServerMessage, { type: "result" }>> {

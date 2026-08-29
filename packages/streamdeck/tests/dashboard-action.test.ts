@@ -3,7 +3,7 @@ import { definitionForKey } from "../src/actions/key-definitions";
 import { LOCAL_CONNECTION } from "../src/trushar/client";
 import type { DashboardKey } from "../src/state/layout";
 import { DashboardStore } from "../src/state/store";
-import { stateFixture } from "./fixtures";
+import { emptyXTargetState, stateFixture } from "./fixtures";
 
 const sdk = vi.hoisted(() => ({
   getGlobalSettings: vi.fn(),
@@ -377,6 +377,33 @@ describe("DashboardController", () => {
     expect(client.reconnect).toHaveBeenCalledTimes(1);
     expect(client.configure).not.toHaveBeenCalled();
   });
+
+  it("routes the configurable Character action to its saved box", async () => {
+    const client = fakeClient();
+    client.activate.mockResolvedValue(activatedResult());
+    const store = multiClientStore();
+    const controller = new DashboardController(store, client as never);
+    const action = {
+      ...fakeKey("configurable"),
+      manifestId: "co.laikasoft.stonemite.character",
+    };
+
+    await controller.onWillAppear({
+      action,
+      payload: { settings: { windowNumber: 2 } },
+    } as never);
+    // Appearance starts the shared boot animation; finish it before interaction.
+    store.setBootStage(3);
+    await controller.onKeyDown({ action } as never);
+    expect(client.activate).toHaveBeenLastCalledWith("serein-id");
+
+    controller.onDidReceiveSettings({
+      action,
+      payload: { settings: { windowNumber: 3 } },
+    } as never);
+    await controller.onKeyDown({ action } as never);
+    expect(client.activate).toHaveBeenLastCalledWith("rook-id");
+  });
 });
 
 describe("action helpers", () => {
@@ -433,6 +460,7 @@ function connectedStore(): DashboardStore {
           active: false,
           activatable: true,
           input_ready: true,
+          xtarget: emptyXTargetState(),
         },
       ],
       broadcast: { available: true, enabled: false },
@@ -460,6 +488,7 @@ function multiClientStore(): DashboardStore {
           active: true,
           activatable: true,
           input_ready: true,
+          xtarget: emptyXTargetState(),
         },
         {
           id: "serein-id",
@@ -468,6 +497,7 @@ function multiClientStore(): DashboardStore {
           active: false,
           activatable: true,
           input_ready: true,
+          xtarget: emptyXTargetState(),
         },
         {
           id: "rook-id",
@@ -476,6 +506,7 @@ function multiClientStore(): DashboardStore {
           active: false,
           activatable: true,
           input_ready: true,
+          xtarget: emptyXTargetState(),
         },
       ],
     }),

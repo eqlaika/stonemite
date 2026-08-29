@@ -1,0 +1,105 @@
+:root {
+  color-scheme: dark;
+  --bg: #24262a;
+  --surface: #30343a;
+  --inset: #1c1e22;
+  --line: #4a5059;
+  --text: #f5f7fa;
+  --muted: #b8c0ca;
+  --cyan: #59d8d0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 260px;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  -webkit-font-smoothing: antialiased;
+}
+
+main {
+  padding: 12px;
+}
+
+fieldset {
+  margin: 0;
+  padding: 0 0 16px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+legend {
+  padding: 0;
+  font-weight: 750;
+}
+
+.help,
+#status {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.help {
+  margin: 6px 0 10px;
+}
+
+.box-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.box-grid label {
+  position: relative;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.box-grid input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.box-grid span {
+  display: grid;
+  place-items: center;
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--inset);
+  color: var(--muted);
+  font-size: 18px;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+}
+
+.box-grid label:hover span {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.box-grid input:focus-visible + span {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.box-grid input:checked + span {
+  border-color: var(--cyan);
+  background: color-mix(in srgb, var(--cyan) 20%, var(--inset));
+  box-shadow: inset 0 0 0 1px var(--cyan);
+  color: var(--text);
+}
+
+#status {
+  min-height: 17px;
+  margin: 11px 0 0;
+  font-size: 11px;
+}

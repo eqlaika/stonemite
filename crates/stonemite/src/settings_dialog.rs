@@ -494,6 +494,7 @@ mod tests {
                 active: false,
                 activatable: true,
                 input_ready: false,
+                xtarget: trushar::protocol::WireXTargetState::default(),
             }
         };
         let characters = running_characters_from_clients(vec![

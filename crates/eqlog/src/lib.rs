@@ -13,10 +13,11 @@ mod telemetry;
 
 pub use event::{
     AttackProblem, CastKind, CastingEvent, CharacterEvent, ChatEvent, CombatAttempt, CombatEvent,
-    DamageKind, DamageModifiers, DamageObservation, DamageOutcome, IdentityEvent, IncomingTell,
-    LogEvent, LogEventDomain, NotificationEvent, ObservedCombatant, ParsedLogEvent,
-    ParserProvenance, PersonaLoaded, Perspective, PetEvent, PetOwnershipObservation,
-    PlayerEvidence, ProgressEvent, TargetSlainObservation, WhoResult, ZoneObservation,
+    ConsiderDifficulty, ConsiderEvent, DamageKind, DamageModifiers, DamageObservation,
+    DamageOutcome, IdentityEvent, IncomingTell, LogEvent, LogEventDomain, NotificationEvent,
+    ObservedCombatant, ParsedLogEvent, ParserProvenance, PersonaLoaded, Perspective, PetEvent,
+    PetOwnershipObservation, PlayerEvidence, ProgressEvent, TargetSlainObservation, WhoResult,
+    ZoneObservation,
 };
 pub use parsers::{DomainParser, ParseOutcome, ParserError, ParserFailure, ParserRegistry};
 pub use raw::{

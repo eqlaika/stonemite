@@ -94,7 +94,8 @@ impl TelemetryReducer {
             | LogEvent::Combat(_)
             | LogEvent::Chat(_)
             | LogEvent::Notification(_)
-            | LogEvent::Progress(_) => None,
+            | LogEvent::Progress(_)
+            | LogEvent::Consider(_) => None,
         }
     }
 

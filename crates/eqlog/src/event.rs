@@ -12,6 +12,7 @@ pub enum LogEventDomain {
     Chat,
     Notification,
     Progress,
+    Consider,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,6 +33,7 @@ pub enum LogEvent {
     Chat(ChatEvent),
     Notification(NotificationEvent),
     Progress(ProgressEvent),
+    Consider(ConsiderEvent),
 }
 
 impl LogEvent {
@@ -45,6 +47,7 @@ impl LogEvent {
             Self::Chat(_) => LogEventDomain::Chat,
             Self::Notification(_) => LogEventDomain::Notification,
             Self::Progress(_) => LogEventDomain::Progress,
+            Self::Consider(_) => LogEventDomain::Consider,
         }
     }
 }
@@ -253,6 +256,27 @@ pub struct IncomingTell {
 pub enum ProgressEvent {
     LevelGained { level: u16 },
     AlternateAdvancementPointGained,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConsiderDifficulty {
+    Green,
+    LightBlue,
+    Blue,
+    White,
+    Yellow,
+    Red,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConsiderEvent {
+    Target {
+        target: Arc<str>,
+        difficulty: ConsiderDifficulty,
+        level: Option<u16>,
+    },
+    NoTarget,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

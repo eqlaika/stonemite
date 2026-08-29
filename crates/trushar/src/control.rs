@@ -24,6 +24,43 @@ impl ClientId {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct XTargetSlot {
+    pub slot: u8,
+    pub label: String,
+    pub bound: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConsiderDifficulty {
+    Green,
+    LightBlue,
+    Blue,
+    White,
+    Yellow,
+    Red,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConsiderResult {
+    Target {
+        target: String,
+        difficulty: ConsiderDifficulty,
+        level: Option<u16>,
+    },
+    NoTarget,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct XTargetState {
+    pub slots: Vec<XTargetSlot>,
+    pub selected_slot: Option<u8>,
+    pub consider_bound: bool,
+    pub consider_pending: bool,
+    pub consider: Option<ConsiderResult>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClientState {
     pub id: ClientId,
     pub character: Option<String>,
@@ -33,6 +70,7 @@ pub struct ClientState {
     pub active: bool,
     pub activatable: bool,
     pub input_ready: bool,
+    pub xtarget: XTargetState,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -778,6 +816,7 @@ impl SnapshotMapper {
                 active: source.active,
                 activatable: source.activatable,
                 input_ready: source.input_ready,
+                xtarget: XTargetState::default(),
             });
         }
         clients.sort_by_key(|client| client.window_number);
@@ -895,6 +934,7 @@ impl InMemoryController {
                 active,
                 activatable,
                 input_ready,
+                xtarget: XTargetState::default(),
             });
             state
                 .mapped_actions

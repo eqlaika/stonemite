@@ -2,6 +2,7 @@ mod casting;
 mod character;
 mod chat;
 mod combat;
+mod consider;
 mod identity;
 mod notifications;
 mod pets;
@@ -38,6 +39,7 @@ impl Default for ParserRegistry {
         registry.register(character::CharacterParser);
         registry.register(chat::ChatParser);
         registry.register(combat::CombatParser);
+        registry.register(consider::ConsiderParser);
         registry.register(identity::IdentityParser::default());
         registry.register(notifications::NotificationParser);
         registry.register(pets::PetParser);

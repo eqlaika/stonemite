@@ -3,11 +3,28 @@ import type { DashboardKey } from "../state/layout";
 export interface DashboardActionDefinition {
   key: DashboardKey;
   name: string;
+  configurableCharacter?: boolean;
   tooltip: string;
   uuid: string;
 }
 
 const UUID_PREFIX = "co.laikasoft.stonemite";
+
+export const CHARACTER_ACTION_DEFINITION = {
+  key: "character-1",
+  name: "Character",
+  tooltip:
+    "Activate one configured Stonemite box, or select it while Swap is armed.",
+  uuid: `${UUID_PREFIX}.character`,
+  configurableCharacter: true,
+} as const satisfies DashboardActionDefinition;
+
+export const XTARGET_ACTION_DEFINITION = {
+  name: "XTarget",
+  tooltip:
+    "Select saved Extended Target slots, consider the target, and activate one configured Stonemite box.",
+  uuid: `${UUID_PREFIX}.xtarget`,
+} as const;
 
 export const HOTKEY_ACTION_DEFINITION = {
   name: "Hotkey",
@@ -23,6 +40,7 @@ export const DASHBOARD_ACTION_DEFINITIONS = [
     tooltip: `Activate the character in Stonemite slot ${slot}, or select it while Swap is armed.`,
     uuid: `${UUID_PREFIX}.character-slot-${slot}`,
   })),
+  CHARACTER_ACTION_DEFINITION,
   {
     key: "broadcast",
     name: "Broadcast",

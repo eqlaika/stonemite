@@ -16,6 +16,7 @@ mod eq_characters;
 mod eq_chat_colors;
 mod eq_keymap;
 mod eq_windows;
+mod eq_xtarget;
 mod font_catalog;
 mod log_watcher;
 mod overlay;

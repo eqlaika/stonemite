@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Choose Stonemite box</title>
+    <link rel="stylesheet" href="box.css" />
+    <script src="sdpi-components.js"></script>
+    <script src="box.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <form id="box-form">
+        <fieldset>
+          <legend>Stonemite box</legend>
+          <p class="help">
+            Choose the stable box number this control follows. Character names
+            update automatically as clients load or window numbers change.
+          </p>
+          <div class="box-grid" role="radiogroup" aria-label="Stonemite box">
+            <label
+              ><input type="radio" name="box" value="1" /><span>1</span></label
+            >
+            <label
+              ><input type="radio" name="box" value="2" /><span>2</span></label
+            >
+            <label
+              ><input type="radio" name="box" value="3" /><span>3</span></label
+            >
+            <label
+              ><input type="radio" name="box" value="4" /><span>4</span></label
+            >
+            <label
+              ><input type="radio" name="box" value="5" /><span>5</span></label
+            >
+            <label
+              ><input type="radio" name="box" value="6" /><span>6</span></label
+            >
+          </div>
+        </fieldset>
+        <p id="status" role="status" aria-live="polite">
+          Changes save automatically.
+        </p>
+      </form>
+    </main>
+  </body>
+</html>

@@ -1,4 +1,13 @@
-import type { TrusharState } from "../src/types/trushar";
+import type { TrusharState, XTargetState } from "../src/types/trushar";
+
+export function emptyXTargetState(): XTargetState {
+  return {
+    supported: true,
+    slots: [],
+    consider_bound: false,
+    consider_pending: false,
+  };
+}
 
 export function stateFixture(
   overrides: Partial<TrusharState> = {},
@@ -15,6 +24,16 @@ export function stateFixture(
         active: true,
         activatable: true,
         input_ready: true,
+        xtarget: {
+          supported: true,
+          slots: [
+            { slot: 1, label: "Auto hater", bound: true },
+            { slot: 2, label: "Laika", bound: true },
+          ],
+          selected_slot: 1,
+          consider_bound: true,
+          consider_pending: false,
+        },
       },
     ],
     active_client_id: "client-1",

@@ -28,6 +28,13 @@ export default {
         this.addWatchFile(`${sdPlugin}/manifest.json`);
         this.addWatchFile(`${sdPlugin}/ui/pairing.html`);
         this.addWatchFile(`${sdPlugin}/ui/pairing.js`);
+        this.addWatchFile(`${sdPlugin}/ui/hotkey.html`);
+        this.addWatchFile(`${sdPlugin}/ui/hotkey.js`);
+        this.addWatchFile(`${sdPlugin}/ui/hotkey.css`);
+        this.addWatchFile(`${sdPlugin}/ui/box.html`);
+        this.addWatchFile(`${sdPlugin}/ui/box.js`);
+        this.addWatchFile(`${sdPlugin}/ui/box.css`);
+        this.addWatchFile(`${sdPlugin}/layouts/xtarget-v4.json`);
       },
     },
     typescript({ mapRoot: isWatching ? "./" : undefined }),

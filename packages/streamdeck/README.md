@@ -1,6 +1,6 @@
 # Stonemite Stream Deck plugin
 
-The **Stonemite · EQ boxing** Stream Deck plugin provides customizable controls for Stonemite. It shows the current six-client roster, activates an exact loaded EQ client, swaps the window numbers of the active and selected clients, invokes configurable mapped EQ actions, reflects targeted-input readiness, explicitly enables or disables Stonemite broadcasting, and provides a hold-to-broadcast Mouse Clutch key.
+The **Stonemite · EQ boxing** Stream Deck plugin provides customizable controls for Stonemite. It shows the current six-client roster, activates an exact loaded EQ client, swaps the window numbers of the active and selected clients, invokes configurable mapped EQ actions, reflects targeted-input readiness, explicitly enables or disables Stonemite broadcasting, provides a hold-to-broadcast Mouse Clutch key, and adds direct Extended Target control for Stream Deck + dials.
 
 The Swap key replaces the old MITE ambient key. Press **Swap**, then press a character. Stonemite exchanges that character's window number with the currently active character's number without activating a different window. Press Swap again or select the current character to cancel.
 
@@ -8,7 +8,7 @@ The Bcast key explicitly toggles Stonemite broadcasting. Its label stays **Bcast
 
 The Stonemite setup key shows connection recovery state and owns the plugin-wide connection inspector; pressing it does not send a command.
 
-V0 remains an honest control surface rather than a gameplay automation layer. Each configurable Hotkey tile invokes one EQ action whose effective key mapping Stonemite can resolve, including all 11×12 hotbar actions and all 14 spell gems. Grouping, following, assisting, burns, camps, healing, targeting, and other workflows belong in user-authored EverQuest socials assigned to mapped hotbar positions.
+V0 remains an honest control surface rather than a gameplay automation layer. Each configurable Hotkey tile invokes one EQ action whose effective key mapping Stonemite can resolve, including all 11×12 hotbar actions and all 14 spell gems. Each XTarget dial turn or press likewise invokes exactly one direct EQ keymap action. Grouping, following, assisting, burns, camps, healing, and other workflows belong in user-authored EverQuest socials assigned to mapped hotbar positions.
 
 ## Requirements
 
@@ -56,7 +56,19 @@ Linking restarts or changes the user's Stream Deck installation, so it is a deli
 
 The plugin does not currently install a preset profile. Create or open a profile in Stream Deck, then place the controls you want.
 
-Character slots 1–6, Broadcast, Mouse Clutch, Swap, Hotkey, and Stonemite setup are separate actions in the Stream Deck action list. Drag any of them to any key position to create your own layout; behavior follows the action rather than its row and column. Duplicate actions are supported. Leave each action image at its default because a user-defined image takes precedence over the plugin's live rendering. The plugin disables user titles for these actions.
+Character, Broadcast, Mouse Clutch, Swap, Hotkey, XTarget, and Stonemite setup are separate actions in the Stream Deck action list. Configure each Character or XTarget action for a stable Stonemite box number from 1–6. Drag any action to any compatible key or dial position to create your own layout; behavior follows the action rather than its row and column. Duplicate actions are supported. Existing profiles that use the former six fixed Character slot actions keep working, but those legacy actions are hidden from the action list. Leave each action image at its default because a user-defined image takes precedence over the plugin's live rendering. The plugin disables user titles for these actions.
+
+## Use an XTarget dial
+
+On a Stream Deck +, drag **XTarget** onto a dial and choose its Stonemite box number in the property inspector.
+
+- Turn the dial to move through saved, non-empty Extended Target roles. Selection clamps at the first and last configured role and does not add acceleration or wrap; batched SDK ticks still preserve every physical detent. The LCD updates locally throughout the sweep. After 300 ms without another turn, Stonemite sends only the final direct `TARGET_XTARGET_1` through `TARGET_XTARGET_20` action and briefly shows the targeting popover. It never substitutes `CYCLE_XTARGET`.
+- Press the dial to send `CONSIDER` for that exact box.
+- Tap the dial's touchscreen area to activate that exact box. The LCD marks the authoritative active box clearly.
+
+Saved role labels come from the character/persona INI's `ExternalTargetRoles` section. Assign direct Extended Target and Consider bindings in EverQuest. The LCD shows **UNBOUND** instead of pretending to target when a required mapping is missing, and shows **INPUT UNAVAILABLE** when the exact client's targeted-input channel is not ready.
+
+A matching Consider log line can briefly replace the role label with the considered target, relative difficulty, and reported level. EverQuest's `Consider whom?` response immediately produces a **NO TARGET** popover rather than waiting for the request timeout. These five-second results are source-correlated and cleared on the next dial selection; they are recent log telemetry, not authoritative live target state.
 
 ## Use Mouse Clutch
 
@@ -118,6 +130,7 @@ The manifest uses `imgs/plugin/icon.png` and its `@2x` variant for the 256px and
 - **Mouse Clutch active/releasing** is Stonemite's pushed global clutch phase, including physical-key and duplicate-tile owners; it does not claim that EQ acted on a mouse event.
 - **Input ready** means that client's compatible trusik input channel acknowledged readiness.
 - Hotkey progress confirms mapped-key delivery to the resolved clients only; it does not prove that EQ performed the mapped action or completed an in-game social.
+- XTarget selection confirms delivery of one direct `TARGET_XTARGET_n` mapping. Consider feedback is a short-lived, source-correlated log observation and is cleared on rotation.
 - The plugin does not observe whether EQ accepted input or performed a resulting in-game action.
 
 Pairing codes, bearer credentials, and raw command traffic are never written to plugin logs.

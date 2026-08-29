@@ -1,0 +1,74 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/layout.json",
+  "id": "stonemite-xtarget-v4",
+  "items": [
+    {
+      "key": "background",
+      "type": "pixmap",
+      "rect": [0, 0, 200, 100],
+      "zOrder": 0,
+      "value": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMDAiIGhlaWdodD0iMTAwIiB2aWV3Qm94PSIwIDAgMjAwIDEwMCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agc3RvcC1jb2xvcj0iIzIwMjQyYiIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzE3MWExZiIvPjwvbGluZWFyR3JhZGllbnQ+PC9kZWZzPjxyZWN0IHdpZHRoPSIyMDAiIGhlaWdodD0iMTAwIiByeD0iOCIgZmlsbD0idXJsKCNnKSIvPjwvc3ZnPg=="
+    },
+    {
+      "key": "classIcon",
+      "type": "pixmap",
+      "rect": [9, 8, 30, 30],
+      "zOrder": 2,
+      "enabled": false
+    },
+    {
+      "key": "character",
+      "type": "text",
+      "rect": [45, 4, 148, 38],
+      "zOrder": 2,
+      "alignment": "left",
+      "color": "#f5f7fa",
+      "font": { "size": 24, "weight": 900 },
+      "text-overflow": "ellipsis"
+    },
+    {
+      "key": "slot",
+      "type": "text",
+      "rect": [9, 50, 38, 42],
+      "zOrder": 2,
+      "alignment": "center",
+      "background": "#3068b0",
+      "color": "#f5f7fa",
+      "font": { "size": 26, "weight": 900 },
+      "text-overflow": "clip"
+    },
+    {
+      "key": "role",
+      "type": "text",
+      "rect": [53, 49, 140, 28],
+      "zOrder": 2,
+      "alignment": "left",
+      "color": "#59d8d0",
+      "font": { "size": 17, "weight": 850 },
+      "text-overflow": "ellipsis"
+    },
+    {
+      "key": "detail",
+      "type": "text",
+      "rect": [53, 78, 140, 14],
+      "zOrder": 2,
+      "alignment": "left",
+      "color": "#a7b0bb",
+      "font": { "size": 9, "weight": 700 },
+      "text-overflow": "ellipsis",
+      "enabled": false
+    },
+    {
+      "key": "activity",
+      "type": "text",
+      "rect": [70, 68, 123, 24],
+      "zOrder": 10,
+      "alignment": "center",
+      "background": "#ffc75c",
+      "color": "#101615",
+      "font": { "size": 11, "weight": 900 },
+      "text-overflow": "ellipsis",
+      "enabled": false
+    }
+  ]
+}

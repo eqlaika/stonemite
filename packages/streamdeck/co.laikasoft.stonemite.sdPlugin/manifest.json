@@ -28,8 +28,21 @@
   ],
   "Actions": [
     {
+      "Name": "Character",
+      "UUID": "co.laikasoft.stonemite.character",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Activate one configured Stonemite box, or select it while Swap is armed.",
+      "PropertyInspectorPath": "ui/box.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
       "Name": "Character slot 1",
       "UUID": "co.laikasoft.stonemite.character-slot-1",
+      "VisibleInActionsList": false,
       "Icon": "imgs/actions/stonemite/icon",
       "Tooltip": "Activate the character in Stonemite slot 1, or select it while Swap is armed.",
       "Controllers": ["Keypad"],
@@ -41,6 +54,7 @@
     {
       "Name": "Character slot 2",
       "UUID": "co.laikasoft.stonemite.character-slot-2",
+      "VisibleInActionsList": false,
       "Icon": "imgs/actions/stonemite/icon",
       "Tooltip": "Activate the character in Stonemite slot 2, or select it while Swap is armed.",
       "Controllers": ["Keypad"],
@@ -52,6 +66,7 @@
     {
       "Name": "Character slot 3",
       "UUID": "co.laikasoft.stonemite.character-slot-3",
+      "VisibleInActionsList": false,
       "Icon": "imgs/actions/stonemite/icon",
       "Tooltip": "Activate the character in Stonemite slot 3, or select it while Swap is armed.",
       "Controllers": ["Keypad"],
@@ -63,6 +78,7 @@
     {
       "Name": "Character slot 4",
       "UUID": "co.laikasoft.stonemite.character-slot-4",
+      "VisibleInActionsList": false,
       "Icon": "imgs/actions/stonemite/icon",
       "Tooltip": "Activate the character in Stonemite slot 4, or select it while Swap is armed.",
       "Controllers": ["Keypad"],
@@ -74,6 +90,7 @@
     {
       "Name": "Character slot 5",
       "UUID": "co.laikasoft.stonemite.character-slot-5",
+      "VisibleInActionsList": false,
       "Icon": "imgs/actions/stonemite/icon",
       "Tooltip": "Activate the character in Stonemite slot 5, or select it while Swap is armed.",
       "Controllers": ["Keypad"],
@@ -85,9 +102,32 @@
     {
       "Name": "Character slot 6",
       "UUID": "co.laikasoft.stonemite.character-slot-6",
+      "VisibleInActionsList": false,
       "Icon": "imgs/actions/stonemite/icon",
       "Tooltip": "Activate the character in Stonemite slot 6, or select it while Swap is armed.",
       "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/actions/stonemite/key", "ShowTitle": false }]
+    },
+    {
+      "Name": "XTarget",
+      "UUID": "co.laikasoft.stonemite.xtarget",
+      "Icon": "imgs/actions/stonemite/icon",
+      "Tooltip": "Select saved Extended Target slots, consider the target, and activate one configured Stonemite box.",
+      "PropertyInspectorPath": "ui/box.html",
+      "Controllers": ["Encoder"],
+      "Encoder": {
+        "Icon": "imgs/actions/stonemite/key",
+        "StackColor": "#59d8d0",
+        "layout": "layouts/xtarget-v4.json",
+        "TriggerDescription": {
+          "Rotate": "Select Extended Target",
+          "Push": "Consider target",
+          "Touch": "Activate box"
+        }
+      },
       "SupportedInMultiActions": false,
       "SupportedInKeyLogicActions": false,
       "UserTitleEnabled": false,

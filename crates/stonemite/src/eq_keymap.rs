@@ -685,6 +685,35 @@ mod tests {
     }
 
     #[test]
+    fn resolves_direct_xtarget_slots_and_consider_without_cycle_targeting() {
+        let dir = TestDir::new();
+        let mut contents = String::from("[KeyMaps]\nKEYMAPPING_CONSIDER_1=46\n");
+        for slot in 1..=crate::eq_xtarget::MAX_XTARGET_SLOTS {
+            contents.push_str(&format!("KEYMAPPING_TARGET_XTARGET_{slot}_1=43\n"));
+        }
+        contents.push_str("KEYMAPPING_CYCLE_XTARGET_1=42\n");
+        dir.write("eqclient.ini", &contents);
+        let mut resolver = EqKeymapResolver::new(dir.0.clone());
+
+        for slot in 1..=crate::eq_xtarget::MAX_XTARGET_SLOTS {
+            assert_eq!(
+                resolver.resolve(
+                    &EqAction::keymap(format!("TARGET_XTARGET_{slot}")).unwrap(),
+                    ClientIdentity::default(),
+                ),
+                Ok(ResolvedBinding { scans: vec![43] })
+            );
+        }
+        assert_eq!(
+            resolver.resolve(
+                &EqAction::keymap("CONSIDER").unwrap(),
+                ClientIdentity::default(),
+            ),
+            Ok(ResolvedBinding { scans: vec![46] })
+        );
+    }
+
+    #[test]
     fn refreshes_cached_keymaps_when_the_file_changes() {
         let dir = TestDir::new();
         dir.write("eqclient.ini", "[KeyMaps]\nKEYMAPPING_USE_1=18\n");

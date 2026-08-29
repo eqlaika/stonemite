@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import streamDeck, {
+  type DidReceiveSettingsEvent,
   type KeyAction,
   type KeyDownEvent,
   type KeyUpEvent,
@@ -18,7 +19,15 @@ import {
   TrusharClient,
   type ConnectionConfig,
 } from "../trushar/client";
-import { keyForManifestId } from "./key-definitions";
+import {
+  characterKeyForWindow,
+  normalizeWindowNumber,
+  type BoxSettings,
+} from "./box-settings";
+import {
+  CHARACTER_ACTION_DEFINITION,
+  keyForManifestId,
+} from "./key-definitions";
 
 const SWAP_TILE_FRAME_MS = 125;
 const SWAP_TILE_FRAME_COUNT = 8;
@@ -67,12 +76,33 @@ export class DashboardController {
     });
   }
 
-  async onWillAppear(event: WillAppearEvent): Promise<void> {
+  async onWillAppear(event: WillAppearEvent<BoxSettings>): Promise<void> {
     if (!event.action.isKey() || event.action.isInMultiAction()) return;
-    const key = keyForManifestId(event.action.manifestId);
+    const key =
+      event.action.manifestId === CHARACTER_ACTION_DEFINITION.uuid
+        ? characterKeyForWindow(
+            normalizeWindowNumber(event.payload?.settings?.windowNumber),
+          )
+        : keyForManifestId(event.action.manifestId);
     if (!key) return;
     this.#keys.set(event.action.id, { action: event.action, key });
     this.#startBoot();
+    this.#queueRender();
+  }
+
+  onDidReceiveSettings(event: DidReceiveSettingsEvent<BoxSettings>): void {
+    if (
+      !event.action.isKey() ||
+      event.action.manifestId !== CHARACTER_ACTION_DEFINITION.uuid
+    ) {
+      return;
+    }
+    const visible = this.#keys.get(event.action.id);
+    if (!visible) return;
+    visible.key = characterKeyForWindow(
+      normalizeWindowNumber(event.payload.settings.windowNumber),
+    );
+    delete visible.lastImage;
     this.#queueRender();
   }
 

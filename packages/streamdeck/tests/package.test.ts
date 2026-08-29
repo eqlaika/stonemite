@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DASHBOARD_ACTION_DEFINITIONS,
   HOTKEY_ACTION_DEFINITION,
+  XTARGET_ACTION_DEFINITION,
 } from "../src/actions/key-definitions";
 import { CLASS_IMAGES } from "../src/render/assets.generated";
 
@@ -46,11 +47,17 @@ describe("release inputs", () => {
       ),
     ) as {
       Actions?: Array<{
+        Controllers?: string[];
+        Encoder?: {
+          layout?: string;
+          TriggerDescription?: Record<string, string>;
+        };
         Icon?: string;
         Name?: string;
         PropertyInspectorPath?: string;
         Tooltip?: string;
         UUID?: string;
+        VisibleInActionsList?: boolean;
       }>;
       Author?: string;
       Category?: string;
@@ -83,6 +90,7 @@ describe("release inputs", () => {
         uuid,
       })),
       HOTKEY_ACTION_DEFINITION,
+      XTARGET_ACTION_DEFINITION,
     ].sort((a, b) => a.uuid.localeCompare(b.uuid));
     expect(actualActions).toEqual(expectedActions);
     expect(actualActions.map((action) => action.uuid)).not.toEqual(
@@ -93,6 +101,33 @@ describe("release inputs", () => {
         "co.laikasoft.stonemite.use",
       ]),
     );
+    const legacyCharacters = (manifest.Actions ?? []).filter((action) =>
+      action.UUID?.startsWith("co.laikasoft.stonemite.character-slot-"),
+    );
+    expect(legacyCharacters).toHaveLength(6);
+    expect(
+      legacyCharacters.every((action) => action.VisibleInActionsList === false),
+    ).toBe(true);
+    expect(
+      manifest.Actions?.find(
+        (action) => action.UUID === "co.laikasoft.stonemite.character",
+      )?.VisibleInActionsList,
+    ).toBeUndefined();
+    expect(
+      manifest.Actions?.find(
+        (action) => action.UUID === "co.laikasoft.stonemite.xtarget",
+      ),
+    ).toMatchObject({
+      Controllers: ["Encoder"],
+      Encoder: {
+        layout: "layouts/xtarget-v4.json",
+        TriggerDescription: {
+          Rotate: "Select Extended Target",
+          Push: "Consider target",
+          Touch: "Activate box",
+        },
+      },
+    });
     for (const action of manifest.Actions ?? []) {
       expect(action.Icon).toBe("imgs/actions/stonemite/icon");
       expect(action.PropertyInspectorPath).toBe(
@@ -100,7 +135,10 @@ describe("release inputs", () => {
           ? "ui/pairing.html"
           : action.UUID === "co.laikasoft.stonemite.hotkey"
             ? "ui/hotkey.html"
-            : undefined,
+            : action.UUID === "co.laikasoft.stonemite.character" ||
+                action.UUID === "co.laikasoft.stonemite.xtarget"
+              ? "ui/box.html"
+              : undefined,
       );
     }
   });
@@ -177,6 +215,57 @@ describe("release inputs", () => {
     expect(previews).toContain("Lucide Animated (MIT)");
     expect(previews).toContain('"flame"');
     expect(previews).not.toContain('"footprints"');
+  });
+
+  it("ships the box inspector and XTarget touch layout", async () => {
+    const [html, script, layoutText] = await Promise.all([
+      readFile(
+        new URL(
+          "../co.laikasoft.stonemite.sdPlugin/ui/box.html",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+      readFile(
+        new URL(
+          "../co.laikasoft.stonemite.sdPlugin/ui/box.js",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+      readFile(
+        new URL(
+          "../co.laikasoft.stonemite.sdPlugin/layouts/xtarget-v4.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ]);
+    const layout = JSON.parse(layoutText) as {
+      id?: string;
+      items?: Array<{ key?: string; type?: string; value?: string }>;
+    };
+    expect(html).toContain("stable box number");
+    expect(html.match(/name="box"/g)).toHaveLength(6);
+    expect(script).toContain("await client.getSettings()");
+    expect(script).toContain("await client.setSettings(settings)");
+    expect(script).toContain("while (pendingWindowNumber !== undefined)");
+    expect(script).toContain("choice.disabled = true");
+    expect(layout.id).toBe("stonemite-xtarget-v4");
+    expect(layout.items).toHaveLength(7);
+    expect(layout.items?.find((item) => item.key === "status")).toBeUndefined();
+    expect(
+      layout.items?.find((item) => item.key === "classIcon"),
+    ).toMatchObject({ type: "pixmap" });
+    expect(layout.items?.find((item) => item.key === "activity")).toMatchObject(
+      { type: "text" },
+    );
+    expect(
+      layout.items?.find((item) => item.key === "background"),
+    ).toMatchObject({
+      type: "pixmap",
+      value: expect.stringMatching(/^data:image\/svg\+xml;base64,/),
+    });
   });
 
   it("embeds every required Stonemite class icon", () => {

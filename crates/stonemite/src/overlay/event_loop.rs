@@ -296,6 +296,13 @@ fn apply_log_batches(
             }
             casting::apply_log_envelope(s, &envelope);
             for event in envelope.events.iter() {
+                if let eqlog::LogEvent::Consider(consider) = &event.event {
+                    crate::control::record_consider(
+                        &event.source.id,
+                        consider,
+                        envelope.observed_at,
+                    );
+                }
                 notifications::apply_log_event(s, event);
                 combat_awareness::apply_log_event(s, event);
             }

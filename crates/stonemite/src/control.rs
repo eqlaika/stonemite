@@ -8,10 +8,11 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use trushar::control::{
-    BroadcastState, ClientId, ClientTarget, CommandOutcome, ControlError, Controller, EqAction,
-    EqActionTargets, EqMappingName, ErrorCode, InputKind, KeyStroke, MouseClutchOperation,
-    MouseClutchOwner, MouseClutchState, SnapshotMapper, SourceClient, StateHub, StateSnapshot,
-    DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_PAUSE_MS, EQ_KEYMAP_PAGE_SIZE,
+    BroadcastState, ClientId, ClientTarget, CommandOutcome, ConsiderDifficulty, ConsiderResult,
+    ControlError, Controller, EqAction, EqActionTargets, EqMappingName, ErrorCode, InputKind,
+    KeyStroke, MouseClutchOperation, MouseClutchOwner, MouseClutchState, SnapshotMapper,
+    SourceClient, StateHub, StateSnapshot, XTargetSlot, DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_PAUSE_MS,
+    EQ_KEYMAP_PAGE_SIZE,
 };
 use trushar::server::{ServerConfig, ServerHandle};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -27,6 +28,8 @@ const INPUT_TICK_MS: u32 = 10;
 const INPUT_ACTIVATION_DELAY: Duration = Duration::from_millis(200);
 const INPUT_MODIFIER_DELAY: Duration = Duration::from_millis(30);
 const INPUT_RELEASE_DELAY: Duration = Duration::from_millis(100);
+const CONSIDER_REQUEST_TTL: Duration = Duration::from_secs(3);
+const CONSIDER_RESULT_TTL: Duration = Duration::from_secs(5);
 
 enum UiCommand {
     Activate {
@@ -124,6 +127,11 @@ struct PendingBatch {
     reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
 }
 
+struct TimedConsider {
+    result: ConsiderResult,
+    expires_at: Instant,
+}
+
 struct UiState {
     receiver: mpsc::Receiver<UiCommand>,
     mapper: SnapshotMapper,
@@ -134,6 +142,10 @@ struct UiState {
     input_batches: HashMap<u64, PendingBatch>,
     next_batch_id: u64,
     keymaps: HashMap<PathBuf, crate::eq_keymap::EqKeymapResolver>,
+    xtargets: HashMap<PathBuf, crate::eq_xtarget::EqXTargetResolver>,
+    selected_xtargets: HashMap<u32, u8>,
+    pending_considers: HashMap<u32, Instant>,
+    consider_results: HashMap<u32, TimedConsider>,
     default_eq_dir: PathBuf,
     pairing: Option<trushar::server::PairingHandle>,
     pairing_auth_token: Option<String>,
@@ -354,6 +366,10 @@ pub fn start(
         input_batches: HashMap::new(),
         next_batch_id: 0,
         keymaps: HashMap::new(),
+        xtargets: HashMap::new(),
+        selected_xtargets: HashMap::new(),
+        pending_considers: HashMap::new(),
+        consider_results: HashMap::new(),
         default_eq_dir: eq_dir,
         pairing: None,
         pairing_auth_token: None,
@@ -782,28 +798,35 @@ fn start_eq_action(
     action: EqAction,
     reply: oneshot::Sender<Result<CommandOutcome, ControlError>>,
 ) {
-    let resolved = action.validate().and_then(|()| {
-        let source = resolve_input_source(&client_id)?;
+    if let Err(error) = action.validate() {
+        let _ = reply.send(Err(error));
+        return;
+    }
+    let source = match lookup_input_source(&client_id) {
+        Ok(source) => source,
+        Err(error) => {
+            let _ = reply.send(Err(error));
+            return;
+        }
+    };
+    let pid = source.private_key as u32;
+    if xtarget_slot_from_mapping(&action.mapping_name()).is_some() {
+        note_xtarget_rotation(pid);
+    }
+    let resolved = ensure_input_source_ready(&source).and_then(|()| {
         let Some(state) = ui().as_mut() else {
             return Err(ControlError::new(
                 ErrorCode::InternalError,
                 "control dispatcher is stopped",
             ));
         };
-        let eq_dir = crate::eq_windows::process_eq_directory(source.private_key as u32)
+        let eq_dir = crate::eq_windows::process_eq_directory(pid)
             .unwrap_or_else(|| state.default_eq_dir.clone());
         let binding = state
             .keymaps
             .entry(eq_dir.clone())
             .or_insert_with(|| crate::eq_keymap::EqKeymapResolver::new(eq_dir))
-            .resolve(
-                &action,
-                crate::eq_keymap::ClientIdentity {
-                    character: source.character.as_deref(),
-                    server: source.server.as_deref(),
-                    class_code: source.class_code.as_deref(),
-                },
-            )
+            .resolve(&action, source_identity(&source))
             .map_err(map_eq_action_error)?;
         Ok(vec![ResolvedStroke {
             scans: binding.scans,
@@ -814,10 +837,16 @@ fn start_eq_action(
 
     match resolved {
         Ok(strokes) => {
-            if let Err((reply, error)) =
-                start_resolved_input(client_id, ActiveInputKind::EqAction(action), strokes, reply)
-            {
-                let _ = reply.send(Err(error));
+            match start_resolved_input(
+                client_id,
+                ActiveInputKind::EqAction(action.clone()),
+                strokes,
+                reply,
+            ) {
+                Ok(()) => note_eq_action_started(pid, &action),
+                Err((reply, error)) => {
+                    let _ = reply.send(Err(error));
+                }
             }
         }
         Err(error) => {
@@ -1225,13 +1254,7 @@ fn map_targeted_input_error(error: crate::broadcast::TargetedInputError) -> Cont
     ControlError::new(code, message)
 }
 
-fn resolve_input_source(client_id: &ClientId) -> Result<SourceClient, ControlError> {
-    if !crate::broadcast::is_available() {
-        return Err(ControlError::new(
-            ErrorCode::InputUnavailable,
-            "targeted input is unavailable because trusik is disabled",
-        ));
-    }
+fn lookup_input_source(client_id: &ClientId) -> Result<SourceClient, ControlError> {
     let Some(state) = ui().as_ref() else {
         return Err(ControlError::new(
             ErrorCode::InternalError,
@@ -1243,14 +1266,7 @@ fn resolve_input_source(client_id: &ClientId) -> Result<SourceClient, ControlErr
         .iter()
         .find(|source| state.mapper.id_for_key(source.private_key) == Some(client_id))
     {
-        let source = source.clone();
-        if !crate::broadcast::is_target_ready(source.private_key as u32) {
-            return Err(ControlError::new(
-                ErrorCode::InputUnavailable,
-                "targeted input is unavailable because the selected client's trusik proxy is not ready",
-            ));
-        }
-        return Ok(source);
+        return Ok(source.clone());
     }
     let code = if state.mapper.is_retired(client_id) {
         ErrorCode::TargetDisappeared
@@ -1258,6 +1274,28 @@ fn resolve_input_source(client_id: &ClientId) -> Result<SourceClient, ControlErr
         ErrorCode::ClientNotFound
     };
     Err(ControlError::new(code, "the target client is not loaded"))
+}
+
+fn ensure_input_source_ready(source: &SourceClient) -> Result<(), ControlError> {
+    if !crate::broadcast::is_available() {
+        return Err(ControlError::new(
+            ErrorCode::InputUnavailable,
+            "targeted input is unavailable because trusik is disabled",
+        ));
+    }
+    if !crate::broadcast::is_target_ready(source.private_key as u32) {
+        return Err(ControlError::new(
+            ErrorCode::InputUnavailable,
+            "targeted input is unavailable because the selected client's trusik proxy is not ready",
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_input_source(client_id: &ClientId) -> Result<SourceClient, ControlError> {
+    let source = lookup_input_source(client_id)?;
+    ensure_input_source_ready(&source)?;
+    Ok(source)
 }
 
 fn resolve_input_pid(client_id: &ClientId) -> Result<u32, ControlError> {
@@ -1554,6 +1592,9 @@ fn advance_one_input(state: &mut UiState, mut input: ActiveInput) {
     }
     let phase = input.phase;
     if phase == InputPhase::Finish {
+        if let ActiveInputKind::EqAction(action) = &input.kind {
+            note_eq_action_delivered(state, input.pid, action);
+        }
         let result = Ok(match &input.kind {
             ActiveInputKind::Input(kind) => CommandOutcome::InputDelivered {
                 kind: *kind,
@@ -1670,6 +1711,187 @@ fn finish_input(
     }
 }
 
+fn xtarget_slot_from_mapping(mapping: &EqMappingName) -> Option<u8> {
+    mapping
+        .as_str()
+        .strip_prefix("TARGET_XTARGET_")
+        .and_then(|value| value.parse::<u8>().ok())
+        .filter(|slot| (1..=crate::eq_xtarget::MAX_XTARGET_SLOTS).contains(slot))
+}
+
+fn note_xtarget_rotation(pid: u32) {
+    let Some(state) = ui().as_mut() else { return };
+    state.pending_considers.remove(&pid);
+    state.consider_results.remove(&pid);
+    publish_transient_snapshot(state);
+}
+
+fn note_eq_action_started(pid: u32, action: &EqAction) {
+    if action.mapping_name().as_str() != "CONSIDER" {
+        return;
+    }
+    let Some(state) = ui().as_mut() else { return };
+    state
+        .pending_considers
+        .insert(pid, Instant::now() + CONSIDER_REQUEST_TTL);
+    state.consider_results.remove(&pid);
+    publish_transient_snapshot(state);
+}
+
+fn note_eq_action_delivered(state: &mut UiState, pid: u32, action: &EqAction) {
+    let Some(slot) = xtarget_slot_from_mapping(&action.mapping_name()) else {
+        return;
+    };
+    state.selected_xtargets.insert(pid, slot);
+    publish_transient_snapshot(state);
+}
+
+/// Accept a Consider result only while a Consider action is pending for the
+/// exact PID-backed log source that produced it.
+pub fn record_consider(
+    source: &eqlog::LogSourceId,
+    consider: &eqlog::ConsiderEvent,
+    observed_at: Instant,
+) {
+    let Some(pid) = source
+        .as_str()
+        .strip_prefix("pid:")
+        .and_then(|value| value.parse::<u32>().ok())
+    else {
+        return;
+    };
+    let Some(state) = ui().as_mut() else { return };
+    if !state
+        .pending_considers
+        .get(&pid)
+        .is_some_and(|expires_at| observed_at <= *expires_at)
+    {
+        return;
+    }
+    state.pending_considers.remove(&pid);
+    state.consider_results.insert(
+        pid,
+        TimedConsider {
+            result: match consider {
+                eqlog::ConsiderEvent::Target {
+                    target,
+                    difficulty,
+                    level,
+                } => ConsiderResult::Target {
+                    target: target.to_string(),
+                    difficulty: match difficulty {
+                        eqlog::ConsiderDifficulty::Green => ConsiderDifficulty::Green,
+                        eqlog::ConsiderDifficulty::LightBlue => ConsiderDifficulty::LightBlue,
+                        eqlog::ConsiderDifficulty::Blue => ConsiderDifficulty::Blue,
+                        eqlog::ConsiderDifficulty::White => ConsiderDifficulty::White,
+                        eqlog::ConsiderDifficulty::Yellow => ConsiderDifficulty::Yellow,
+                        eqlog::ConsiderDifficulty::Red => ConsiderDifficulty::Red,
+                        eqlog::ConsiderDifficulty::Unknown => ConsiderDifficulty::Unknown,
+                    },
+                    level: *level,
+                },
+                eqlog::ConsiderEvent::NoTarget => ConsiderResult::NoTarget,
+            },
+            expires_at: observed_at + CONSIDER_RESULT_TTL,
+        },
+    );
+    publish_transient_snapshot(state);
+}
+
+fn publish_transient_snapshot(state: &mut UiState) {
+    let mut data = state.hub.snapshot().data();
+    apply_transient_xtarget_state(state, &mut data.clients);
+    state.hub.publish(data);
+}
+
+fn apply_transient_xtarget_state(
+    state: &mut UiState,
+    clients: &mut [trushar::control::ClientState],
+) {
+    let now = Instant::now();
+    state
+        .pending_considers
+        .retain(|_, expires_at| *expires_at > now);
+    state
+        .consider_results
+        .retain(|_, result| result.expires_at > now);
+    for source in &state.latest_sources {
+        let Some(client_id) = state.mapper.id_for_key(source.private_key) else {
+            continue;
+        };
+        let Some(client) = clients.iter_mut().find(|client| &client.id == client_id) else {
+            continue;
+        };
+        let pid = source.private_key as u32;
+        client.xtarget.selected_slot = state.selected_xtargets.get(&pid).copied();
+        client.xtarget.consider_pending = state.pending_considers.contains_key(&pid);
+        client.xtarget.consider = state
+            .consider_results
+            .get(&pid)
+            .map(|timed| timed.result.clone());
+    }
+}
+
+fn enrich_xtarget_state(state: &mut UiState, clients: &mut [trushar::control::ClientState]) {
+    let live_pids = state
+        .latest_sources
+        .iter()
+        .map(|source| source.private_key as u32)
+        .collect::<HashSet<_>>();
+    state
+        .selected_xtargets
+        .retain(|pid, _| live_pids.contains(pid));
+    state
+        .pending_considers
+        .retain(|pid, _| live_pids.contains(pid));
+    state
+        .consider_results
+        .retain(|pid, _| live_pids.contains(pid));
+
+    for source in state.latest_sources.clone() {
+        let Some(client_id) = state.mapper.id_for_key(source.private_key).cloned() else {
+            continue;
+        };
+        let mapped = mapped_actions_for_source(state, &source).unwrap_or_default();
+        let eq_dir = crate::eq_windows::process_eq_directory(source.private_key as u32)
+            .unwrap_or_else(|| state.default_eq_dir.clone());
+        let saved_slots = state
+            .xtargets
+            .entry(eq_dir.clone())
+            .or_insert_with(|| crate::eq_xtarget::EqXTargetResolver::new(eq_dir))
+            .slots(source_identity(&source))
+            .unwrap_or_default();
+        let slots = saved_slots
+            .into_iter()
+            .map(|slot| {
+                let mapping = EqMappingName::new(format!("TARGET_XTARGET_{}", slot.slot))
+                    .expect("generated XTarget mapping is valid");
+                XTargetSlot {
+                    slot: slot.slot,
+                    label: slot.label,
+                    bound: mapped.contains(&mapping),
+                }
+            })
+            .collect::<Vec<_>>();
+        let pid = source.private_key as u32;
+        if slots.is_empty() {
+            state.selected_xtargets.remove(&pid);
+        } else if !state
+            .selected_xtargets
+            .get(&pid)
+            .is_some_and(|selected| slots.iter().any(|slot| slot.slot == *selected))
+        {
+            state.selected_xtargets.insert(pid, slots[0].slot);
+        }
+        let consider = EqMappingName::new("CONSIDER").expect("CONSIDER mapping is valid");
+        if let Some(client) = clients.iter_mut().find(|client| client.id == client_id) {
+            client.xtarget.slots = slots;
+            client.xtarget.consider_bound = mapped.contains(&consider);
+        }
+    }
+    apply_transient_xtarget_state(state, clients);
+}
+
 /// Publish owner-thread state after any known local or remote change.
 pub fn publish(
     sources: Vec<SourceClient>,
@@ -1681,6 +1903,7 @@ pub fn publish(
     data.mouse_clutch = mouse_clutch;
     data.capabilities.set_mouse_clutch = crate::broadcast::is_available();
     state.latest_sources = sources;
+    enrich_xtarget_state(state, &mut data.clients);
     state.hub.publish(data);
 }
 
@@ -1763,6 +1986,25 @@ mod tests {
             active,
             activatable: true,
             input_ready: true,
+        }
+    }
+
+    #[test]
+    fn direct_xtarget_mappings_track_only_slots_one_through_twenty() {
+        for slot in 1..=crate::eq_xtarget::MAX_XTARGET_SLOTS {
+            let mapping = EqMappingName::new(format!("TARGET_XTARGET_{slot}")).unwrap();
+            assert_eq!(xtarget_slot_from_mapping(&mapping), Some(slot));
+        }
+        for mapping in [
+            "CYCLE_XTARGET",
+            "TARGET_XTARGET_0",
+            "TARGET_XTARGET_21",
+            "CONSIDER",
+        ] {
+            assert_eq!(
+                xtarget_slot_from_mapping(&EqMappingName::new(mapping).unwrap()),
+                None
+            );
         }
     }
 

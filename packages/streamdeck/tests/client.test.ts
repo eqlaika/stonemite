@@ -282,24 +282,29 @@ describe("local and LAN connections", () => {
                     active_previous_number: 1,
                     selected_previous_number: 2,
                   }
-                : request.type === "list_eq_keymap_actions"
-                  ? request.after
-                    ? {
-                        type: "eq_keymap_actions_listed",
-                        mappings: ["SIT_STAND"],
-                        window_numbers: [1, 2],
-                      }
-                    : {
-                        type: "eq_keymap_actions_listed",
-                        mappings: ["DUCK"],
-                        window_numbers: [1, 2],
-                        next_after: "DUCK",
-                      }
-                  : {
-                      type: "eq_action_batch_delivered",
+                : request.type === "send_eq_action"
+                  ? {
+                      type: "eq_action_delivered",
                       action: request.action,
-                      window_numbers: targets?.type === "active" ? [1] : [2],
-                    },
+                    }
+                  : request.type === "list_eq_keymap_actions"
+                    ? request.after
+                      ? {
+                          type: "eq_keymap_actions_listed",
+                          mappings: ["SIT_STAND"],
+                          window_numbers: [1, 2],
+                        }
+                      : {
+                          type: "eq_keymap_actions_listed",
+                          mappings: ["DUCK"],
+                          window_numbers: [1, 2],
+                          next_after: "DUCK",
+                        }
+                    : {
+                        type: "eq_action_batch_delivered",
+                        action: request.action,
+                        window_numbers: targets?.type === "active" ? [1] : [2],
+                      },
             state: stateFixture(),
           }),
         );
@@ -317,6 +322,10 @@ describe("local and LAN connections", () => {
     await vi.waitFor(() => expect(server.wss.clients.size).toBe(1));
 
     await client.swapWindowNumbers("serein-id");
+    await client.sendEqAction("serein-id", {
+      type: "keymap",
+      mapping: "TARGET_XTARGET_3",
+    });
     const listed = await client.listEqKeymapActions({
       type: "window_numbers",
       window_numbers: [1, 2],
@@ -331,26 +340,31 @@ describe("local and LAN connections", () => {
       { type: "keymap", mapping: "SIT_STAND" },
     );
 
-    expect(requests).toHaveLength(5);
+    expect(requests).toHaveLength(6);
     expect(requests[0]).toMatchObject({
       type: "swap_window_numbers",
       version: 1,
       target: { type: "client_id", client_id: "serein-id" },
     });
     expect(requests[1]).toMatchObject({
-      type: "list_eq_keymap_actions",
-      targets: { type: "window_numbers", window_numbers: [1, 2] },
+      type: "send_eq_action",
+      client_id: "serein-id",
+      action: { type: "keymap", mapping: "TARGET_XTARGET_3" },
     });
     expect(requests[2]).toMatchObject({
       type: "list_eq_keymap_actions",
-      after: "DUCK",
+      targets: { type: "window_numbers", window_numbers: [1, 2] },
     });
     expect(requests[3]).toMatchObject({
+      type: "list_eq_keymap_actions",
+      after: "DUCK",
+    });
+    expect(requests[4]).toMatchObject({
       type: "send_eq_action_batch",
       targets: { type: "active" },
       action: { type: "keymap", mapping: "DUCK" },
     });
-    expect(requests[4]).toMatchObject({
+    expect(requests[5]).toMatchObject({
       type: "send_eq_action_batch",
       targets: { type: "background_loaded" },
       action: { type: "keymap", mapping: "SIT_STAND" },

@@ -1,6 +1,27 @@
 export const PROTOCOL_VERSION = 1 as const;
 export const MAX_MESSAGE_BYTES = 16 * 1024;
 
+export type ConsiderDifficulty =
+  "green" | "light_blue" | "blue" | "white" | "yellow" | "red" | "unknown";
+
+export type ConsiderResult =
+  | { type: "no_target" }
+  | {
+      type: "target";
+      target: string;
+      difficulty: ConsiderDifficulty;
+      level?: number;
+    };
+
+export interface XTargetState {
+  supported: boolean;
+  slots: Array<{ slot: number; label: string; bound: boolean }>;
+  selected_slot?: number;
+  consider_bound: boolean;
+  consider_pending: boolean;
+  consider?: ConsiderResult;
+}
+
 export interface TrusharClient {
   id: string;
   character?: string;
@@ -10,6 +31,7 @@ export interface TrusharClient {
   active: boolean;
   activatable: boolean;
   input_ready: boolean;
+  xtarget: XTargetState;
 }
 
 export type MouseClutchPhase = "inactive" | "active" | "releasing";
@@ -521,6 +543,7 @@ function parseClient(value: unknown): TrusharClient {
     active: value.active as boolean,
     activatable: value.activatable as boolean,
     input_ready: isBoolean(value.input_ready) ? value.input_ready : false,
+    xtarget: parseXTargetState(value.xtarget),
   };
   for (const name of ["character", "server", "class_code"] as const) {
     if (value[name] !== undefined) {
@@ -530,6 +553,104 @@ function parseClient(value: unknown): TrusharClient {
     }
   }
   return client;
+}
+
+function parseXTargetState(value: unknown): XTargetState {
+  if (value === undefined) {
+    return {
+      supported: false,
+      slots: [],
+      consider_bound: false,
+      consider_pending: false,
+    };
+  }
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.slots) ||
+    !isBoolean(value.consider_bound) ||
+    !isBoolean(value.consider_pending)
+  ) {
+    throw new ProtocolError("Client XTarget state is malformed.");
+  }
+  const slots = value.slots.map((slot): XTargetState["slots"][number] => {
+    if (
+      !isRecord(slot) ||
+      !Number.isSafeInteger(slot.slot) ||
+      (slot.slot as number) < 1 ||
+      (slot.slot as number) > 20 ||
+      typeof slot.label !== "string" ||
+      slot.label.length === 0 ||
+      !isBoolean(slot.bound)
+    ) {
+      throw new ProtocolError("Client XTarget slot is malformed.");
+    }
+    return {
+      slot: slot.slot as number,
+      label: slot.label,
+      bound: slot.bound,
+    };
+  });
+  if (new Set(slots.map((slot) => slot.slot)).size !== slots.length) {
+    throw new ProtocolError("Client XTarget slots contain duplicates.");
+  }
+  const state: XTargetState = {
+    supported: isBoolean(value.supported) ? value.supported : true,
+    slots: slots.sort((a, b) => a.slot - b.slot),
+    consider_bound: value.consider_bound,
+    consider_pending: value.consider_pending,
+  };
+  if (value.selected_slot !== undefined) {
+    if (
+      !Number.isSafeInteger(value.selected_slot) ||
+      (value.selected_slot as number) < 1 ||
+      (value.selected_slot as number) > 20
+    ) {
+      throw new ProtocolError("Selected XTarget slot is malformed.");
+    }
+    state.selected_slot = value.selected_slot as number;
+  }
+  if (value.consider !== undefined) {
+    if (!isRecord(value.consider)) {
+      throw new ProtocolError("Client Consider result is malformed.");
+    }
+    if (value.consider.no_target === true) {
+      state.consider = { type: "no_target" };
+    } else {
+      if (
+        (value.consider.no_target !== undefined &&
+          value.consider.no_target !== false) ||
+        typeof value.consider.target !== "string" ||
+        value.consider.target.length === 0 ||
+        !isConsiderDifficulty(value.consider.difficulty) ||
+        (value.consider.level !== undefined &&
+          (!Number.isSafeInteger(value.consider.level) ||
+            (value.consider.level as number) < 1))
+      ) {
+        throw new ProtocolError("Client Consider result is malformed.");
+      }
+      state.consider = {
+        type: "target",
+        target: value.consider.target,
+        difficulty: value.consider.difficulty,
+        ...(value.consider.level !== undefined
+          ? { level: value.consider.level as number }
+          : {}),
+      };
+    }
+  }
+  return state;
+}
+
+function isConsiderDifficulty(value: unknown): value is ConsiderDifficulty {
+  return (
+    value === "green" ||
+    value === "light_blue" ||
+    value === "blue" ||
+    value === "white" ||
+    value === "yellow" ||
+    value === "red" ||
+    value === "unknown"
+  );
 }
 
 function isEqMappingName(value: unknown): value is string {

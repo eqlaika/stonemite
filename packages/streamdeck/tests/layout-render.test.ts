@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderCell, SWAP_COLOR } from "../src/render/key-svg";
 import { buildKey, buildSwapPlan } from "../src/state/layout";
 import type { DashboardView } from "../src/state/store";
-import { stateFixture } from "./fixtures";
+import { emptyXTargetState, stateFixture } from "./fixtures";
 
 describe("dashboard layout", () => {
   it("renders loaded and empty character slots by stable window number", () => {
@@ -16,6 +16,7 @@ describe("dashboard layout", () => {
           active: false,
           activatable: true,
           input_ready: true,
+          xtarget: emptyXTargetState(),
         },
         {
           id: "one",
@@ -25,6 +26,7 @@ describe("dashboard layout", () => {
           active: true,
           activatable: true,
           input_ready: true,
+          xtarget: emptyXTargetState(),
         },
       ],
       active_client_id: "one",
@@ -59,6 +61,7 @@ describe("dashboard layout", () => {
           active: false,
           activatable: false,
           input_ready: false,
+          xtarget: emptyXTargetState(),
         },
       ],
     });
@@ -89,6 +92,7 @@ describe("dashboard layout", () => {
           active: true,
           activatable: true,
           input_ready: true,
+          xtarget: emptyXTargetState(),
         },
         {
           id: "other",
@@ -97,6 +101,7 @@ describe("dashboard layout", () => {
           active: false,
           activatable: true,
           input_ready: true,
+          xtarget: emptyXTargetState(),
         },
       ],
     });

@@ -1,8 +1,8 @@
 use crate::control::{
     validate_key_strokes, validate_text_input, ActivationStatus, ClientId, ClientTarget,
-    CommandOutcome, ControlError, EqAction, EqActionTargets, EqMappingName, InputKind, KeyCode,
-    KeyStroke, MouseClutchAvailability, MouseClutchPhase, MouseClutchState, StateSnapshot,
-    DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_PAUSE_MS,
+    CommandOutcome, ConsiderDifficulty, ConsiderResult, ControlError, EqAction, EqActionTargets,
+    EqMappingName, InputKind, KeyCode, KeyStroke, MouseClutchAvailability, MouseClutchPhase,
+    MouseClutchState, StateSnapshot, DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_PAUSE_MS,
 };
 use serde::{Deserialize, Serialize};
 
@@ -629,6 +629,8 @@ pub struct WireClient {
     pub activatable: bool,
     #[serde(default)]
     pub input_ready: bool,
+    #[serde(default)]
+    pub xtarget: WireXTargetState,
 }
 
 impl From<&crate::control::ClientState> for WireClient {
@@ -642,6 +644,113 @@ impl From<&crate::control::ClientState> for WireClient {
             active: value.active,
             activatable: value.activatable,
             input_ready: value.input_ready,
+            xtarget: WireXTargetState {
+                supported: true,
+                slots: value
+                    .xtarget
+                    .slots
+                    .iter()
+                    .map(|slot| WireXTargetSlot {
+                        slot: slot.slot,
+                        label: slot.label.clone(),
+                        bound: slot.bound,
+                    })
+                    .collect(),
+                selected_slot: value.xtarget.selected_slot,
+                consider_bound: value.xtarget.consider_bound,
+                consider_pending: value.xtarget.consider_pending,
+                consider: value
+                    .xtarget
+                    .consider
+                    .as_ref()
+                    .map(WireConsiderResult::from),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WireXTargetState {
+    #[serde(default)]
+    pub supported: bool,
+    #[serde(default)]
+    pub slots: Vec<WireXTargetSlot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_slot: Option<u8>,
+    #[serde(default)]
+    pub consider_bound: bool,
+    #[serde(default)]
+    pub consider_pending: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consider: Option<WireConsiderResult>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WireXTargetSlot {
+    pub slot: u8,
+    pub label: String,
+    pub bound: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WireConsiderResult {
+    #[serde(default)]
+    pub no_target: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<WireConsiderDifficulty>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<u16>,
+}
+
+impl From<&ConsiderResult> for WireConsiderResult {
+    fn from(value: &ConsiderResult) -> Self {
+        match value {
+            ConsiderResult::Target {
+                target,
+                difficulty,
+                level,
+            } => Self {
+                no_target: false,
+                target: Some(target.clone()),
+                difficulty: Some((*difficulty).into()),
+                level: *level,
+            },
+            // Keep legacy target fields populated so an older LCD plugin can
+            // render useful fallback feedback instead of rejecting the state.
+            ConsiderResult::NoTarget => Self {
+                no_target: true,
+                target: Some("NO TARGET".into()),
+                difficulty: Some(WireConsiderDifficulty::Unknown),
+                level: None,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireConsiderDifficulty {
+    Green,
+    LightBlue,
+    Blue,
+    White,
+    Yellow,
+    Red,
+    Unknown,
+}
+
+impl From<ConsiderDifficulty> for WireConsiderDifficulty {
+    fn from(value: ConsiderDifficulty) -> Self {
+        match value {
+            ConsiderDifficulty::Green => Self::Green,
+            ConsiderDifficulty::LightBlue => Self::LightBlue,
+            ConsiderDifficulty::Blue => Self::Blue,
+            ConsiderDifficulty::White => Self::White,
+            ConsiderDifficulty::Yellow => Self::Yellow,
+            ConsiderDifficulty::Red => Self::Red,
+            ConsiderDifficulty::Unknown => Self::Unknown,
         }
     }
 }
@@ -989,6 +1098,21 @@ mod tests {
                 active: true,
                 activatable: true,
                 input_ready: true,
+                xtarget: crate::control::XTargetState {
+                    slots: vec![crate::control::XTargetSlot {
+                        slot: 3,
+                        label: "Group tank".into(),
+                        bound: true,
+                    }],
+                    selected_slot: Some(3),
+                    consider_bound: true,
+                    consider_pending: false,
+                    consider: Some(crate::control::ConsiderResult::Target {
+                        target: "A sarnak knight".into(),
+                        difficulty: crate::control::ConsiderDifficulty::Red,
+                        level: Some(35),
+                    }),
+                },
             }],
             broadcast: BroadcastState {
                 available: true,
@@ -1086,6 +1210,17 @@ mod tests {
         assert!(client.get("server").is_none());
         assert_eq!(client["class_code"], "SHK");
         assert_eq!(client["input_ready"], true);
+        assert_eq!(client["xtarget"]["supported"], true);
+        assert_eq!(client["xtarget"]["selected_slot"], 3);
+        assert_eq!(client["xtarget"]["slots"][0]["label"], "Group tank");
+        assert_eq!(client["xtarget"]["consider"]["difficulty"], "red");
+        assert_eq!(client["xtarget"]["consider"]["no_target"], false);
+
+        let no_target =
+            serde_json::to_value(WireConsiderResult::from(&ConsiderResult::NoTarget)).unwrap();
+        assert_eq!(no_target["no_target"], true);
+        assert_eq!(no_target["target"], "NO TARGET");
+        assert_eq!(no_target["difficulty"], "unknown");
     }
 
     #[test]
@@ -1095,6 +1230,8 @@ mod tests {
         )
         .unwrap();
         assert!(!client.input_ready);
+        assert_eq!(client.xtarget, WireXTargetState::default());
+        assert!(!client.xtarget.supported);
 
         let capabilities: WireCapabilities = serde_json::from_str(
             r#"{"activate":true,"set_broadcast":true,"send_text":true,"send_keys":true}"#,

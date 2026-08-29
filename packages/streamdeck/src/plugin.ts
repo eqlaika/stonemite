@@ -5,6 +5,7 @@ import {
 } from "./actions/dashboard-key";
 import { connectionForSettings } from "./actions/dashboard-controller";
 import { HotkeyAction } from "./actions/hotkey";
+import { XTargetDialAction } from "./actions/xtarget-dial";
 import { DashboardStore, type ConnectionStatus } from "./state/store";
 import { TrusharClient } from "./trushar/client";
 
@@ -27,6 +28,7 @@ for (const action of createDashboardKeyActions(store, client)) {
   streamDeck.actions.registerAction(action);
 }
 streamDeck.actions.registerAction(new HotkeyAction(store, client));
+streamDeck.actions.registerAction(new XTargetDialAction(store, client));
 streamDeck.system.onSystemDidWakeUp(() => client.reconnect());
 streamDeck.settings.onDidReceiveGlobalSettings<PluginSettings>((event) => {
   applySettings(event.settings);

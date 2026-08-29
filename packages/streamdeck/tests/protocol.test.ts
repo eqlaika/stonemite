@@ -5,7 +5,7 @@ import {
   parseServerMessage,
   parseState,
 } from "../src/types/trushar";
-import { stateFixture, stateMessage } from "./fixtures";
+import { emptyXTargetState, stateFixture, stateMessage } from "./fixtures";
 
 describe("trushar parser", () => {
   it("accepts complete state and ignores additive fields", () => {
@@ -20,8 +20,27 @@ describe("trushar parser", () => {
     expect(message.type).toBe("state");
     if (message.type === "state") {
       expect(message.state.clients[0]?.character).toBe("Laika");
+      expect(message.state.clients[0]?.xtarget).toMatchObject({
+        selected_slot: 1,
+        consider_bound: true,
+        slots: [
+          { slot: 1, label: "Auto hater", bound: true },
+          { slot: 2, label: "Laika", bound: true },
+        ],
+      });
       expect(message.state.revision).toBe(4);
     }
+  });
+
+  it("parses immediate no-target Consider feedback", () => {
+    const raw = JSON.parse(JSON.stringify(stateFixture())) as {
+      clients: Array<{ xtarget: Record<string, unknown> }>;
+    };
+    raw.clients[0]!.xtarget.consider = { no_target: true };
+
+    expect(parseState(raw).clients[0]?.xtarget.consider).toEqual({
+      type: "no_target",
+    });
   });
 
   it("defaults older clients to input not ready and sorts by window number", () => {
@@ -33,6 +52,7 @@ describe("trushar parser", () => {
           active: false,
           activatable: true,
           input_ready: true,
+          xtarget: emptyXTargetState(),
         },
         {
           id: "client-1",
@@ -40,6 +60,7 @@ describe("trushar parser", () => {
           active: true,
           activatable: true,
           input_ready: false,
+          xtarget: emptyXTargetState(),
         },
       ],
     });
@@ -48,6 +69,7 @@ describe("trushar parser", () => {
       capabilities: Record<string, unknown>;
     };
     delete raw.clients[1]!.input_ready;
+    delete raw.clients[1]!.xtarget;
     const capabilities = raw.capabilities as Record<string, unknown>;
     delete capabilities.swap_window_numbers;
     delete capabilities.set_mouse_clutch;
@@ -73,6 +95,12 @@ describe("trushar parser", () => {
       "client-2",
     ]);
     expect(parsed.clients[0]?.input_ready).toBe(false);
+    expect(parsed.clients[0]?.xtarget).toEqual({
+      supported: false,
+      slots: [],
+      consider_bound: false,
+      consider_pending: false,
+    });
   });
 
   it("parses result, error, and pairing messages", () => {
@@ -361,6 +389,7 @@ describe("trushar parser", () => {
               active: true,
               activatable: true,
               input_ready: true,
+              xtarget: emptyXTargetState(),
               character: 7 as unknown as string,
             },
           ],

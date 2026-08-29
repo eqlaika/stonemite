@@ -1,4 +1,5 @@
 import {
+  type DidReceiveSettingsEvent,
   type KeyDownEvent,
   type KeyUpEvent,
   type SendToPluginEvent,
@@ -7,6 +8,7 @@ import {
   type WillDisappearEvent,
 } from "@elgato/streamdeck";
 import type { JsonObject, JsonValue } from "@elgato/utils";
+import type { BoxSettings } from "./box-settings";
 import { DashboardStore } from "../state/store";
 import { TrusharClient } from "../trushar/client";
 import { DashboardController } from "./dashboard-controller";
@@ -27,7 +29,7 @@ export function createDashboardKeyActions(
   );
 }
 
-export class DashboardKeyAction extends SingletonAction {
+export class DashboardKeyAction extends SingletonAction<BoxSettings> {
   override readonly manifestId: string;
   readonly #controller: DashboardController;
 
@@ -40,11 +42,17 @@ export class DashboardKeyAction extends SingletonAction {
     this.manifestId = definition.uuid;
   }
 
-  override onWillAppear(event: WillAppearEvent): Promise<void> {
+  override onWillAppear(event: WillAppearEvent<BoxSettings>): Promise<void> {
     return this.#controller.onWillAppear(event);
   }
 
-  override onWillDisappear(event: WillDisappearEvent): void {
+  override onDidReceiveSettings(
+    event: DidReceiveSettingsEvent<BoxSettings>,
+  ): void {
+    this.#controller.onDidReceiveSettings(event);
+  }
+
+  override onWillDisappear(event: WillDisappearEvent<BoxSettings>): void {
     this.#controller.onWillDisappear(event);
   }
 
