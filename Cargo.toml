@@ -3,6 +3,7 @@ members = [
     "crates/eqcombat",
     "crates/eqlog",
     "crates/eqspell",
+    "crates/eqtrigger",
     "crates/stonemite",
     "crates/trushar",
     "crates/trusik",

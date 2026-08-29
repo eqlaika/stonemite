@@ -13,7 +13,7 @@ use eqlog::{
 };
 
 use super::diagnostic::{DiagnosticKind, LogDiagnostic};
-use super::triggers::{TriggerActivation, TriggerEngine};
+use super::triggers::{ActionEvent, CompiledLibrary, TimerFrame, TriggerEvaluator};
 
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
@@ -25,19 +25,22 @@ pub struct LogEnvelope {
     pub raw: RawLogLine,
     pub events: Arc<[ParsedLogEvent]>,
     pub telemetry_changes: Arc<[TelemetryChange]>,
-    pub trigger_activations: Arc<[TriggerActivation]>,
+    /// Presentation-only trigger actions produced by this line.
+    pub trigger_actions: Arc<[ActionEvent]>,
 }
 
 pub(crate) struct PipelineOutcome {
     pub envelope: Arc<LogEnvelope>,
     pub dps_snapshot: Option<Arc<EncounterBookSnapshot>>,
     pub diagnostics: Vec<LogDiagnostic>,
+    /// True when the set of running trigger timers changed.
+    pub timers_changed: bool,
 }
 
 pub(crate) struct LogPipeline {
     parsers: ParserRegistry,
     telemetry: TelemetryReducer,
-    triggers: TriggerEngine,
+    triggers: TriggerEvaluator,
     combat: CombatEngine,
     monotonic_origin: Instant,
     next_sequence: u64,
@@ -52,20 +55,14 @@ pub(crate) struct LogPipeline {
 
 impl LogPipeline {
     pub fn new(event_bus: broadcast::Sender<Arc<LogEnvelope>>) -> Self {
-        #[allow(unused_mut)]
-        let mut triggers = TriggerEngine::new();
-        #[cfg(debug_assertions)]
-        {
-            let errors = triggers.replace_definitions(vec![super::triggers::qa_timer_definition()]);
-            debug_assert!(errors.is_empty());
-        }
+        let monotonic_origin = Instant::now();
         Self {
             parsers: ParserRegistry::default(),
             telemetry: TelemetryReducer::new(),
-            triggers,
+            triggers: TriggerEvaluator::new(super::triggers::empty_compiled(), monotonic_origin),
             combat: CombatEngine::new(CombatPolicy::mvp_v1())
                 .expect("built-in combat policy is valid"),
-            monotonic_origin: Instant::now(),
+            monotonic_origin,
             next_sequence: 0,
             #[cfg(test)]
             legacy_source_sequences: std::collections::HashMap::new(),
@@ -113,7 +110,7 @@ impl LogPipeline {
             .iter()
             .filter_map(|event| self.telemetry.apply(event))
             .collect();
-        let trigger_activations = self.triggers.evaluate(&raw, &parsed.events);
+        let trigger_batch = self.triggers.process(&raw, receipt);
         let combat_events = parsed
             .events
             .iter()
@@ -138,7 +135,7 @@ impl LogPipeline {
             raw,
             events: parsed.events.into(),
             telemetry_changes: telemetry_changes.into(),
-            trigger_activations: trigger_activations.into(),
+            trigger_actions: trigger_batch.events.into(),
         });
         self.next_sequence = self.next_sequence.wrapping_add(1);
         // The reducers, trigger engine, combat engine, and UI delivery are the
@@ -160,7 +157,23 @@ impl LogPipeline {
             envelope,
             dps_snapshot,
             diagnostics,
+            timers_changed: trigger_batch.timers_changed,
         }
+    }
+
+    /// Swap in a freshly compiled trigger library (hot reload).
+    pub fn replace_trigger_library(&mut self, compiled: Arc<CompiledLibrary>) {
+        self.triggers.replace(compiled);
+    }
+
+    /// Fire due trigger-timer warnings/ends on the worker clock.
+    pub fn advance_triggers(&mut self, receipt: Instant) -> super::triggers::ActionBatch {
+        self.triggers.advance(receipt)
+    }
+
+    /// Current running-timer view for the presentation layer.
+    pub fn timer_frame(&self) -> TimerFrame {
+        self.triggers.frame()
     }
 
     pub fn register_source(
@@ -281,31 +294,22 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
-    fn development_qa_phrase_starts_a_visible_timer_action() {
+    fn development_qa_phrase_starts_a_visible_timer() {
         let (sender, _) = broadcast::channel(8);
         let mut pipeline = LogPipeline::new(sender);
-        let envelope = pipeline.process(raw("You say, 'Stonemite timer'")).envelope;
+        pipeline.replace_trigger_library(super::super::triggers::qa_only_compiled());
 
-        assert_eq!(envelope.trigger_activations.len(), 1);
-        assert_eq!(
-            envelope.trigger_activations[0].scope,
-            super::super::TriggerScope::AllClients
-        );
-        assert_eq!(
-            envelope.trigger_activations[0].source.id.as_str(),
-            "client-1"
-        );
-        assert!(matches!(
-            &envelope.trigger_activations[0].presentation[0],
-            super::super::PresentationAction::StartTimer(request)
-                if request.label.as_ref() == "QA timer"
-                    && request.duration == std::time::Duration::from_secs(10)
-        ));
+        let outcome = pipeline.process(raw("You say, 'Stonemite timer'"));
+        assert!(outcome.timers_changed);
+        let frame = pipeline.timer_frame();
+        assert_eq!(frame.snapshots.len(), 1);
+        assert_eq!(frame.snapshots[0].character, "client-1");
+        assert_eq!(frame.snapshots[0].display_name, "QA timer");
+        assert_eq!(frame.snapshots[0].duration_ms, 10_000);
 
-        let remote = pipeline
-            .process(raw("Kafka says, 'Stonemite timer'"))
-            .envelope;
-        assert!(remote.trigger_activations.is_empty());
+        let remote = pipeline.process(raw("Kafka says, 'Stonemite timer'"));
+        assert!(!remote.timers_changed);
+        assert!(remote.envelope.trigger_actions.is_empty());
     }
 
     #[test]

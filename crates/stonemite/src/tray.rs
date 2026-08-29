@@ -283,6 +283,9 @@ unsafe fn run_inner() {
         crate::diagnostics::debug_log(&format!("eq_logs: {error}"));
         eprintln!("{error}");
     }
+    for diagnostic in log_watcher::reload_trigger_library() {
+        crate::diagnostics::debug_log(&diagnostic);
+    }
     overlay::sync_log_sources();
 
     // Message loop.
@@ -294,6 +297,7 @@ unsafe fn run_inner() {
 
     // Join the log worker while the hidden window can still receive its final
     // posted wake. This also stops the notify/ReadDirectoryChangesW backend.
+    crate::audio::stop_all();
     log_watcher::stop();
     drop(trushar_server);
     control::stop();
@@ -475,6 +479,10 @@ unsafe extern "system" fn wnd_proc(
             // Reload overlay config (pip_edge, etc.), update the watched Logs
             // directory, and rebuild layout.
             overlay::reload_config();
+            // Hot-reload the trigger library into the running log worker.
+            for diagnostic in log_watcher::reload_trigger_library() {
+                crate::diagnostics::debug_log(&diagnostic);
+            }
             LRESULT(0)
         }
         x if x == settings_dialog::WM_RESTART_REQUESTED => {

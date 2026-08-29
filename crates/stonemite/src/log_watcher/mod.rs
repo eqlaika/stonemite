@@ -37,8 +37,8 @@ pub use eqlog::{
 pub use pipeline::LogEnvelope;
 #[allow(unused_imports)]
 pub use triggers::{
-    PresentationAction, TimerRequest, TriggerActivation, TriggerDefinition, TriggerDefinitionError,
-    TriggerMatcher, TriggerScope,
+    sound_catalog, store_root, ActionEvent, ActionPhase, PresentationTarget, TimerFrame,
+    TimerSnapshot, TriggerAction,
 };
 
 use pipeline::LogPipeline;
@@ -61,6 +61,10 @@ const MAX_PENDING_EVENT_PATHS: usize = 1024;
 pub(crate) struct LogBatch {
     pub envelopes: Vec<Arc<LogEnvelope>>,
     pub diagnostics: Vec<LogDiagnostic>,
+    /// Timer-stage trigger actions fired by the worker clock (not by a line).
+    pub trigger_events: Vec<ActionEvent>,
+    /// True when the set of running trigger timers changed.
+    pub timers_changed: bool,
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -75,6 +79,7 @@ pub(crate) struct WorkerWake {
     force_reconcile: AtomicBool,
     watcher_error: Mutex<Option<String>>,
     sources_changed: AtomicBool,
+    triggers_changed: AtomicBool,
     stop: AtomicBool,
 }
 
@@ -86,6 +91,7 @@ impl WorkerWake {
             force_reconcile: AtomicBool::new(false),
             watcher_error: Mutex::new(None),
             sources_changed: AtomicBool::new(false),
+            triggers_changed: AtomicBool::new(false),
             stop: AtomicBool::new(false),
         }
     }
@@ -163,6 +169,8 @@ struct RuntimeState {
     desired: Arc<Mutex<DesiredSources>>,
     output_receiver: mpsc::Receiver<LogBatch>,
     dps_mailbox: Arc<Mutex<Option<Arc<eqcombat::EncounterBookSnapshot>>>>,
+    timer_mailbox: Arc<Mutex<Option<TimerFrame>>>,
+    compiled_triggers: Arc<Mutex<Option<Arc<eqtrigger::CompiledLibrary>>>>,
     output_wake: Arc<OutputWake>,
     event_bus: broadcast::Sender<Arc<LogEnvelope>>,
     worker: Option<JoinHandle<()>>,
@@ -186,12 +194,16 @@ pub fn start(hwnd: HWND) -> Result<(), String> {
         posted: AtomicBool::new(false),
     });
     let dps_mailbox = Arc::new(Mutex::new(None));
+    let timer_mailbox = Arc::new(Mutex::new(None));
+    let compiled_triggers = Arc::new(Mutex::new(None));
 
     let worker_wake = wake.clone();
     let worker_desired = desired.clone();
     let worker_output_wake = output_wake.clone();
     let worker_event_bus = event_bus.clone();
     let worker_dps_mailbox = dps_mailbox.clone();
+    let worker_timer_mailbox = timer_mailbox.clone();
+    let worker_compiled_triggers = compiled_triggers.clone();
     let worker = std::thread::Builder::new()
         .name("stonemite-eq-logs".to_owned())
         .spawn(move || {
@@ -203,6 +215,8 @@ pub fn start(hwnd: HWND) -> Result<(), String> {
                 worker_output_wake,
                 worker_event_bus,
                 worker_dps_mailbox,
+                worker_timer_mailbox,
+                worker_compiled_triggers,
             );
         })
         .map_err(|error| format!("could not start EQ log worker: {error}"))?;
@@ -212,11 +226,35 @@ pub fn start(hwnd: HWND) -> Result<(), String> {
         desired,
         output_receiver,
         dps_mailbox,
+        timer_mailbox,
+        compiled_triggers,
         output_wake,
         event_bus,
         worker: Some(worker),
     });
     Ok(())
+}
+
+/// Reload the trigger library from disk, compile it, and hand the immutable
+/// snapshot to the log worker without restarting it. Returns human-readable
+/// diagnostics (salvage, quarantine, compile failures) for the caller to log.
+pub fn reload_trigger_library() -> Vec<String> {
+    let (compiled, diagnostics) = triggers::load_compiled();
+    let runtime = lock(&RUNTIME);
+    if let Some(state) = runtime.as_ref() {
+        *lock(&state.compiled_triggers) = Some(compiled);
+        state.wake.triggers_changed.store(true, Ordering::Release);
+        state.wake.signal();
+    }
+    diagnostics
+}
+
+/// Take the newest running-timer frame published by the worker.
+pub(crate) fn take_timer_frame() -> Option<TimerFrame> {
+    let runtime = lock(&RUNTIME);
+    let state = runtime.as_ref()?;
+    let frame = lock(&state.timer_mailbox).take();
+    frame
 }
 
 /// Last-write-wins source publication from the UI owner thread. It performs no
@@ -289,6 +327,7 @@ pub fn stop() {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn worker_main(
     wake: Arc<WorkerWake>,
     desired: Arc<Mutex<DesiredSources>>,
@@ -297,6 +336,8 @@ fn worker_main(
     output_wake: Arc<OutputWake>,
     event_bus: broadcast::Sender<Arc<LogEnvelope>>,
     dps_mailbox: Arc<Mutex<Option<Arc<eqcombat::EncounterBookSnapshot>>>>,
+    timer_mailbox: Arc<Mutex<Option<TimerFrame>>>,
+    compiled_triggers: Arc<Mutex<Option<Arc<eqtrigger::CompiledLibrary>>>>,
 ) {
     let mut worker = LogWorker {
         wake,
@@ -305,6 +346,8 @@ fn worker_main(
         output_sender,
         output_wake,
         dps_mailbox,
+        timer_mailbox,
+        compiled_triggers,
         watcher: None,
         tailer: LogTailer::new(),
         pipeline: LogPipeline::new(event_bus),
@@ -325,6 +368,8 @@ struct LogWorker {
     output_sender: mpsc::SyncSender<LogBatch>,
     output_wake: Arc<OutputWake>,
     dps_mailbox: Arc<Mutex<Option<Arc<eqcombat::EncounterBookSnapshot>>>>,
+    timer_mailbox: Arc<Mutex<Option<TimerFrame>>>,
+    compiled_triggers: Arc<Mutex<Option<Arc<eqtrigger::CompiledLibrary>>>>,
     watcher: Option<DirectoryWatcher>,
     tailer: LogTailer,
     pipeline: LogPipeline,
@@ -344,11 +389,13 @@ impl LogWorker {
             }
 
             self.apply_source_changes();
+            self.apply_trigger_library();
             self.collect_watcher_activity();
             self.maybe_reconcile();
             if let Some(snapshot) = self.pipeline.tick(Instant::now()) {
                 self.publish_dps(snapshot);
             }
+            self.advance_triggers();
 
             if !self.flush_pending_output() {
                 return;
@@ -360,8 +407,8 @@ impl LogWorker {
 
             if !self.deferred_diagnostics.is_empty() {
                 self.pending_output = Some(LogBatch {
-                    envelopes: Vec::new(),
                     diagnostics: std::mem::take(&mut self.deferred_diagnostics),
+                    ..LogBatch::default()
                 });
                 continue;
             }
@@ -383,6 +430,9 @@ impl LogWorker {
                         work.origin.after_first_read(!batch.0.envelopes.is_empty()),
                     );
                 }
+                if batch.0.timers_changed {
+                    self.publish_timer_frame();
+                }
                 if !batch.0.envelopes.is_empty() || !batch.0.diagnostics.is_empty() {
                     self.pending_output = Some(batch.0);
                 }
@@ -400,6 +450,37 @@ impl LogWorker {
     fn publish_dps(&self, snapshot: Arc<eqcombat::EncounterBookSnapshot>) {
         *lock(&self.dps_mailbox) = Some(snapshot);
         self.output_wake.post();
+    }
+
+    fn publish_timer_frame(&self) {
+        *lock(&self.timer_mailbox) = Some(self.pipeline.timer_frame());
+        self.output_wake.post();
+    }
+
+    /// Swap in a newly published compiled library (hot reload path).
+    fn apply_trigger_library(&mut self) {
+        if !self.wake.triggers_changed.swap(false, Ordering::AcqRel) {
+            return;
+        }
+        if let Some(compiled) = lock(&self.compiled_triggers).clone() {
+            self.pipeline.replace_trigger_library(compiled);
+            // Definitions changed underneath running timers; clear the view.
+            self.publish_timer_frame();
+        }
+    }
+
+    /// Fire due trigger-timer warnings/ends. The worker's bounded wait keeps
+    /// this within ~100 ms of the due time.
+    fn advance_triggers(&mut self) {
+        let batch = self.pipeline.advance_triggers(Instant::now());
+        if batch.timers_changed {
+            self.publish_timer_frame();
+        }
+        if !batch.events.is_empty() || batch.timers_changed {
+            let output = self.pending_output.get_or_insert_with(LogBatch::default);
+            output.trigger_events.extend(batch.events);
+            output.timers_changed |= batch.timers_changed;
+        }
     }
 
     fn flush_pending_output(&mut self) -> bool {
@@ -583,6 +664,7 @@ fn process_work_item(
     let mut batch = LogBatch {
         envelopes: Vec::with_capacity(records.len()),
         diagnostics: outcome.diagnostics,
+        ..LogBatch::default()
     };
     for gap in &outcome.gaps {
         while records
@@ -594,6 +676,7 @@ fn process_work_item(
             if let Some(snapshot) = processed.dps_snapshot {
                 latest_snapshot = Some(snapshot);
             }
+            batch.timers_changed |= processed.timers_changed;
             batch.envelopes.push(processed.envelope);
             batch.diagnostics.extend(processed.diagnostics);
         }
@@ -608,6 +691,7 @@ fn process_work_item(
         if let Some(snapshot) = processed.dps_snapshot {
             latest_snapshot = Some(snapshot);
         }
+        batch.timers_changed |= processed.timers_changed;
         batch.envelopes.push(processed.envelope);
         batch.diagnostics.extend(processed.diagnostics);
     }

@@ -10,6 +10,7 @@ use super::notifications::NotificationCenter;
 use super::presentation::PresentationState;
 use super::telemetry::TelemetryState;
 use super::timers::TimerOverlayState;
+use super::trigger_text::TriggerTextState;
 use super::window_styles::WindowStyleState;
 
 /// Owner-thread state for one initialized overlay runtime.
@@ -32,4 +33,6 @@ pub(super) struct OverlayState {
     pub(super) notification_center: NotificationCenter,
     /// Passive display-only timers started by log trigger activations.
     pub(super) timers: TimerOverlayState,
+    /// Bounded, scoped trigger display-text entries.
+    pub(super) trigger_texts: TriggerTextState,
 }

@@ -32,6 +32,8 @@ mod timer_controller;
 mod timers;
 mod toast;
 mod toast_controller;
+mod trigger_presentation;
+mod trigger_text;
 mod window_procs;
 mod window_styles;
 

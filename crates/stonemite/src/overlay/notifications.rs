@@ -859,7 +859,7 @@ unsafe fn invite_interaction_at_point(
         .map(|snapshot| (snapshot.progress, 0, 0));
     let timer_progress = state
         .timers
-        .visible_for(Some(&source_id), now)
+        .visible_for(Some(&source_id), false, now)
         .map(|timer| timer.progress(now));
     let snapshot = notification.visual_snapshot(
         windows::Win32::System::SystemInformation::GetTickCount64(),

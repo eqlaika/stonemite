@@ -253,7 +253,8 @@ pub(super) fn drain_log_events() -> bool {
     match try_with_state_mut(|state| {
         let batches = log_watcher::drain_ready();
         let dps_snapshot = log_watcher::take_dps_snapshot();
-        apply_log_batches(state, batches);
+        let timer_frame = log_watcher::take_timer_frame();
+        apply_log_batches(state, batches, timer_frame);
         if let Some(snapshot) = dps_snapshot {
             unsafe {
                 super::dps_overlay::apply_book(state, snapshot);
@@ -266,12 +267,17 @@ pub(super) fn drain_log_events() -> bool {
         Err(AccessError::Unavailable) => {
             let _ = log_watcher::drain_ready();
             let _ = log_watcher::take_dps_snapshot();
+            let _ = log_watcher::take_timer_frame();
             true
         }
     }
 }
 
-fn apply_log_batches(s: &mut OverlayState, batches: Vec<log_watcher::LogBatch>) {
+fn apply_log_batches(
+    s: &mut OverlayState,
+    batches: Vec<log_watcher::LogBatch>,
+    timer_frame: Option<log_watcher::TimerFrame>,
+) {
     let mut class_changed = false;
     let mut timers_changed = false;
     let now = Instant::now();
@@ -279,10 +285,10 @@ fn apply_log_batches(s: &mut OverlayState, batches: Vec<log_watcher::LogBatch>) 
         for diagnostic in batch.diagnostics {
             debug_log(&format!("eq_logs: {diagnostic}"));
         }
+        // Timer-stage actions fired by the worker clock (warnings, ends).
+        super::trigger_presentation::apply_events(s, &batch.trigger_events, now);
         for envelope in batch.envelopes {
-            timers_changed |= s
-                .timers
-                .apply_activations(&envelope.trigger_activations, now);
+            super::trigger_presentation::apply_events(s, &envelope.trigger_actions, now);
             // Persona changes must update the current class before a later cast
             // in the same drained batch is keyed and estimated.
             for change in envelope.telemetry_changes.iter() {
@@ -294,6 +300,9 @@ fn apply_log_batches(s: &mut OverlayState, batches: Vec<log_watcher::LogBatch>) 
                 combat_awareness::apply_log_event(s, event);
             }
         }
+    }
+    if let Some(frame) = timer_frame {
+        timers_changed |= s.timers.replace_frame(&frame);
     }
     s.telemetry.save();
     s.casting.save();

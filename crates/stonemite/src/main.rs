@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+mod audio;
 mod auto_type;
 mod broadcast;
 mod build_info;
@@ -22,6 +23,7 @@ mod settings_dialog;
 mod settings_model;
 mod sound;
 mod tray;
+mod trigger_manager;
 mod trusik_deploy;
 mod trusik_shm;
 mod updater;

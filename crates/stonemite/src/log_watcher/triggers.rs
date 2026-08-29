@@ -1,282 +1,294 @@
+//! Adapter between the portable `eqtrigger` engine and the log worker.
+//!
+//! The worker owns a [`TriggerEvaluator`]: an `eqtrigger::TriggerEngine`
+//! driven by the worker's monotonic clock. Libraries are loaded from the
+//! on-disk trigger store, compiled into an immutable snapshot, and swapped
+//! in without restarting the worker (the existing `WM_SETTINGS_CHANGED`
+//! path). All outputs are presentation-only `ActionEvent`s and timer
+//! snapshots — there is intentionally no route from here to input
+//! broadcasting or control APIs.
+
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
-use regex::Regex;
+use eqlog::RawLogLine;
+use eqtrigger::store::TriggerStore;
+use eqtrigger::TriggerEngine;
+pub use eqtrigger::{
+    ActionBatch, ActionEvent, ActionPhase, CharacterContext, CompiledLibrary, PresentationTarget,
+    TimerSnapshot, TriggerAction,
+};
 
-use eqlog::{LogEventDomain, LogSource, LogSourceId, ParsedLogEvent, RawLogLine};
-
-#[allow(dead_code)]
+/// A point-in-time view of every running trigger timer, with the Instant
+/// that corresponds to engine-millisecond zero so consumers can convert.
 #[derive(Clone, Debug)]
-pub struct TriggerDefinition {
-    pub id: Arc<str>,
-    pub matcher: TriggerMatcher,
-    pub scope: TriggerScope,
-    pub presentation: Vec<PresentationAction>,
+pub struct TimerFrame {
+    pub origin: Instant,
+    pub snapshots: Vec<TimerSnapshot>,
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub enum TriggerMatcher {
-    RawText {
-        text: Arc<str>,
-        case_sensitive: bool,
-    },
-    RawRegex(Arc<str>),
-    EventDomain(LogEventDomain),
+impl TimerFrame {
+    pub fn instant(&self, engine_millis: u64) -> Instant {
+        self.origin + Duration::from_millis(engine_millis)
+    }
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TriggerScope {
-    SourceClient { source_id: LogSourceId },
-    AllClients,
-    Global,
+/// Managed sound catalog shared with the UI-side audio dispatcher:
+/// asset name → playable path. Refreshed on every library reload.
+static SOUND_CATALOG: Mutex<Option<Arc<HashMap<String, PathBuf>>>> = Mutex::new(None);
+
+pub fn sound_catalog() -> Option<Arc<HashMap<String, PathBuf>>> {
+    SOUND_CATALOG
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
 }
 
-/// The trigger boundary can produce presentation and telemetry effects only.
-/// There is intentionally no arbitrary callback, command, keyboard, mouse, or
-/// Trushar-control variant in this type.
-#[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PresentationAction {
-    ShowText { text: Arc<str> },
-    FlashBorder,
-    PlaySound { path: PathBuf },
-    Speak { text: Arc<str> },
-    StartTimer(TimerRequest),
+/// Root of the on-disk trigger store: `%APPDATA%\Stonemite\triggers`.
+pub fn store_root() -> Option<PathBuf> {
+    crate::config::Config::dir().map(|dir| dir.join("triggers"))
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TimerRequest {
-    pub id: Arc<str>,
-    pub label: Arc<str>,
-    pub duration: Duration,
-}
+/// Development-only QA trigger: saying "stonemite timer" starts a visible
+/// 10-second timer on the originating client.
+#[cfg(debug_assertions)]
+pub(crate) const QA_TIMER_PHRASE: &str = "stonemite timer";
 
 #[cfg(debug_assertions)]
-pub(super) const QA_TIMER_PHRASE: &str = "stonemite timer";
-
-#[cfg(debug_assertions)]
-pub(super) fn qa_timer_definition() -> TriggerDefinition {
-    TriggerDefinition {
-        id: Arc::from("qa-timer-trigger"),
+fn qa_timer_trigger() -> eqtrigger::Trigger {
+    eqtrigger::Trigger {
+        name: "QA timer".to_owned(),
+        enabled: true,
         // Nearby clients also log normal /say text. Restrict the QA hook to
         // the originating client's local echo so only that box starts.
-        matcher: TriggerMatcher::RawRegex(Arc::from(format!(
-            r"(?i)^You say, .*{}",
-            regex::escape(QA_TIMER_PHRASE)
-        ))),
-        scope: TriggerScope::AllClients,
-        presentation: vec![PresentationAction::StartTimer(TimerRequest {
-            id: Arc::from("qa-timer"),
-            label: Arc::from("QA timer"),
-            duration: Duration::from_secs(10),
-        })],
+        pattern: eqtrigger::Pattern::regex(format!("^You say, .*{QA_TIMER_PHRASE}")),
+        timer: Some(eqtrigger::TimerBehavior {
+            duration_seconds: 10.0,
+            timer_name: "QA timer".to_owned(),
+            ..eqtrigger::TimerBehavior::default()
+        }),
+        ..eqtrigger::Trigger::default()
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TriggerActivation {
-    pub trigger_id: Arc<str>,
-    pub scope: TriggerScope,
-    pub source: LogSource,
-    pub presentation: Arc<[PresentationAction]>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TriggerDefinitionError {
-    pub trigger_id: Arc<str>,
-    pub message: String,
-}
-
-struct CompiledTrigger {
-    id: Arc<str>,
-    matcher: CompiledMatcher,
-    scope: TriggerScope,
-    presentation: Arc<[PresentationAction]>,
-}
-
-enum CompiledMatcher {
-    Text {
-        text: Arc<str>,
-        lowercase_text: Option<String>,
-    },
-    Regex(Regex),
-    EventDomain(LogEventDomain),
-}
-
-pub(crate) struct TriggerEngine {
-    triggers: Vec<CompiledTrigger>,
-}
-
-impl TriggerEngine {
-    pub fn new() -> Self {
-        Self {
-            triggers: Vec::new(),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn replace_definitions(
-        &mut self,
-        definitions: Vec<TriggerDefinition>,
-    ) -> Vec<TriggerDefinitionError> {
-        let mut compiled = Vec::new();
-        let mut errors = Vec::new();
-        for definition in definitions {
-            match compile(definition) {
-                Ok(trigger) => compiled.push(trigger),
-                Err(error) => errors.push(error),
+/// Load the library from disk and compile it. Returns human-readable
+/// diagnostics for anything salvaged, quarantined, or failed to compile.
+pub fn load_compiled() -> (Arc<CompiledLibrary>, Vec<String>) {
+    let mut diagnostics = Vec::new();
+    let mut library = match store_root() {
+        Some(root) => {
+            let store = TriggerStore::new(root);
+            let outcome = store.load();
+            for issue in &outcome.report.issues {
+                diagnostics.push(format!(
+                    "trigger library: {} [{}] {}",
+                    issue.subject, issue.code, issue.detail
+                ));
             }
+            let catalog: HashMap<String, PathBuf> = outcome
+                .library
+                .assets
+                .iter()
+                .map(|asset| {
+                    (
+                        asset.name.to_ascii_lowercase(),
+                        store.assets_dir().join(&asset.file_name),
+                    )
+                })
+                .collect();
+            *SOUND_CATALOG
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(catalog));
+            outcome.library
         }
-        self.triggers = compiled;
-        errors
-    }
-
-    pub fn evaluate(&self, line: &RawLogLine, events: &[ParsedLogEvent]) -> Vec<TriggerActivation> {
-        let lowercase_body = self
-            .triggers
-            .iter()
-            .any(|trigger| {
-                matches!(
-                    trigger.matcher,
-                    CompiledMatcher::Text {
-                        lowercase_text: Some(_),
-                        ..
-                    }
-                )
-            })
-            .then(|| line.body.to_ascii_lowercase());
-
-        self.triggers
-            .iter()
-            .filter(|trigger| scope_matches(&trigger.scope, &line.source))
-            .filter(|trigger| match &trigger.matcher {
-                CompiledMatcher::Text {
-                    text,
-                    lowercase_text: None,
-                } => line.body.contains(text.as_ref()),
-                CompiledMatcher::Text {
-                    lowercase_text: Some(text),
-                    ..
-                } => lowercase_body
-                    .as_ref()
-                    .is_some_and(|body| body.contains(text)),
-                CompiledMatcher::Regex(regex) => regex.is_match(&line.body),
-                CompiledMatcher::EventDomain(domain) => {
-                    events.iter().any(|event| event.event.domain() == *domain)
-                }
-            })
-            .map(|trigger| TriggerActivation {
-                trigger_id: trigger.id.clone(),
-                scope: trigger.scope.clone(),
-                source: line.source.clone(),
-                presentation: trigger.presentation.clone(),
-            })
-            .collect()
-    }
-}
-
-fn compile(definition: TriggerDefinition) -> Result<CompiledTrigger, TriggerDefinitionError> {
-    let matcher = match definition.matcher {
-        TriggerMatcher::RawText {
-            text,
-            case_sensitive,
-        } => CompiledMatcher::Text {
-            lowercase_text: (!case_sensitive).then(|| text.to_ascii_lowercase()),
-            text,
-        },
-        TriggerMatcher::RawRegex(pattern) => Regex::new(&pattern)
-            .map(CompiledMatcher::Regex)
-            .map_err(|error| TriggerDefinitionError {
-                trigger_id: definition.id.clone(),
-                message: error.to_string(),
-            })?,
-        TriggerMatcher::EventDomain(domain) => CompiledMatcher::EventDomain(domain),
+        None => eqtrigger::TriggerLibrary::new(),
     };
-    Ok(CompiledTrigger {
-        id: definition.id,
-        matcher,
-        scope: definition.scope,
-        presentation: definition.presentation.into(),
-    })
+    #[cfg(debug_assertions)]
+    library.triggers.push(qa_timer_trigger());
+    #[cfg(not(debug_assertions))]
+    let library = library;
+
+    let compiled = Arc::new(CompiledLibrary::compile(&library));
+    for (id, error) in &compiled.compile_errors {
+        let name = library
+            .trigger(*id)
+            .map(|trigger| trigger.name.as_str())
+            .unwrap_or("unknown");
+        diagnostics.push(format!("trigger '{name}' failed to compile: {error}"));
+    }
+    (compiled, diagnostics)
 }
 
-fn scope_matches(scope: &TriggerScope, source: &LogSource) -> bool {
-    match scope {
-        TriggerScope::SourceClient { source_id } => source_id == &source.id,
-        TriggerScope::AllClients | TriggerScope::Global => true,
+/// Compiled library holding only the QA trigger, for deterministic tests.
+#[cfg(all(test, debug_assertions))]
+pub(super) fn qa_only_compiled() -> Arc<CompiledLibrary> {
+    let mut library = eqtrigger::TriggerLibrary::new();
+    library.triggers.push(qa_timer_trigger());
+    Arc::new(CompiledLibrary::compile(&library))
+}
+
+/// Default compiled library used until the first load completes.
+pub(super) fn empty_compiled() -> Arc<CompiledLibrary> {
+    static EMPTY: OnceLock<Arc<CompiledLibrary>> = OnceLock::new();
+    EMPTY
+        .get_or_init(|| Arc::new(CompiledLibrary::compile(&eqtrigger::TriggerLibrary::new())))
+        .clone()
+}
+
+/// The worker-owned evaluator: engine plus the monotonic origin that maps
+/// `Instant`s onto the engine's virtual clock.
+pub(super) struct TriggerEvaluator {
+    engine: TriggerEngine,
+    origin: Instant,
+    has_timers: bool,
+}
+
+impl TriggerEvaluator {
+    pub fn new(compiled: Arc<CompiledLibrary>, origin: Instant) -> Self {
+        Self {
+            engine: TriggerEngine::new(compiled),
+            origin,
+            has_timers: false,
+        }
+    }
+
+    /// Swap in a new compiled library. Per-character state (variables,
+    /// counters, timers) resets: definitions changed underneath it.
+    pub fn replace(&mut self, compiled: Arc<CompiledLibrary>) {
+        self.engine = TriggerEngine::new(compiled);
+        self.has_timers = false;
+    }
+
+    fn millis(&self, receipt: Instant) -> u64 {
+        receipt
+            .saturating_duration_since(self.origin)
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64
+    }
+
+    pub fn process(&mut self, raw: &RawLogLine, receipt: Instant) -> ActionBatch {
+        let context = CharacterContext {
+            key: raw.source.id.as_str().to_owned(),
+            character: raw.source.character.to_string(),
+            server: raw.source.server.to_string(),
+        };
+        let log_time = raw.timestamp.as_ref().map(|timestamp| timestamp.as_str());
+        let now = self.millis(receipt);
+        let batch = self
+            .engine
+            .process_line(&context, &raw.body, log_time, now, None);
+        if batch.timers_changed {
+            self.has_timers = !self.engine.timer_snapshots().is_empty();
+        }
+        batch
+    }
+
+    /// Fire due timer warnings/ends. Cheap when no timers run.
+    pub fn advance(&mut self, receipt: Instant) -> ActionBatch {
+        if !self.has_timers {
+            return ActionBatch::default();
+        }
+        let batch = self.engine.advance(self.millis(receipt));
+        if batch.timers_changed {
+            self.has_timers = !self.engine.timer_snapshots().is_empty();
+        }
+        batch
+    }
+
+    pub fn frame(&self) -> TimerFrame {
+        TimerFrame {
+            origin: self.origin,
+            snapshots: self.engine.timer_snapshots(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eqlog::LogSource;
 
     fn line(source_id: &str, body: &str) -> RawLogLine {
         RawLogLine {
             source: LogSource::new(source_id, "Bilka", "teek"),
             timestamp: None,
-            body: Arc::from(body),
+            body: std::sync::Arc::from(body),
         }
     }
 
-    #[test]
-    fn compiles_regex_once_and_rejects_invalid_definitions() {
-        let mut engine = TriggerEngine::new();
-        let errors = engine.replace_definitions(vec![TriggerDefinition {
-            id: Arc::from("bad"),
-            matcher: TriggerMatcher::RawRegex(Arc::from("(")),
-            scope: TriggerScope::Global,
-            presentation: vec![PresentationAction::FlashBorder],
-        }]);
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].trigger_id.as_ref(), "bad");
-        assert!(engine
-            .evaluate(&line("client-1", "anything"), &[])
-            .is_empty());
+    fn evaluator_with(triggers: Vec<eqtrigger::Trigger>) -> TriggerEvaluator {
+        let mut library = eqtrigger::TriggerLibrary::new();
+        library.triggers = triggers;
+        TriggerEvaluator::new(Arc::new(CompiledLibrary::compile(&library)), Instant::now())
     }
 
     #[test]
-    fn source_scoping_and_presentation_only_actions_are_enforced_by_types() {
-        let mut engine = TriggerEngine::new();
-        assert!(engine
-            .replace_definitions(vec![TriggerDefinition {
-                id: Arc::from("tell"),
-                matcher: TriggerMatcher::RawText {
-                    text: Arc::from("tells you"),
-                    case_sensitive: false,
-                },
-                scope: TriggerScope::SourceClient {
-                    source_id: LogSourceId::new("client-7"),
-                },
-                presentation: vec![
-                    PresentationAction::ShowText {
-                        text: Arc::from("Incoming tell"),
-                    },
-                    PresentationAction::StartTimer(TimerRequest {
-                        id: Arc::from("tell-visible"),
-                        label: Arc::from("Tell"),
-                        duration: Duration::from_secs(5),
-                    }),
-                ],
-            }])
-            .is_empty());
-
-        assert!(engine
-            .evaluate(&line("client-6", "Bob tells you, hello"), &[])
-            .is_empty());
-        let activations = engine.evaluate(&line("client-7", "Bob TELLS YOU, hello"), &[]);
-        assert_eq!(activations.len(), 1);
-        assert_eq!(activations[0].presentation.len(), 2);
+    fn source_identity_flows_into_action_events() {
+        let mut evaluator = evaluator_with(vec![eqtrigger::Trigger {
+            name: "Tell".to_owned(),
+            enabled: true,
+            pattern: eqtrigger::Pattern::literal("tells you"),
+            display_text: Some("Incoming tell for {c}".to_owned()),
+            ..eqtrigger::Trigger::default()
+        }]);
+        let batch = evaluator.process(&line("pid:7", "Kafka tells you, 'hi'"), Instant::now());
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(batch.events[0].character, "pid:7");
         assert!(matches!(
-            &activations[0].presentation[1],
-            PresentationAction::StartTimer(request)
-                if request.id.as_ref() == "tell-visible"
-                    && request.label.as_ref() == "Tell"
-                    && request.duration == Duration::from_secs(5)
+            &batch.events[0].action,
+            TriggerAction::DisplayText { text, .. } if text == "Incoming tell for Bilka"
         ));
+    }
+
+    #[test]
+    fn timers_advance_on_the_worker_clock_and_expose_frames() {
+        let mut evaluator = evaluator_with(vec![eqtrigger::Trigger {
+            name: "Buff".to_owned(),
+            enabled: true,
+            pattern: eqtrigger::Pattern::literal("buff on"),
+            timer: Some(eqtrigger::TimerBehavior {
+                duration_seconds: 1.0,
+                end: eqtrigger::TimerStageActions {
+                    speak_text: Some("buff over".to_owned()),
+                    ..eqtrigger::TimerStageActions::default()
+                },
+                ..eqtrigger::TimerBehavior::default()
+            }),
+            ..eqtrigger::Trigger::default()
+        }]);
+        let start = Instant::now();
+        let batch = evaluator.process(&line("pid:1", "buff on"), start);
+        assert!(batch.timers_changed);
+        let frame = evaluator.frame();
+        assert_eq!(frame.snapshots.len(), 1);
+        assert_eq!(frame.snapshots[0].character, "pid:1");
+
+        // Nothing due yet.
+        assert!(evaluator
+            .advance(start + Duration::from_millis(500))
+            .is_empty());
+        let ended = evaluator.advance(start + Duration::from_millis(1_001));
+        assert!(ended.timers_changed);
+        assert!(matches!(
+            &ended.events[0].action,
+            TriggerAction::Speak { text, .. } if text == "buff over"
+        ));
+        assert!(evaluator.frame().snapshots.is_empty());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn qa_trigger_only_matches_the_originating_clients_local_echo() {
+        let mut library = eqtrigger::TriggerLibrary::new();
+        library.triggers.push(qa_timer_trigger());
+        let mut evaluator =
+            TriggerEvaluator::new(Arc::new(CompiledLibrary::compile(&library)), Instant::now());
+        let now = Instant::now();
+        let own = evaluator.process(&line("pid:1", "You say, 'Stonemite timer'"), now);
+        assert!(own.timers_changed);
+        let remote = evaluator.process(&line("pid:2", "Kafka says, 'Stonemite timer'"), now);
+        assert!(remote.is_empty());
     }
 }

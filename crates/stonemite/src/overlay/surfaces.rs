@@ -552,7 +552,7 @@ pub(super) unsafe fn render_pip_surface_for_size(
     let source_id = format!("pid:{}", pip.pid);
     let timer_values = s
         .timers
-        .visible_for(Some(&source_id), now)
+        .visible_for(Some(&source_id), false, now)
         .map(|timer| timer_scene_values(timer, now));
     let timer = timer_values
         .as_ref()

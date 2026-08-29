@@ -1,6 +1,7 @@
 import {
   BarChart3,
   Bell,
+  Zap,
   CircleHelp,
   Gamepad2,
   Info,
@@ -26,6 +27,7 @@ import { GeneralPage } from "./pages/GeneralPage";
 import { HotkeysPage } from "./pages/HotkeysPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { PipPage } from "./pages/PipPage";
+import { TriggersPage } from "./pages/TriggersPage";
 import { closeSettingsWindow, requestRestart } from "./settings/api";
 import { useSettings } from "./settings/SettingsContext";
 
@@ -36,6 +38,7 @@ type PageId =
   | "pip"
   | "dpsOverlay"
   | "notifications"
+  | "triggers"
   | "hotkeys"
   | "broadcasting"
   | "about";
@@ -53,6 +56,7 @@ const navigation: NavigationItem[] = [
   { id: "pip", label: "PiP overlay", icon: MonitorUp },
   { id: "dpsOverlay", label: "DPS overlay", icon: BarChart3 },
   { id: "notifications", label: "Notifications", icon: Bell },
+  { id: "triggers", label: "Triggers", icon: Zap },
   { id: "hotkeys", label: "Hotkeys", icon: Keyboard },
   { id: "broadcasting", label: "Broadcasting", icon: Radio },
   { id: "about", label: "About", icon: Info },
@@ -72,6 +76,8 @@ function CurrentPage({ page }: { page: PageId }) {
       return <DpsOverlayPage />;
     case "notifications":
       return <NotificationsPage />;
+    case "triggers":
+      return <TriggersPage />;
     case "hotkeys":
       return <HotkeysPage />;
     case "broadcasting":
@@ -182,56 +188,69 @@ export function App() {
         <div className="sidebar-meta">Version {runtime?.version}</div>
       </aside>
 
-      <main className="content-pane">
-        <div className="content-scroll" tabIndex={-1}>
+      {page === "triggers" ? (
+        // The Trigger Manager is a full-bleed workbench that owns its own
+        // save flow; it never routes through the settings action bar.
+        <main className="content-pane content-pane-full">
           <CurrentPage page={page} />
-          {saveError ? (
-            <InlineStatus tone="error" title="Settings were not saved">
-              {saveError}
-            </InlineStatus>
-          ) : null}
-          {restartRequired ? (
-            <InlineStatus tone="warning" title="Restart required">
-              <p>Integration access changed. Restart Stonemite to apply it.</p>
-              <div className="status-actions">
-                <Button variant="primary" onClick={() => void handleRestart()}>
-                  Restart now
-                </Button>
-                <Button onClick={() => void closeSettingsWindow()}>
-                  Later
-                </Button>
-              </div>
-            </InlineStatus>
-          ) : null}
-        </div>
-
-        <footer className="action-bar">
-          <span className="save-state" aria-live="polite">
-            {saveState === "saving"
-              ? "Saving settings…"
-              : dirty
-                ? "Unsaved changes"
-                : "All changes saved"}
-          </span>
-          <div className="action-buttons">
-            <Button
-              onClick={() => void handleCancel()}
-              disabled={saveState === "saving"}
-            >
-              <X size={15} aria-hidden="true" />
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => void handleSave()}
-              disabled={!dirty || saveState === "saving"}
-            >
-              <Save size={15} aria-hidden="true" />
-              Save
-            </Button>
+        </main>
+      ) : (
+        <main className="content-pane">
+          <div className="content-scroll" tabIndex={-1}>
+            <CurrentPage page={page} />
+            {saveError ? (
+              <InlineStatus tone="error" title="Settings were not saved">
+                {saveError}
+              </InlineStatus>
+            ) : null}
+            {restartRequired ? (
+              <InlineStatus tone="warning" title="Restart required">
+                <p>
+                  Integration access changed. Restart Stonemite to apply it.
+                </p>
+                <div className="status-actions">
+                  <Button
+                    variant="primary"
+                    onClick={() => void handleRestart()}
+                  >
+                    Restart now
+                  </Button>
+                  <Button onClick={() => void closeSettingsWindow()}>
+                    Later
+                  </Button>
+                </div>
+              </InlineStatus>
+            ) : null}
           </div>
-        </footer>
-      </main>
+
+          <footer className="action-bar">
+            <span className="save-state" aria-live="polite">
+              {saveState === "saving"
+                ? "Saving settings…"
+                : dirty
+                  ? "Unsaved changes"
+                  : "All changes saved"}
+            </span>
+            <div className="action-buttons">
+              <Button
+                onClick={() => void handleCancel()}
+                disabled={saveState === "saving"}
+              >
+                <X size={15} aria-hidden="true" />
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => void handleSave()}
+                disabled={!dirty || saveState === "saving"}
+              >
+                <Save size={15} aria-hidden="true" />
+                Save
+              </Button>
+            </div>
+          </footer>
+        </main>
+      )}
     </div>
   );
 }

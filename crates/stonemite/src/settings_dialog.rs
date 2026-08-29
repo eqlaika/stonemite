@@ -132,6 +132,15 @@ pub fn run_standalone() {
             cancel_pairing,
             request_restart,
             open_external,
+            crate::trigger_manager::load_trigger_library,
+            crate::trigger_manager::save_trigger_library,
+            crate::trigger_manager::choose_trigger_import_file,
+            crate::trigger_manager::preview_trigger_import,
+            crate::trigger_manager::commit_trigger_import,
+            crate::trigger_manager::export_trigger_selection,
+            crate::trigger_manager::add_trigger_media,
+            crate::trigger_manager::preview_trigger_sound,
+            crate::trigger_manager::run_trigger_test,
         ])
         .build(tauri::generate_context!());
 
@@ -406,7 +415,7 @@ fn cancel_pairing_window() {
     }
 }
 
-fn notify_tray() {
+pub(crate) fn notify_tray() {
     unsafe {
         if let Ok(tray) = FindWindowW(w!("StonemiteTrayClass"), w!("Stonemite")) {
             let _ = PostMessageW(tray, WM_SETTINGS_CHANGED, WPARAM(0), LPARAM(0));

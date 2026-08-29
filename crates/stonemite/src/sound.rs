@@ -62,6 +62,11 @@ pub fn normalized_id(id: &str) -> &'static str {
     find(id).map_or(DEFAULT_SOUND_ID, |sound| sound.id)
 }
 
+/// The bundled sound id matching `id`, with no default fallback.
+pub fn find_id(id: &str) -> Option<&'static str> {
+    find(id).map(|sound| sound.id)
+}
+
 pub fn play(id: &str) -> bool {
     let Some(sound) = find(normalized_id(id)) else {
         return false;

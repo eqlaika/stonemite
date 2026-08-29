@@ -339,6 +339,7 @@ unsafe fn initialize_state() -> (OverlayState, HWND) {
         dps: DpsOverlayController::new(&cfg),
         notification_center: NotificationCenter::new(&cfg, client_animations_enabled()),
         timers: TimerOverlayState::default(),
+        trigger_texts: super::trigger_text::TriggerTextState::default(),
     };
 
     (state, label_hwnd)

@@ -146,6 +146,7 @@ unsafe fn tick_timer_overlay_inner(s: &mut OverlayState, timer_hwnd: HWND) {
     let now = Instant::now();
     let previous_owners = timer_owner_hwnds(s, now);
     let expired = s.timers.remove_expired(now);
+    let _ = s.trigger_texts.remove_expired(now);
     if s.timers.is_empty() {
         let _ = KillTimer(timer_hwnd, TIMER_OVERLAY_TICK);
     }

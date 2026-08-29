@@ -12,7 +12,7 @@ pub(super) const INTERVAL_MS: u32 = 100;
 
 pub(super) fn active_timer(state: &OverlayState, now: Instant) -> Option<&timers::TimerOverlay> {
     let source_id = state.clients.active_pid().map(|pid| format!("pid:{pid}"));
-    state.timers.visible_for(source_id.as_deref(), now)
+    state.timers.visible_for(source_id.as_deref(), true, now)
 }
 
 pub(super) fn format_remaining(remaining: Duration) -> String {
@@ -25,14 +25,18 @@ pub(super) fn owner_hwnds(state: &OverlayState, now: Instant) -> Vec<HWND> {
     let active_source = state.clients.active_pid().map(|pid| format!("pid:{pid}"));
     if state
         .timers
-        .visible_for(active_source.as_deref(), now)
+        .visible_for(active_source.as_deref(), true, now)
         .is_some()
     {
         owners.push(state.presentation.active_label_hwnd);
     }
     for pip in &state.presentation.pip_windows {
         let source_id = format!("pid:{}", pip.pid);
-        if state.timers.visible_for(Some(&source_id), now).is_some() {
+        if state
+            .timers
+            .visible_for(Some(&source_id), false, now)
+            .is_some()
+        {
             owners.push(pip.label_hwnd);
         }
     }

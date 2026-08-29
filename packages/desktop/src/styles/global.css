@@ -691,3 +691,12 @@ textarea:hover {
     forced-color-adjust: none;
   }
 }
+
+/* Full-bleed pane for the Trigger Manager workbench. */
+.content-pane-full {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}

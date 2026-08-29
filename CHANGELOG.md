@@ -4,6 +4,9 @@
 
 ### Added
 
+- Added an EQLP-compatible trigger system: `.tgf.gz`/`.ogf.gz` round-trip import and export, GINA `.gtp` import, GINA pattern macros ({S1}, {N>=50}, {TS}), previous-line requirements, match-variable conditions, stateful variables, counters, TTLs, lockouts, {counter}/{repeated} codes, and the full timer lifecycle with warning, end, early-end, restart-mode, and looping behavior
+- Added a Triggers workbench to Settings with a folder tree, searchable virtualized trigger list, bulk operations, a full trigger editor, profiles scoped globally or to selected characters, reusable text/timer overlay presets, managed WAV/MP3 sounds, import previews with compatibility reports, and a deterministic test bench with trace output and optional real-time replay
+- Added a prioritized trigger audio dispatcher with Windows text-to-speech (rate, volume, priority, and interruption), managed WAV/MP3 playback, and a portable `.stonemite-triggers` package format that embeds sounds with digest verification and ZIP-traversal protection
 - Added a default-on setting that turns off key broadcasting after the last EverQuest client exits
 - Added a default-on in-game Stonemite button anchored beside the PiP strip, with left-click Settings access and the full tray menu on right-click
 - Added named box cycles with configurable character rings, wrapping next and previous hotkeys, unavailable-client skipping, and no-repeat keyboard-pedal support
